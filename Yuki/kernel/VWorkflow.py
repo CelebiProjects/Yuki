@@ -77,17 +77,18 @@ class VWorkflow:
         4. Run
         """
         # Construct the workflow
-        # print("Constructing the workflow")
-        # print(f"Start job: {self.start_job}")
-        for job in self.start_job:
-            self.construct_workflow_jobs(job)
+        print("Constructing the workflow")
+        print(f"Start job: {self.start_job}")
+        if isinstance(self.start_job, list):
+            self.construct_workflow_jobs(self.start_job)
+        else:
+            self.construct_workflow_jobs([self.start_job])
 
-        # print(f"Jobs after the construction: {self.jobs}")
+        print(f"Jobs after the construction: {self.jobs}")
         # Set all the jobs to be the waiting status
-        # for job in self.jobs:
-        #     print(f"job: {job}, is input: {job.is_input}")
-        #     print(f"job status: {job.status()}")
-        #     print(f"job machine: {job.machine_id}")
+        for job in self.jobs:
+            print(f"job: {job}, is input: {job.is_input}, job status: {job.status()}")
+            # print(f"job machine: {job.machine_id}")
 
         for job in self.jobs:
             if job.is_input:
@@ -98,12 +99,12 @@ class VWorkflow:
         while True:
             all_finished = True
             for job in self.jobs:
-                # print(f"Check the job {job}", job)
+                print(f"Check the job {job}", job)
                 if not job.is_input:
                     continue
                 if job.status() == "archived":
                     continue
-                # print(f"Check the status of workflow {job.workflow_id()}")
+                print(f"Check the status of workflow {job.workflow_id()}")
                 workflow = VWorkflow([], job.workflow_id())
                 if workflow:
                     workflow.update_workflow_status()
@@ -119,12 +120,15 @@ class VWorkflow:
                 break
             time.sleep(10)
 
+        print("All done")
+
         for job in self.jobs:
             if job.is_input:
                 continue
             job.set_workflow_id(self.uuid)
             job.set_status("running")
 
+        print("Constructing")
         try:
             # print("Constructing the snakefile")
             self.construct_snake_file()
@@ -175,49 +179,99 @@ class VWorkflow:
             self.get_access_token(self.machine_id)
         )
 
-    def construct_workflow_jobs(self, job):
-        """Construct workflow jobs recursively including dependencies."""
-        last_consult_time = CHERN_CACHE.consult_table.get(job.path, -1)
-        if time.time() - last_consult_time < 1:
-            return
-        CHERN_CACHE.consult_table[job.path] = time.time()
+    def construct_workflow_jobs(self, root_jobs):
+        """
+        Construct workflow jobs iteratively including dependencies (DAG-safe, no recursion).
+        root_jobs: list of VJob
+        """
+        visited = set()
+        # Initialize stack with all root jobs, marked as not expanded
+        stack = [(job, False) for job in root_jobs]
 
-        if job.machine_id is None:
-            job = VJob(job.path, self.machine_id)
+        while stack:
+            job, expanded = stack.pop()
 
-        if job.machine_id is None:
-            return
+            # Skip if already processed (only if first time)
+            if job.path in visited and not expanded:
+                continue
 
-        # Even if the job is finished, we still need to add it to the workflow,
-        # because we need to upload the files
-        if job.status() == "finished":
-            if job.object_type() == "task":
-                job.is_input = True
-            self.jobs.append(job)
-            return
+            # Ensure job has machine_id
+            if job.machine_id is None:
+                job = VJob(job.path, self.machine_id)
+                if job.machine_id is None:
+                    continue
 
-        if job.status() == "failed":
-            if job.object_type() == "task":
-                job.is_input = True
-            self.jobs.append(job)
-            return
+            status = job.status()
+            obj_type = job.object_type()
 
-        if job.status() == "pending" or job.status() == "running":
-            if job.object_type() == "task":
-                job.is_input = True
-            self.jobs.append(job)
-            return
+            # For terminal jobs, add immediately
+            if status in ("finished", "failed", "pending", "running", "archived"):
+                if obj_type == "task":
+                    job.is_input = True
+                self.jobs.append(job)
+                visited.add(job.path)
+                continue
 
-        if job.status() == "archived":
-            if job.object_type() == "task":
-                job.is_input = True
-            self.jobs.append(job)
-            return
+            if expanded:
+                # Second time we pop the job: all dependencies are done
+                self.jobs.append(job)
+                visited.add(job.path)
+                continue
 
-        for dependence in job.dependencies():
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", dependence)
-            self.construct_workflow_jobs(VJob(path, None))
-        self.jobs.append(job)
+            # Otherwise, expand dependencies first
+            stack.append((job, True))  # mark job to add after deps
+            for dep in job.dependencies():
+                dep_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", dep)
+                dep_job = VJob(dep_path, None)
+                if dep_job.path not in visited:
+                    stack.append((dep_job, False))
+
+    # Done — no need for post-deduplication
+
+
+    # def construct_workflow_jobs(self, job):
+    #     """Construct workflow jobs recursively including dependencies."""
+    #     last_consult_time = CHERN_CACHE.consult_table.get(job.path, -1)
+    #     if time.time() - last_consult_time < 1:
+    #         return
+    #     CHERN_CACHE.consult_table[job.path] = time.time()
+
+    #     if job.machine_id is None:
+    #         job = VJob(job.path, self.machine_id)
+
+    #     if job.machine_id is None:
+    #         return
+
+    #     # Even if the job is finished, we still need to add it to the workflow,
+    #     # because we need to upload the files
+    #     if job.status() == "finished":
+    #         if job.object_type() == "task":
+    #             job.is_input = True
+    #         self.jobs.append(job)
+    #         return
+
+    #     if job.status() == "failed":
+    #         if job.object_type() == "task":
+    #             job.is_input = True
+    #         self.jobs.append(job)
+    #         return
+
+    #     if job.status() == "pending" or job.status() == "running":
+    #         if job.object_type() == "task":
+    #             job.is_input = True
+    #         self.jobs.append(job)
+    #         return
+
+    #     if job.status() == "archived":
+    #         if job.object_type() == "task":
+    #             job.is_input = True
+    #         self.jobs.append(job)
+    #         return
+
+    #     for dependence in job.dependencies():
+    #         path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", dependence)
+    #         self.construct_workflow_jobs(VJob(path, None))
+    #     self.jobs.append(job)
 
     def create_workflow(self):
         """Create a workflow using REANA client."""

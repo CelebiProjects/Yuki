@@ -153,7 +153,9 @@ class VJob:
             elif status == "finished":
                 # print("Updating job status")
                 config_file.write_variable("status", "finished")
-            elif status == "failed":
+            elif status == "failed" or status == "stopped":
+                config_file.write_variable("status", "failed")
+            elif full_workflow_status == "failed":
                 config_file.write_variable("status", "failed")
         elif current_status in ('finished', 'success', 'failed'):
             pass

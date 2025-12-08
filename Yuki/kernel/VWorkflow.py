@@ -8,9 +8,9 @@ import os
 import time
 import json
 
-from Chern.utils import csys
-from Chern.utils import metadata
-from Chern.kernel.chern_cache import ChernCache
+from CelebiChrono.utils import csys
+from CelebiChrono.utils import metadata
+from CelebiChrono.kernel.chern_cache import ChernCache
 from Yuki.kernel.VJob import VJob
 from Yuki.kernel.VContainer import VContainer
 from Yuki.kernel.VImage import VImage
@@ -87,73 +87,122 @@ class VWorkflow:
         print(f"Jobs after the construction: {self.jobs}")
         # Set all the jobs to be the waiting status
         for job in self.jobs:
-            print(f"job: {job}, is input: {job.is_input}, job status: {job.status()}")
+            print(f"job: {job}, is input: {job.is_input}, job status: {job.status()}, job type: {job.job_type()}")
             # print(f"job machine: {job.machine_id}")
 
         for job in self.jobs:
             if job.is_input:
                 continue
+            if job.job_type() == "algorithm":
+                continue
             job.set_status("waiting")
 
         # First, check whether the dependencies are satisfied
-        while True:
+        for iTries in range(60):
+            print("Checking finished")
             all_finished = True
+            workflow_list = []
             for job in self.jobs:
-                print(f"Check the job {job}", job)
+                # print(f"Check the job {job}", job)
                 if not job.is_input:
                     continue
                 if job.status() == "archived":
                     continue
-                print(f"Check the status of workflow {job.workflow_id()}")
+                # print(f"Check the status of workflow {job.workflow_id()}")
+                if job.status() == "finished":
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
                 workflow = VWorkflow([], job.workflow_id())
-                if workflow:
-                    workflow.update_workflow_status()
-                # status = workflow.status()
-                job.update_status_from_workflow(
+                if workflow and workflow not in workflow_list:
+                    workflow_list.append(workflow)
+                # FIXME: may check if some of the dependence fail
+
+            for workflow in workflow_list:
+                workflow.update_workflow_status()
+
+            for job in self.jobs:
+                if not job.is_input:
+                    continue
+                if job.status() == "archived":
+                    continue
+                if job.status() == "finished":
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
+                workflow = VWorkflow([], job.workflow_id())
+                if workflow in workflow_list:
+                    job.update_status_from_workflow(
                         os.path.join(os.environ["HOME"], ".Yuki", "Workflows", job.workflow_id())
                         )
                 if job.status() != "finished":
                     all_finished = False
                     break
-                # FIXME: may check if some of the dependence fail
+
             if all_finished:
                 break
             time.sleep(10)
-
         print("All done")
+
+        if not all_finished:
+            for job in self.jobs:
+                if job.is_input:
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
+                job.set_status("raw")
+            print("Some dependencies are not finished yet.")
+            return
 
         for job in self.jobs:
             if job.is_input:
                 continue
+            if job.job_type() == "algorithm":
+                continue
+            print(f"Set workflow id to job {job}")
             job.set_workflow_id(self.uuid)
             job.set_status("running")
 
         print("Constructing")
         try:
-            # print("Constructing the snakefile")
+            print("Constructing the snakefile")
             self.construct_snake_file()
         except:
-            # print("Failed to construct the snakefile")
+            print("Failed to construct the snakefile")
             self.set_workflow_status("failed")
             for job in self.jobs:
+                if job.is_input:
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
                 job.set_status("failed")
             raise
 
         try:
-            # print("Creating the workflow")
+            print("Creating the workflow")
             self.create_workflow()
         except:
-            # print("Failed to create the workflow")
+            print("Failed to create the workflow")
             self.set_workflow_status("failed")
             for job in self.jobs:
+                if job.is_input:
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
                 job.set_status("failed")
             raise
 
         try:
+            print("Upload file")
             self.upload_file()
         except:
+            print("Failed to upload the files")
             self.set_workflow_status("failed")
             for job in self.jobs:
+                if job.is_input:
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
                 job.set_status("failed")
             raise
 
@@ -162,11 +211,15 @@ class VWorkflow:
         except:
             self.set_workflow_status("failed")
             for job in self.jobs:
+                if job.is_input:
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
                 job.set_status("failed")
             raise
 
-        self.check_status()
-        self.download()
+        # self.check_status()
+        # self.download()
 
 
 
@@ -379,7 +432,13 @@ class VWorkflow:
             snake_file.addline("container:", 1)
             snake_file.addline(f'"docker://{snakemake_rule["environment"]}"', 2)
             snake_file.addline("resources:", 1)
-            snake_file.addline(f'kubernetes_memory_limit="{snakemake_rule["memory"]}"', 2)
+            compute_backend = snakemake_rule["compute_backend"]
+            if compute_backend == "htcondorcern":
+                snake_file.addline(f'compute_backend="{snakemake_rule["compute_backend"]}",', 2)
+                snake_file.addline(f'htcondor_max_runtime="espresso",', 2)
+                snake_file.addline(f'kerberos=True,', 2)
+            else:
+                snake_file.addline(f'kubernetes_memory_limit="{snakemake_rule["memory"]}"', 2)
             snake_file.addline("shell:", 1)
             snake_file.addline(f'"{" && ".join(snakemake_rule["commands"])}"', 2)
 
@@ -414,7 +473,7 @@ class VWorkflow:
         self.set_enviroment(self.machine_id)
         for job in self.jobs:
             for name in job.files():
-                # print(f"upload file: {name}")
+                print(f"upload file: {name}")
                 with open(os.path.join(job.path, "contents", name[8:]), "rb") as f:
                     client.upload_file(
                         self.get_name(),
@@ -436,11 +495,12 @@ class VWorkflow:
                 impression = job.path.split("/")[-1]
                 # print(f"Downloading the files from impression {impression}")
                 path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, job.machine_id)
-                if not os.path.exists(os.path.join(path, "outputs")) or \
-                        os.listdir(os.path.join(path, "outputs")) == ["chern.stdout"]:
+                if not os.path.exists(os.path.join(path, "outputs")):
                     workflow = VWorkflow([], job.workflow_id())
-                    workflow.download(impression)
+                    workflow.download_outputs(impression)
 
+                # Reset the id
+                self.set_enviroment(self.machine_id)
                 filelist = os.listdir(os.path.join(path, "outputs"))
                 for filename in filelist:
                     with open(os.path.join(path, "outputs", filename), "rb") as f:
@@ -497,20 +557,25 @@ class VWorkflow:
 
     def update_workflow_status(self):
         """Update workflow status from REANA."""
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-        results = client.get_workflow_status(
-            self.get_name(),
-            self.get_access_token(self.machine_id))
-        path = os.path.join(self.path, "results.json")
-        results_file = metadata.ConfigFile(path)
-        results_file.write_variable("results", results)
-        logpath = os.path.join(self.path, "log.json")
-        log_file = metadata.ConfigFile(logpath)
-        logstring = results.get("logs", "{}")
-        # decode the logstring with json
-        log = json.loads(logstring)
-        log_file.write_variable("logs", log)
+        try:
+            from reana_client.api import client
+            self.set_enviroment(self.machine_id)
+            results = client.get_workflow_status(
+                self.get_name(),
+                self.get_access_token(self.machine_id))
+            path = os.path.join(self.path, "results.json")
+            results_file = metadata.ConfigFile(path)
+            results_file.write_variable("results", results)
+            logpath = os.path.join(self.path, "log.json")
+            log_file = metadata.ConfigFile(logpath)
+            logstring = results.get("logs", "{}")
+            # decode the logstring with json
+            log = json.loads(logstring)
+            log_file.write_variable("logs", log)
+        except Exception as e:
+            print("Failed to update the workflow status")
+            print(e)
+
 
     def status(self):
         """Get the current workflow status."""
@@ -521,9 +586,14 @@ class VWorkflow:
         path = os.path.join(self.path, "results.json")
         results_file = metadata.ConfigFile(path)
         results = results_file.read_variable("results", {})
-        status = results.get("status", "unknown")
-        CHERN_CACHE.consult_table[self.uuid] = (status, time.time())
-        return status
+        # print("Results:", results)
+        try:
+            status = results.get("status", "unknown")
+            CHERN_CACHE.consult_table[self.uuid] = (status, time.time())
+            return status
+        except:
+            print("Failed to get the status")
+        return "unknown"
 
     def writeline(self, line):
         """Write a line to the YAML file."""
@@ -545,25 +615,116 @@ class VWorkflow:
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         if impression:
-            files = client.list_files(
-                self.get_name(),
-                self.get_access_token(self.machine_id),
-                "imp"+impression[0:7]+"/outputs"
-            )
             path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, self.machine_id)
-            # print(f"Files: {files}")
-            for file in files:
-                # print(f'Downloading {file["name"]}')
-                output = client.download_file(
-                    self.get_name(),
-                    file["name"],
-                    self.get_access_token(self.machine_id),
-                )
-                # print(f'Downloading {file["name"]}')
-                os.makedirs(os.path.join(path, "outputs"), exist_ok=True)
-                filename = os.path.join(path, file["name"][11:])
-                with open(filename, "wb") as f:
-                    f.write(output[0])
+            try: # try to download the files
+                if not os.path.exists(os.path.join(path, "outputs.downloaded")):
+                    files = client.list_files(
+                        self.get_name(),
+                        self.get_access_token(self.machine_id),
+                        "imp"+impression[0:7]+"/outputs"
+                    )
+                    os.makedirs(os.path.join(path, "outputs"), exist_ok=True)
+                    # print(f"Files: {files}")
+                    for file in files:
+                        # print(f'Downloading {file["name"]}')
+                        output = client.download_file(
+                            self.get_name(),
+                            file["name"],
+                            self.get_access_token(self.machine_id),
+                        )
+                        print(f'Downloading {file["name"]}')
+                        filename = os.path.join(path, file["name"][11:])
+                        with open(filename, "wb") as f:
+                            f.write(output[0])
+                    # all done, make a finish file
+                    open(os.path.join(path, "outputs.downloaded"), "w").close()
+            except Exception as e:
+                print("Failed to download outputs:", e)
+
+            try:
+                if not os.path.exists(os.path.join(path, "logs.downloaded")):
+                    files = client.list_files(
+                        self.get_name(),
+                        self.get_access_token(self.machine_id),
+                        "imp"+impression[0:7]+"/logs"
+                    )
+                    os.makedirs(os.path.join(path, "logs"), exist_ok=True)
+                    for file in files:
+                        output = client.download_file(
+                            self.get_name(),
+                            file["name"],
+                            self.get_access_token(self.machine_id),
+                        )
+                        print(f'Downloading {file["name"]}')
+                        filename = os.path.join(path, file["name"][11:])
+                        with open(filename, "wb") as f:
+                            f.write(output[0])
+                    # all done, make a finish file
+                    open(os.path.join(path, "logs.downloaded"), "w").close()
+            except Exception as e:
+                print("Failed to download logs:", e)
+
+    def download_outputs(self, impression=None):
+        """Download workflow results."""
+        # print("Downloading the files")
+        from reana_client.api import client
+        self.set_enviroment(self.machine_id)
+        if impression:
+            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, self.machine_id)
+            try:
+                if not os.path.exists(os.path.join(path, "outputs.downloaded")):
+                    files = client.list_files(
+                        self.get_name(),
+                        self.get_access_token(self.machine_id),
+                        "imp"+impression[0:7]+"/outputs"
+                    )
+                    os.makedirs(os.path.join(path, "outputs"), exist_ok=True)
+                    # print(f"Files: {files}")
+                    for file in files:
+                        # print(f'Downloading {file["name"]}')
+                        output = client.download_file(
+                            self.get_name(),
+                            file["name"],
+                            self.get_access_token(self.machine_id),
+                        )
+                        print(f'Downloading {file["name"]}')
+                        filename = os.path.join(path, file["name"][11:])
+                        with open(filename, "wb") as f:
+                            f.write(output[0])
+                    # all done, make a finish file
+                    open(os.path.join(path, "outputs.downloaded"), "w").close()
+            except Exception as e:
+                print("Failed to download outputs:", e)
+
+    def download_logs(self, impression=None):
+        """Download workflow logs."""
+        # print("Downloading the files")
+        from reana_client.api import client
+        self.set_enviroment(self.machine_id)
+        if impression:
+            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, self.machine_id)
+            try:
+                if not os.path.exists(os.path.join(path, "logs.downloaded")):
+                    files = client.list_files(
+                        self.get_name(),
+                        self.get_access_token(self.machine_id),
+                        "imp"+impression[0:7]+"/logs"
+                    )
+                    os.makedirs(os.path.join(path, "logs"), exist_ok=True)
+                    for file in files:
+                        output = client.download_file(
+                            self.get_name(),
+                            file["name"],
+                            self.get_access_token(self.machine_id),
+                        )
+                        print(f'Downloading {file["name"]}')
+                        filename = os.path.join(path, file["name"][11:])
+                        with open(filename, "wb") as f:
+                            f.write(output[0])
+                    # all done, make a finish file
+                    open(os.path.join(path, "logs.downloaded"), "w").close()
+            except Exception as e:
+                print("Failed to download logs:", e)
 
     def ping(self):
         """Ping the REANA server (FIXME: This function is not used)."""

@@ -2,7 +2,7 @@
 Runner management routes.
 """
 from flask import Blueprint, request
-from Chern.utils import csys
+from CelebiChrono.utils import csys
 from ..config import config
 from ..utils import ping
 

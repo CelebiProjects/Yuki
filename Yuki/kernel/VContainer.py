@@ -6,14 +6,14 @@ that extends VJob functionality with container-specific operations like
 environment management, command execution, and input/output handling.
 """
 import os
-from Chern.utils import csys
+from CelebiChrono.utils import csys
 from Yuki.kernel.VJob import VJob
 from Yuki.kernel.VImage import VImage
 
 class VContainer(VJob):
     """
     Virtual Container class that extends VJob for container-based operations.
-    
+
     This class handles container lifecycle management, environment setup,
     input/output processing, and command execution within containerized environments.
     """
@@ -21,7 +21,7 @@ class VContainer(VJob):
     def __init__(self, path, machine_id):
         """
         Initialize a VContainer instance.
-        
+
         Args:
             path (str): Path to the container job
             machine_id (str): Identifier for the target machine
@@ -31,7 +31,7 @@ class VContainer(VJob):
     def inputs(self):
         """
         Get input data aliases and their corresponding impressions.
-        
+
         Returns:
             tuple: A tuple containing (alias_keys, alias_to_impression_map)
         """
@@ -42,7 +42,7 @@ class VContainer(VJob):
     def image(self):
         """
         Get the VImage instance from predecessor algorithm jobs.
-        
+
         Returns:
             VImage or None: The image associated with predecessor algorithm jobs
         """
@@ -55,22 +55,25 @@ class VContainer(VJob):
     def step(self):
         """
         Generate a step configuration for REANA workflow execution.
-        
+
         Returns:
             dict: A dictionary containing step configuration with commands,
                   environment, memory limits, and other execution parameters
         """
         commands = [f"mkdir -p imp{self.short_uuid()}/outputs"]
+        commands.append(f"mkdir -p imp{self.short_uuid()}/logs")
         commands.append(f"cd imp{self.short_uuid()}")
 
         # Add ln -s $REANA_WORKSPACE/{alias} {alias} to the commands
         image = self.image()
         if image:
-            commands.append(f"ln -s $REANA_WORKSPACE/imp{image.short_uuid()} code")
+            # commands.append(f"ln -s $REANA_WORKSPACE/imp{image.short_uuid()} code")
+            commands.append(f"ln -s ../imp{image.short_uuid()} code")
         alias_list, alias_map = self.inputs()
         for alias in alias_list:
             impression = alias_map[alias]
-            command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
+            # command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
+            command = f"ln -s ../imp{impression[:7]} {alias}"
             commands.append(command)
 
         if self.is_input:
@@ -78,7 +81,10 @@ class VContainer(VJob):
         else:
             raw_commands = self.image().yaml_file.read_variable("commands", [])
 
-        for command in raw_commands:
+        if self.compute_backend() == "htcondorcern":
+            raw_commands = []
+
+        for i, command in enumerate(raw_commands):
             parameters, values = self.parameters()
             for parameter in parameters:
                 value = values[parameter]
@@ -90,33 +96,44 @@ class VContainer(VJob):
             for alias in alias_list:
                 impression = alias_map[alias]
                 name = "${"+ alias +"}"
-                command = command.replace(name, f"$REANA_WORKSPACE/imp{impression[:7]}")
-            command = command.replace("${workspace}", "$REANA_WORKSPACE")
+                # command = command.replace(name, f"$REANA_WORKSPACE/imp{impression[:7]}")
+                command = command.replace(name, f"../imp{impression[:7]}")
+            # command = command.replace("${workspace}", "$REANA_WORKSPACE")
+            command = command.replace("${workspace}", "..")
             command = command.replace("${output}", f"imp{self.short_uuid()}")
             image = self.image()
             if image:
-                command = command.replace("${code}", f"$REANA_WORKSPACE/imp{image.short_uuid()}")
+                # command = command.replace("${code}", f"$REANA_WORKSPACE/imp{image.short_uuid()}")
+                command = command.replace("${code}", f"../imp{image.short_uuid()}")
+            command = f"{{ " + command + f" ; }} >> logs/chern_user_step{i}.log 2>&1"
             commands.append(command.replace("\"", "\\\""))
         step = {}
         step["commands"] = commands
-        commands.append("cd $REANA_WORKSPACE")
+        # commands.append("cd $REANA_WORKSPACE")
+        commands.append("cd ..")
         commands.append(f"touch {self.short_uuid()}.done")
         commands = " && ".join(commands)
         if self.is_input:
             step["environment"] = self.default_environment()
         else:
             step["environment"] = self.environment()
-        step["kubernetes_memory_limit"] = self.memory()
         step["name"] = f"step{self.short_uuid()}"
-        step["kubernetes_uid"] = None
-        step["compute_backend"] = None
+        compute_backend = self.compute_backend()
+        if compute_backend != "unsigned":
+            step["compute_backend"] = compute_backend
+            step["htcondor_max_runtime"] = "expresso"
+            step["kerberos"] = True
+        else:
+            step["compute_backend"] = None
+            step["kubernetes_memory_limit"] = self.memory()
+            step["kubernetes_uid"] = None
 
         return step
 
     def default_environment(self):
         """
         Get the default container environment for input jobs.
-        
+
         Returns:
             str: Default Docker environment specification
         """
@@ -125,30 +142,37 @@ class VContainer(VJob):
     def snakemake_rule(self):
         """
         Generate a Snakemake rule configuration for workflow execution.
-        
+
         Returns:
             dict: A dictionary containing rule configuration including commands,
                   environment, memory, inputs, and outputs for Snakemake workflow
         """
-        commands = [f"mkdir -p imp{self.short_uuid()}/outputs"]
+        commands = [f"pwd && echo $REANA_WORKSPACE && mkdir -p imp{self.short_uuid()}/outputs"]
+        commands.append(f"mkdir -p imp{self.short_uuid()}/logs")
         commands.append(f"cd imp{self.short_uuid()}")
 
         # Add ln -s $REANA_WORKSPACE/{alias} {alias} to the commands
         image = self.image()
         if image:
-            commands.append(f"ln -s $REANA_WORKSPACE/imp{image.short_uuid()} code")
+            # commands.append(f"ln -s $REANA_WORKSPACE/imp{image.short_uuid()} code")
+            commands.append(f"ln -s ../imp{image.short_uuid()} code")
         print("self.inputs", self.inputs())
         alias_list, alias_map = self.inputs()
         for alias in alias_list:
             impression = alias_map[alias]
-            command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
+            # command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
+            command = f"ln -s ../imp{impression[:7]} {alias}"
             commands.append(command)
 
         raw_commands = []
         if not self.is_input:
             raw_commands = self.image().yaml_file.read_variable("commands", [])
 
-        for command in raw_commands:
+
+        if self.compute_backend() == "htcondorcern":
+            raw_commands = []
+
+        for i, command in enumerate(raw_commands):
             # Replace the commands (parameters):
             parameters, values = self.parameters()
             for parameter in parameters:
@@ -161,20 +185,30 @@ class VContainer(VJob):
             for alias in alias_list:
                 impression = alias_map[alias]
                 name = "${"+ alias +"}"
-                command = command.replace(name, f"$REANA_WORKSPACE/imp{impression[:7]}")
-            command = command.replace("${workspace}", "$REANA_WORKSPACE")
+                # command = command.replace(name, f"$REANA_WORKSPACE/imp{impression[:7]}")
+                command = command.replace(name, f"../imp{impression[:7]}")
+            # command = command.replace("${workspace}", "$REANA_WORKSPACE")
+            command = command.replace("${workspace}", "..")
             command = command.replace("${output}", f"imp{self.short_uuid()}")
             image = self.image()
             if image:
-                command = command.replace("${code}", f"$REANA_WORKSPACE/imp{image.short_uuid()}")
+                # command = command.replace("${code}", f"$REANA_WORKSPACE/imp{image.short_uuid()}")
+                command = command.replace("${code}", f"../imp{image.short_uuid()}")
+            command = f"{{{{ " + command + f" ; }}}} >> logs/chern_user_step{i}.log 2>&1"
             commands.append(command.replace("\"", "\\\""))
         step = {}
         step["commands"] = commands
-        commands.append("cd $REANA_WORKSPACE")
+        # commands.append("cd $REANA_WORKSPACE")
+        commands.append("cd ..")
         commands.append(f"touch {self.short_uuid()}.done")
         environment = self.default_environment() if self.is_input else self.environment()
         step["environment"] = environment
         step["memory"] = self.memory()
+        compute_backend = self.compute_backend()
+        if compute_backend != "unsigned":
+            step["compute_backend"] = compute_backend
+        else:
+            step["compute_backend"] = None
         step["name"] = f"step{self.short_uuid()}"
         step["output"] = f"{self.short_uuid()}.done"
 
@@ -194,7 +228,7 @@ class VContainer(VJob):
     def environment(self):
         """
         Get the container environment configuration.
-        
+
         Returns:
             str: Environment specification from YAML configuration
         """
@@ -203,16 +237,28 @@ class VContainer(VJob):
     def memory(self):
         """
         Get the memory limit for the container.
-        
+
         Returns:
             str: Kubernetes memory limit specification
         """
-        return self.yaml_file.read_variable("kubernetes_memory_limit", "")
+        memory_limit = self.yaml_file.read_variable("memory_limit", "")
+        if memory_limit:
+            return memory_limit
+        return self.yaml_file.read_variable("kubernetes_memory_limit", "4096Mi")
+
+    def compute_backend(self):
+        """
+        Get the compute backend for the container.
+
+        Returns:
+            str: Compute backend specification from YAML configuration
+        """
+        return self.yaml_file.read_variable("compute_backend", "unsigned")
 
     def parameters(self):
         """
         Read the parameters from the YAML configuration file.
-        
+
         Returns:
             tuple: A tuple containing (sorted_parameter_keys, parameters_dict)
         """
@@ -222,7 +268,7 @@ class VContainer(VJob):
     def outputs(self):
         """
         Get the list of output directories for this container.
-        
+
         Returns:
             list: List of output directory names
         """

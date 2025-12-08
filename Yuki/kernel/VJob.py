@@ -5,8 +5,9 @@ This module contains the VJob class which represents a virtual job object
 that can include VVolume, VImage, VContainer and other related entities.
 """
 import os
+import time
 
-from Chern.utils import metadata
+from CelebiChrono.utils import metadata
 
 class VJob:
     """Virtual class of the objects, including VVolume, VImage, VContainer."""
@@ -115,38 +116,62 @@ class VJob:
 
     def update_status_from_workflow(self, workflow_path):
         """Update job status based on workflow status."""
+        # now = time.time()
+        if self.job_type() == "algorithm":
+            return
         config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
         current_status = config_file.read_variable("status", "raw")
         config_file.write_variable("machine_id", self.machine_id)
-        # print("Current status is: ", current_status)
+        print("Current status is: ", current_status)
         if current_status in ('finished', 'success', 'failed'):
             return
 
-        results_file = metadata.ConfigFile(os.path.join(workflow_path, "results.json"))
-        results = results_file.read_variable("results", {})
-        full_workflow_status = results.get("status", "unknown")
+        # print(f"Time to update status from workflow... {time.time() - now:.2f} seconds" )
 
-        log_file = metadata.ConfigFile(os.path.join(workflow_path, "log.json"))
-        log = log_file.read_variable("logs", {})
+        try:
+            results_file = metadata.ConfigFile(os.path.join(workflow_path, "results.json"))
+            results = results_file.read_variable("results", {})
+            full_workflow_status = results.get("status", "unknown")
+        except Exception:
+            print("Update status from workflow failed.")
+            return
+
+        # print(f"Time to read results... {time.time() - now:.2f} seconds" )
+
         matched_step = None
-        for step in log.values():
-            if step.get("job_name", "") == f"step{self.short_uuid()}":
-                matched_step = step
+        try:
+            log_file = metadata.ConfigFile(os.path.join(workflow_path, "log.json"))
+            log = log_file.read_variable("logs", {})
+            for step in log.values():
+                if step.get("job_name", "") == f"step{self.short_uuid()}":
+                    matched_step = step
+                    break
+        except Exception:
+            print("No log file found.")
+            return
+
+        # print(f"Time to find matched step... {time.time() - now:.2f} seconds" )
 
         status = full_workflow_status
+        print("Full workflow status:", full_workflow_status)
         if matched_step:
             status = matched_step.get("status", "unknown")
-            logs = matched_step.get("logs", "")
-            if not os.path.exists(os.path.join(self.path, self.machine_id, "outputs")):
-                os.makedirs(os.path.join(self.path, self.machine_id, "outputs"))
-            with open(os.path.join(self.path, self.machine_id, "outputs/chern.stdout"), "w", encoding='utf-8') as f:
-                f.write(logs)
-            started_at = matched_step.get("started_at", "")
-            finished_at = matched_step.get("ended_at", "")
+            print("status from matched step:", status)
+            if status in ("finished", "failed"):
+                logs = matched_step.get("logs", "")
+                if not os.path.exists(os.path.join(self.path, self.machine_id, "logs")):
+                    os.makedirs(os.path.join(self.path, self.machine_id, "logs"))
+                with open(os.path.join(self.path, self.machine_id, "logs/chern.stdout"), "w", encoding='utf-8') as f:
+                    f.write(logs)
+                started_at = matched_step.get("started_at", "")
+                finished_at = matched_step.get("ended_at", "")
+
+        # print(f"Time to write outputs... {time.time() - now:.2f} seconds" )
 
         # print("New status:", status)
         if current_status == "raw":
-            config_file.write_variable("status", status)
+            if len(status) < 20:
+                config_file.write_variable("status", status)
         elif current_status == "running":
             if status == "success":
                 config_file.write_variable("status", "success")
@@ -160,7 +185,11 @@ class VJob:
         elif current_status in ('finished', 'success', 'failed'):
             pass
         else:
-            config_file.write_variable("status", status)
+            if len(status) < 20:
+                config_file.write_variable("status", status)
+            else:
+                config_file.write_variable("status", "unknown")
+
 
     def error(self):
         """Get error message if any."""

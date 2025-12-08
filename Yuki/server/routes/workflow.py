@@ -2,7 +2,7 @@
 Workflow management routes.
 """
 from flask import Blueprint
-from Chern.utils.metadata import ConfigFile
+from CelebiChrono.utils.metadata import ConfigFile
 from Yuki.kernel.VJob import VJob
 from Yuki.kernel.VWorkflow import VWorkflow
 from ..config import config
@@ -33,6 +33,15 @@ def kill(impression):
     job.set_status("failed")
     return "ok"
 
+# @bp.route("/reset/<impression>", methods=['GET'])
+#     """ Reset the job status to unknown """
+#     job_path = config.get_job_path(impression)
+#     config_file = config.get_config_file()
+#     runners = config_file.read_variable("runners", [])
+#     runners_id = config_file.read_variable("runners_id", {})
+#     job_config_file = ConfigFile(config.get_job_config_path(impression))
+#     job_config_file.read_variable("object_type", "")  # Read but don't store unused value
+
 
 @bp.route("/collect/<impression>", methods=['GET'])
 def collect(impression):
@@ -51,8 +60,13 @@ def collect(impression):
         if job.workflow_id() == "":
             continue
         job_workflow = VWorkflow([], job.workflow_id())
-        if job_workflow.status() == "finished":
+        # if job_workflow.status() == "finished":
+        if job.status() == "finished":
+            print("Download starting")
             job_workflow.download(impression)
+        elif job.status() == "failed":
+            print("Download starting: [failed]")
+            job_workflow.download_logs(impression)
     return "ok"
 
 

@@ -2,7 +2,7 @@
 Configuration management for Yuki server.
 """
 import os
-from Chern.utils.metadata import ConfigFile
+from CelebiChrono.utils.metadata import ConfigFile
 
 
 class YukiConfig:

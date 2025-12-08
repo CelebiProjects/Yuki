@@ -59,7 +59,7 @@ def execute():
             VJob(job_path, machine).set_runid(task.id)
         print("### <<< execute")
         return task.id
-    
+
     return ""  # For GET requests
 
 

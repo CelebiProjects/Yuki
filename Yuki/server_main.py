@@ -4,7 +4,7 @@ Main entry point and daemon management for Yuki server.
 import os
 import subprocess
 from multiprocessing import Process
-from Chern.utils.pretty import colorize
+from CelebiChrono.utils.pretty import colorize
 from .server.app import app, celeryapp
 from .server.config import config
 

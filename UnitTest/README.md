@@ -45,19 +45,16 @@ The test suite covers:
 
 ### Option 1: Using the test runner script
 ```bash
-cd /Users/mzhao/workdir/Chern/Yuki
 python run_tests.py
 ```
 
 ### Option 2: Using unittest directly
 ```bash
-cd /Users/mzhao/workdir/Chern/Yuki
 python -m unittest UnitTest.test_server -v
 ```
 
 ### Option 3: Using pytest (if installed)
 ```bash
-cd /Users/mzhao/workdir/Chern/Yuki
 pytest UnitTest/test_server.py -v
 ```
 

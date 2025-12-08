@@ -218,11 +218,6 @@ class VWorkflow:
                 job.set_status("failed")
             raise
 
-        # self.check_status()
-        # self.download()
-
-
-
     def kill(self):
         """Kill the workflow execution."""
         from reana_client.api import client
@@ -278,53 +273,6 @@ class VWorkflow:
                 dep_job = VJob(dep_path, None)
                 if dep_job.path not in visited:
                     stack.append((dep_job, False))
-
-    # Done — no need for post-deduplication
-
-
-    # def construct_workflow_jobs(self, job):
-    #     """Construct workflow jobs recursively including dependencies."""
-    #     last_consult_time = CHERN_CACHE.consult_table.get(job.path, -1)
-    #     if time.time() - last_consult_time < 1:
-    #         return
-    #     CHERN_CACHE.consult_table[job.path] = time.time()
-
-    #     if job.machine_id is None:
-    #         job = VJob(job.path, self.machine_id)
-
-    #     if job.machine_id is None:
-    #         return
-
-    #     # Even if the job is finished, we still need to add it to the workflow,
-    #     # because we need to upload the files
-    #     if job.status() == "finished":
-    #         if job.object_type() == "task":
-    #             job.is_input = True
-    #         self.jobs.append(job)
-    #         return
-
-    #     if job.status() == "failed":
-    #         if job.object_type() == "task":
-    #             job.is_input = True
-    #         self.jobs.append(job)
-    #         return
-
-    #     if job.status() == "pending" or job.status() == "running":
-    #         if job.object_type() == "task":
-    #             job.is_input = True
-    #         self.jobs.append(job)
-    #         return
-
-    #     if job.status() == "archived":
-    #         if job.object_type() == "task":
-    #             job.is_input = True
-    #         self.jobs.append(job)
-    #         return
-
-    #     for dependence in job.dependencies():
-    #         path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", dependence)
-    #         self.construct_workflow_jobs(VJob(path, None))
-    #     self.jobs.append(job)
 
     def create_workflow(self):
         """Create a workflow using REANA client."""

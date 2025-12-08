@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zhaomr13/Chern"
+Homepage = "https://github.com/zhaomr13/CelebiProjects/Yuki"
 
 [tool.setuptools.packages]
 find = {}

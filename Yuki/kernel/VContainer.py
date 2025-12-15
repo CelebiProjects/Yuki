@@ -47,6 +47,7 @@ class VContainer(VJob):
             VImage or None: The image associated with predecessor algorithm jobs
         """
         predecessors = self.predecessors()
+        print("Predecessors, ", self.predecessors())
         for pred_job in predecessors:
             if pred_job.job_type() == "algorithm":
                 return VImage(pred_job.path, self.machine_id)
@@ -60,7 +61,7 @@ class VContainer(VJob):
             dict: A dictionary containing step configuration with commands,
                   environment, memory limits, and other execution parameters
         """
-        commands = [f"mkdir -p imp{self.short_uuid()}/outputs"]
+        commands = [f"mkdir -p imp{self.short_uuid()}/stageout"]
         commands.append(f"mkdir -p imp{self.short_uuid()}/logs")
         commands.append(f"cd imp{self.short_uuid()}")
 
@@ -147,7 +148,7 @@ class VContainer(VJob):
             dict: A dictionary containing rule configuration including commands,
                   environment, memory, inputs, and outputs for Snakemake workflow
         """
-        commands = [f"pwd && echo $REANA_WORKSPACE && mkdir -p imp{self.short_uuid()}/outputs"]
+        commands = [f"pwd && echo $REANA_WORKSPACE && mkdir -p imp{self.short_uuid()}/stageout"]
         commands.append(f"mkdir -p imp{self.short_uuid()}/logs")
         commands.append(f"cd imp{self.short_uuid()}")
 
@@ -275,7 +276,7 @@ class VContainer(VJob):
         if self.machine_id is None:
             path = os.path.join(self.path, "rawdata")
             return csys.list_dir(path)
-        path = os.path.join(self.path, self.machine_id, "outputs")
+        path = os.path.join(self.path, self.machine_id, "stageout")
         if not os.path.exists(path):
             return []
         dirs = csys.list_dir(path)

@@ -33,17 +33,21 @@ class VWorkflow:
     """
     uuid = None
 
-    def __init__(self, jobs, uuid=None):
+    def __init__(self, project_uuid, jobs, uuid=None):
         """Initialize workflow with jobs and optional UUID."""
         # Create a uuid for the workflow
         if uuid:
+            self.project_uuid = project_uuid
             self.uuid = uuid
             self.start_job = None
             self.path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", self.uuid)
             self.config_file = metadata.ConfigFile(os.path.join(self.path, "config.json"))
             self.machine_id = self.config_file.read_variable("machine_id", "")
         else:
+            self.project_uuid = project_uuid
             self.uuid = csys.generate_uuid()
+            print("The jobs is: ")
+            print(jobs)
             self.start_job = jobs.copy()
             self.path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", self.uuid)
             self.config_file = metadata.ConfigFile(os.path.join(self.path, "config.json"))
@@ -113,7 +117,7 @@ class VWorkflow:
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                workflow = VWorkflow([], job.workflow_id())
+                workflow = VWorkflow(self.project_uuid, [], job.workflow_id())
                 if workflow and workflow not in workflow_list:
                     workflow_list.append(workflow)
                 # FIXME: may check if some of the dependence fail
@@ -130,7 +134,7 @@ class VWorkflow:
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                workflow = VWorkflow([], job.workflow_id())
+                workflow = VWorkflow(self.project_uuid, [], job.workflow_id())
                 if workflow in workflow_list:
                     job.update_status_from_workflow(
                         os.path.join(os.environ["HOME"], ".Yuki", "Workflows", job.workflow_id())
@@ -269,7 +273,7 @@ class VWorkflow:
             # Otherwise, expand dependencies first
             stack.append((job, True))  # mark job to add after deps
             for dep in job.dependencies():
-                dep_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", dep)
+                dep_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, dep)
                 dep_job = VJob(dep_path, None)
                 if dep_job.path not in visited:
                     stack.append((dep_job, False))
@@ -436,26 +440,26 @@ class VWorkflow:
                         client.upload_file(
                             self.get_name(),
                             f,
-                            "imp" + job.short_uuid() + "/" + filename,
+                            "imp" + job.short_uuid() + "/stageout/" + filename,
                             self.get_access_token(self.machine_id)
                         )
             elif job.is_input:
                 impression = job.path.split("/")[-1]
                 # print(f"Downloading the files from impression {impression}")
-                path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, job.machine_id)
-                if not os.path.exists(os.path.join(path, "outputs")):
-                    workflow = VWorkflow([], job.workflow_id())
+                path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, job.machine_id)
+                if not os.path.exists(os.path.join(path, "stageout")):
+                    workflow = VWorkflow(self.project_uuid, [], job.workflow_id())
                     workflow.download_outputs(impression)
 
                 # Reset the id
                 self.set_enviroment(self.machine_id)
-                filelist = os.listdir(os.path.join(path, "outputs"))
+                filelist = os.listdir(os.path.join(path, "stageout"))
                 for filename in filelist:
-                    with open(os.path.join(path, "outputs", filename), "rb") as f:
+                    with open(os.path.join(path, "stageout", filename), "rb") as f:
                         client.upload_file(
                             self.get_name(),
                             f,
-                            "imp"+job.short_uuid() + "/outputs/" + filename,
+                            "imp"+job.short_uuid() + "/stageout/" + filename,
                             self.get_access_token(self.machine_id)
                         )
 
@@ -563,15 +567,15 @@ class VWorkflow:
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, self.machine_id)
+            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
             try: # try to download the files
-                if not os.path.exists(os.path.join(path, "outputs.downloaded")):
+                if not os.path.exists(os.path.join(path, "stageout.downloaded")):
                     files = client.list_files(
                         self.get_name(),
                         self.get_access_token(self.machine_id),
-                        "imp"+impression[0:7]+"/outputs"
+                        "imp"+impression[0:7]+"/stageout"
                     )
-                    os.makedirs(os.path.join(path, "outputs"), exist_ok=True)
+                    os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
                     # print(f"Files: {files}")
                     for file in files:
                         # print(f'Downloading {file["name"]}')
@@ -585,9 +589,9 @@ class VWorkflow:
                         with open(filename, "wb") as f:
                             f.write(output[0])
                     # all done, make a finish file
-                    open(os.path.join(path, "outputs.downloaded"), "w").close()
+                    open(os.path.join(path, "stageout.downloaded"), "w").close()
             except Exception as e:
-                print("Failed to download outputs:", e)
+                print("Failed to download stageout:", e)
 
             try:
                 if not os.path.exists(os.path.join(path, "logs.downloaded")):
@@ -618,15 +622,15 @@ class VWorkflow:
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, self.machine_id)
+            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
             try:
-                if not os.path.exists(os.path.join(path, "outputs.downloaded")):
+                if not os.path.exists(os.path.join(path, "stageout.downloaded")):
                     files = client.list_files(
                         self.get_name(),
                         self.get_access_token(self.machine_id),
-                        "imp"+impression[0:7]+"/outputs"
+                        "imp"+impression[0:7]+"/stageout"
                     )
-                    os.makedirs(os.path.join(path, "outputs"), exist_ok=True)
+                    os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
                     # print(f"Files: {files}")
                     for file in files:
                         # print(f'Downloading {file["name"]}')
@@ -640,9 +644,9 @@ class VWorkflow:
                         with open(filename, "wb") as f:
                             f.write(output[0])
                     # all done, make a finish file
-                    open(os.path.join(path, "outputs.downloaded"), "w").close()
+                    open(os.path.join(path, "stageout.downloaded"), "w").close()
             except Exception as e:
-                print("Failed to download outputs:", e)
+                print("Failed to download stageout:", e)
 
     def download_logs(self, impression=None):
         """Download workflow logs."""
@@ -650,7 +654,7 @@ class VWorkflow:
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", impression, self.machine_id)
+            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
             try:
                 if not os.path.exists(os.path.join(path, "logs.downloaded")):
                     files = client.list_files(
@@ -673,6 +677,73 @@ class VWorkflow:
                     open(os.path.join(path, "logs.downloaded"), "w").close()
             except Exception as e:
                 print("Failed to download logs:", e)
+
+    def watermark(self, impression=None):
+        print("Called", impression)
+        if impression:
+            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
+            if not os.path.exists(os.path.join(path, "stageout.downloaded")):
+                return False
+            outputs_path = os.path.join(path, "stageout")
+            print(outputs_path)
+            watermark_path = os.path.join(path, "watermarks")
+            os.makedirs(watermark_path, exist_ok=True)
+            filelist = os.listdir(outputs_path)
+            print(filelist)
+            # Water mark the png files
+            # Water mark the png files
+
+            for filename in filelist:
+                if not filename.endswith(".png"):
+                    continue
+
+                # Water mark the png files
+                for filename in filelist:
+                    if not filename.endswith(".png"):
+                        continue
+
+                    from PIL import Image, ImageDraw, ImageFont
+
+                    # 1. Open the image and convert it to RGBA.
+                    # The watermark will be drawn directly onto this image object.
+                    image = Image.open(os.path.join(outputs_path, filename)).convert("RGBA")
+
+                    # 2. Create the drawing context directly on the image
+                    draw = ImageDraw.Draw(image)
+
+                    # --- Watermark Setup ---
+
+                    # Use the same logic for sizing the font (using the original code's approach)
+                    font_size = int(min(image.size) / 20)
+                    try:
+                        font = ImageFont.truetype("arial.ttf", font_size)
+                    except:
+                        font = ImageFont.load_default()
+
+                    text = f"Imp:{impression}"
+                    print(text)
+
+                    # Use the positioning logic from the original code (top-right corner)
+                    textwidth = draw.textlength(text, font=font)
+
+                    # The original code's positioning (using y=10)
+                    x = image.size[0] - textwidth - 10
+                    y = 10
+
+                    # Define the color and opacity (e.g., White with 50% opacity, (255, 255, 255, 128)
+                    # from your original code block, or use the light grey/opaque from the function: (192, 192, 192, 180))
+                    # We will stick to the original code's color for consistency:
+                    # fill_color = (255, 255, 255, 180)
+                    fill_color = (255, 255, 255, 50)
+                    # fill_color = (255, 255, 255, 128)
+
+                    # 3. Draw the text directly onto the image object
+                    # This step is the key change: drawing directly, no separate 'watermark' layer needed.
+                    draw.text((x, y), text, font=font, fill=fill_color)
+
+                    # 4. Save the resulting image. Since we modified the 'image' object directly,
+                    # we save it without further compositing. Saving as PNG retains the alpha channel.
+                    image.save(os.path.join(watermark_path, f"imp{impression[:8]}_{filename}"), format="PNG")
 
     def ping(self):
         """Ping the REANA server (FIXME: This function is not used)."""

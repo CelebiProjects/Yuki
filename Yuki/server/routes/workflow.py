@@ -10,15 +10,15 @@ from ..config import config
 bp = Blueprint('workflow', __name__)
 
 
-@bp.route("/kill/<impression>", methods=['GET'])
-def kill(impression):
+@bp.route("/kill/<project_uuid>/<impression>", methods=['GET'])
+def kill(project_uuid, impression):
     """Kill workflows for an impression."""
     job_path = config.get_job_path(impression)
     config_file = config.get_config_file()
     runners = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})
 
-    job_config_file = ConfigFile(config.get_job_config_path(impression))
+    job_config_file = ConfigFile(config.get_job_config_path(project_uuid, impression))
     job_config_file.read_variable("object_type", "")  # Read but don't store unused value
 
     for machine in runners:
@@ -26,7 +26,7 @@ def kill(impression):
         job = VJob(job_path, machine_id)
         if job.workflow_id() == "":
             continue
-        job_workflow = VWorkflow([], job.workflow_id())
+        job_workflow = VWorkflow(project_uuid, [], job.workflow_id())
         job_workflow.kill()
 
     job = VJob(job_path, None)
@@ -51,7 +51,7 @@ def collect(impression):
     runners = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})
 
-    job_config_file = ConfigFile(config.get_job_config_path(impression))
+    job_config_file = ConfigFile(config.get_job_config_path(project_uuid, impression))
     job_config_file.read_variable("object_type", "")  # Read but don't store unused value
 
     for machine in runners:
@@ -59,7 +59,7 @@ def collect(impression):
         job = VJob(job_path, machine_id)
         if job.workflow_id() == "":
             continue
-        job_workflow = VWorkflow([], job.workflow_id())
+        job_workflow = VWorkflow(project_uuid, [], job.workflow_id())
         # if job_workflow.status() == "finished":
         if job.status() == "finished":
             print("Download starting")
@@ -69,16 +69,37 @@ def collect(impression):
             job_workflow.download_logs(impression)
     return "ok"
 
-
-@bp.route('/workflow/<impression>', methods=['GET'])
-def workflow(impression):
-    """Get workflow information for an impression."""
+@bp.route("/watermark/<project_uuid>/<impression>", methods=['GET'])
+def watermark(project_uuid, impression):
+    """Apply watermark to results of an impression."""
     job_path = config.get_job_path(impression)
     config_file = config.get_config_file()
     runners = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})
 
-    job_config_file = ConfigFile(config.get_job_config_path(impression))
+    job_config_file = ConfigFile(config.get_job_config_path(project_uuid, impression))
+    job_config_file.read_variable("object_type", "")
+    for machine in runners:
+        machine_id = runners_id[machine]
+        job = VJob(job_path, machine_id)
+        if job.workflow_id() == "":
+            continue
+        job_workflow = VWorkflow(project_uuid, [], job.workflow_id())
+        if job.status() == "finished":
+            print("Watermarking starting")
+            job_workflow.watermark(impression)
+    return "ok"
+
+
+@bp.route('/workflow/<project_uuid>/<impression>', methods=['GET'])
+def workflow(project_uuid, impression):
+    """Get workflow information for an impression."""
+    job_path = config.get_job_path(project_uuid, impression)
+    config_file = config.get_config_file()
+    runners = config_file.read_variable("runners", [])
+    runners_id = config_file.read_variable("runners_id", {})
+
+    job_config_file = ConfigFile(config.get_job_config_path(project_uuid, impression))
     job_config_file.read_variable("object_type", "")  # Read but don't store unused value
 
     for machine in runners:
@@ -86,6 +107,6 @@ def workflow(impression):
         job = VJob(job_path, machine_id)
         if job.workflow_id() == "":
             continue
-        job_workflow = VWorkflow([], job.workflow_id())
+        job_workflow = VWorkflow(project_uuid, [], job.workflow_id())
         return f"{machine} {job_workflow.uuid}"
     return "UNDEFINED"

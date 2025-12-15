@@ -21,13 +21,14 @@ def execute():
     if request.method == 'POST':
         machine = request.form["machine"]
         contents = request.files["impressions"].read().decode()
+        project_uuid = request.form['project_uuid']
         start_jobs = []
         print("machine:", machine)
         print("contents:", contents.split(" "))
 
         for impression in contents.split(" "):
             print("impression:", impression)
-            job_path = config.get_job_path(impression)
+            job_path = config.get_job_path(project_uuid, impression)
             job = VJob(job_path, None)
             print("job", job, job.job_type(), job.status())
 
@@ -52,10 +53,13 @@ def execute():
 
         print("Asynchronous execution")
         print("contents", contents)
-        task = task_exec_impression.apply_async(args=[contents, machine])
+        task = task_exec_impression.apply_async(args=[project_uuid, contents, machine])
 
+        print("Contents is:", contents)
         for impression in contents.split(" "):
-            job_path = config.get_job_path(impression)
+            job_path = config.get_job_path(project_uuid, impression)
+            print("Project_uuid is:", project_uuid)
+            print("Job path is:", job_path)
             VJob(job_path, machine).set_runid(task.id)
         print("### <<< execute")
         return task.id
@@ -63,27 +67,27 @@ def execute():
     return ""  # For GET requests
 
 
-@bp.route("/run/<impression>/<machine>", methods=['GET'])
-def run(impression, machine):
+@bp.route("/run/<project_uuid>/<impression>/<machine>", methods=['GET'])
+def run(project_uuid, impression, machine):
     """Run a specific impression on a machine."""
     logger.info("Trying to run it")
-    task = task_exec_impression.apply_async(args=[impression, machine])
-    job_path = config.get_job_path(impression)
+    task = task_exec_impression.apply_async(args=[project_uuid, impression, machine])
+    job_path = config.get_job_path(project_uuid, impression)
     VJob(job_path, machine).set_runid(task.id)
     logger.info("Run id = %s", task.id)
     return task.id
 
 
-@bp.route("/outputs/<impression>/<machine>", methods=['GET'])
-def outputs(impression, machine):
+@bp.route("/outputs/<project_uuid>/<impression>/<machine>", methods=['GET'])
+def outputs(project_uuid, impression, machine):
     """Get outputs for an impression on a specific machine."""
     if machine == "none":
-        path = config.get_job_path(impression)
+        path = config.get_job_path(project_uuid, impression)
         job = VJob(path, None)
         if job.job_type() == "task":
             return " ".join(VContainer(path, None).outputs())
 
-    path = config.get_job_path(impression)
+    path = config.get_job_path(project_uuid, impression)
     job = VJob(path, machine)
     if job.job_type() == "task":
         return " ".join(VContainer(path, machine).outputs())

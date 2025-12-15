@@ -26,23 +26,23 @@ celeryapp = create_celery_app()
 
 
 @celeryapp.task
-def task_exec_impression(impressions, machine_uuid):
+def task_exec_impression(project_uuid, impressions, machine_uuid):
     """Execute impressions as a background task."""
     jobs = []
     for impression_uuid in impressions.split(" "):
-        job_path = os.path.join(os.environ["HOME"], ".Yuki/Storage", impression_uuid)
+        job_path = os.path.join(os.environ["HOME"], ".Yuki/Storage", project_uuid, impression_uuid)
         job = VJob(job_path, machine_uuid)
         jobs.append(job)
     print("jobs", jobs)
-    workflow = VWorkflow(jobs, None)
+    workflow = VWorkflow(project_uuid, jobs, None)
     print("workflow", workflow)
     workflow.run()
 
 
 @celeryapp.task
-def task_update_workflow_status(workflow_id):
+def task_update_workflow_status(project_uuid, workflow_id):
     """Update workflow status as a background task."""
     print("# >>> task_update_workflow_status")
-    workflow = VWorkflow([], workflow_id)
+    workflow = VWorkflow(project_uuid, [], workflow_id)
     workflow.update_workflow_status()
     print("# <<< task_update_workflow_status")

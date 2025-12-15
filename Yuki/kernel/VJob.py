@@ -22,7 +22,7 @@ class VJob:
             os.path.join(self.path, "config.json")
             )
         self.yaml_file = metadata.YamlFile(
-            os.path.join(self.path, "contents", "chern.yaml")
+            os.path.join(self.path, "contents", "celebi.yaml")
         )
         if self.environment() == "rawdata":
             self.is_input = True
@@ -83,7 +83,7 @@ class VJob:
     def environment(self):
         """Get the environment type from the YAML configuration."""
         yaml_file = metadata.YamlFile(
-            os.path.join(self.path, "contents", "chern.yaml")
+            os.path.join(self.path, "contents", "celebi.yaml")
             )
         return yaml_file.read_variable("environment", "")
 
@@ -215,7 +215,7 @@ class VJob:
         tree = self.config_file.read_variable("tree", [])
         for dirpath, _, filenames in tree:
             for f in filenames:
-                if f == "chern.yaml":
+                if f == "celebi.yaml":
                     continue
                 name = f"{self.short_uuid()}"
                 if dirpath == ".":
@@ -228,7 +228,8 @@ class VJob:
     def predecessors(self):
         """Get predecessor VJob objects."""
         dep = self.dependencies()
-        path = os.path.join(os.environ["HOME"], ".Yuki", "Storage")
+        # path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid)
+        path = self.path[:-32]
         return [VJob(os.path.join(path, x), self.machine_id) for x in dep]
 
     def impression(self):

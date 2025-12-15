@@ -18,13 +18,13 @@ class YukiConfig:
         """Get ConfigFile instance for runner configuration."""
         return ConfigFile(self.config_path)
 
-    def get_job_path(self, impression):
+    def get_job_path(self, project_uuid, impression):
         """Get path for a specific job/impression."""
-        return os.path.join(self.storage_path, impression)
+        return os.path.join(self.storage_path, project_uuid, impression)
 
-    def get_job_config_path(self, impression):
+    def get_job_config_path(self, project_uuid, impression):
         """Get config file path for a specific job/impression."""
-        return os.path.join(self.get_job_path(impression), "config.json")
+        return os.path.join(self.get_job_path(project_uuid, impression), "config.json")
 
 
 # Global config instance

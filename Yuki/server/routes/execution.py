@@ -9,6 +9,7 @@ from Yuki.kernel.VJob import VJob
 from Yuki.kernel.VContainer import VContainer
 from ..config import config
 from ..tasks import task_exec_impression
+import shutil
 
 bp = Blueprint('execution', __name__)
 logger = getLogger("YukiLogger")
@@ -65,6 +66,28 @@ def execute():
         return task.id
 
     return ""  # For GET requests
+
+@bp.route('/purge', methods=['GET', 'POST'])
+def purge():
+    """Execute impressions."""
+    print("# >>> execute")
+    if request.method == 'POST':
+        contents = request.files["impressions"].read().decode()
+        project_uuid = request.form['project_uuid']
+        start_jobs = []
+        print("contents:", contents.split(" "))
+
+        for impression in contents.split(" "):
+            print("impression:", impression)
+            job_path = config.get_job_path(project_uuid, impression)
+            # try to remove the job
+            shutil.rmtree(job_path, ignore_errors=True)
+
+        print("contents", contents)
+        print("### <<< execute")
+    return ""  # For GET requests
+
+
 
 
 @bp.route("/run/<project_uuid>/<impression>/<machine>", methods=['GET'])

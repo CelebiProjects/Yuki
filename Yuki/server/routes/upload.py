@@ -67,10 +67,10 @@ def export(project_uuid, impression, filename):
     return "NOTFOUND"
 
 
-@bp.route("/get-file/<impression>/<filename>", methods=['GET'])
-def get_file(impression, filename):
+@bp.route("/get-file/<project_uuid>/<impression>/<filename>", methods=['GET'])
+def get_file(project_uuid, impression, filename):
     """Get the path to a specific file in an impression."""
-    job_path = config.get_job_path(impression)
+    job_path = config.get_job_path(project_uuid, impression)
     config_file = config.get_config_file()
     runners = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})
@@ -83,17 +83,17 @@ def get_file(impression, filename):
     return "NOTFOUND"
 
 
-@bp.route("/file-view/<impression>/<runner_id>/<filename>", methods=['GET'])
-def fileview(impression, runner_id, filename):
+@bp.route("/file-view/<project_uuid>/<impression>/<runner_id>/<filename>", methods=['GET'])
+def fileview(project_uuid, impression, runner_id, filename):
     """View a specific file."""
-    job_path = config.get_job_path(impression)
+    job_path = config.get_job_path(project_uuid, impression)
     path = os.path.join(job_path, runner_id, "stageout")
     print(path)
     return send_from_directory(path, filename)
 
 @bp.route("/watermark-view/<impression>/<runner_id>/<filename>", methods=['GET'])
-def watermarkview(impression, runner_id, filename):
+def watermarkview(project_uuid, impression, runner_id, filename):
     """View a specific file."""
-    job_path = config.get_job_path(impression)
+    job_path = config.get_job_path(project_uuid, impression)
     path = os.path.join(job_path, runner_id, "watermarks")
     return send_from_directory(path, filename)

@@ -13,7 +13,7 @@ bp = Blueprint('workflow', __name__)
 @bp.route("/kill/<project_uuid>/<impression>", methods=['GET'])
 def kill(project_uuid, impression):
     """Kill workflows for an impression."""
-    job_path = config.get_job_path(impression)
+    job_path = config.get_job_path(project_uuid, impression)
     config_file = config.get_config_file()
     runners = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})
@@ -43,10 +43,10 @@ def kill(project_uuid, impression):
 #     job_config_file.read_variable("object_type", "")  # Read but don't store unused value
 
 
-@bp.route("/collect/<impression>", methods=['GET'])
-def collect(impression):
+@bp.route("/collect/<project_uuid>/<impression>", methods=['GET'])
+def collect(project_uuid, impression):
     """Collect results from workflows."""
-    job_path = config.get_job_path(impression)
+    job_path = config.get_job_path(project_uuid, impression)
     config_file = config.get_config_file()
     runners = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})
@@ -72,7 +72,7 @@ def collect(impression):
 @bp.route("/watermark/<project_uuid>/<impression>", methods=['GET'])
 def watermark(project_uuid, impression):
     """Apply watermark to results of an impression."""
-    job_path = config.get_job_path(impression)
+    job_path = config.get_job_path(project_uuid, impression)
     config_file = config.get_config_file()
     runners = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})

@@ -204,7 +204,7 @@ def generate_text_preview(job_path, runner_id, base_dir, filename, max_chars):
 
 
 @bp.route("/imp-view/<project_uuid>/<impression_name>", methods=['GET'])
-def impview(impression_name):
+def impview(project_uuid, impression_name):
     """View impression files by gathering metadata from 'stageout' and 'logs'."""
     job_path = config.get_job_path(project_uuid, impression_name)
 
@@ -246,6 +246,7 @@ def impview(impression_name):
 
 
     return render_template('impview.html',
+                           project_uuid=project_uuid,
                            impression=impression_name,
                            runner_id=runner_id,
                            files=final_file_infos)

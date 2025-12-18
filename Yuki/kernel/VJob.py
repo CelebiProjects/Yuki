@@ -168,7 +168,7 @@ class VJob:
 
         # print(f"Time to write outputs... {time.time() - now:.2f} seconds" )
 
-        # print("New status:", status)
+        print("New status:", status)
         if current_status == "raw":
             if len(status) < 20:
                 config_file.write_variable("status", status)
@@ -182,6 +182,8 @@ class VJob:
                 config_file.write_variable("status", "failed")
             elif full_workflow_status == "failed":
                 config_file.write_variable("status", "failed")
+        elif current_status in ('stopped', 'deleted'):
+            config_file.write_variable("status", "failed")
         elif current_status in ('finished', 'success', 'failed'):
             pass
         else:

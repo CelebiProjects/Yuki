@@ -3,8 +3,9 @@ Celery tasks for Yuki server.
 """
 import os
 from celery import Celery
+from CelebiChrono.utils import metadata
 from Yuki.kernel.VJob import VJob
-from Yuki.kernel.VWorkflow import VWorkflow
+from Yuki.kernel.vworkflow import VWorkflow
 
 
 def create_celery_app():
@@ -34,7 +35,10 @@ def task_exec_impression(project_uuid, impressions, machine_uuid):
         job = VJob(job_path, machine_uuid)
         jobs.append(job)
     print("jobs", jobs)
-    workflow = VWorkflow(project_uuid, jobs, None)
+    config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki/config.json"))
+    backend_types = config.read_variable("backend_types", {})
+    backend_type = backend_types.get(machine_uuid, "reana")
+    workflow = VWorkflow.create(project_uuid, jobs, None, mode=backend_type)
     print("workflow", workflow)
     workflow.run()
 
@@ -43,6 +47,6 @@ def task_exec_impression(project_uuid, impressions, machine_uuid):
 def task_update_workflow_status(project_uuid, workflow_id):
     """Update workflow status as a background task."""
     print("# >>> task_update_workflow_status")
-    workflow = VWorkflow(project_uuid, [], workflow_id)
+    workflow = VWorkflow.create(project_uuid, [], workflow_id)
     workflow.update_workflow_status()
     print("# <<< task_update_workflow_status")

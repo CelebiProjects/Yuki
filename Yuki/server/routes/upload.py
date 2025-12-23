@@ -91,7 +91,7 @@ def fileview(project_uuid, impression, runner_id, filename):
     print(path)
     return send_from_directory(path, filename)
 
-@bp.route("/watermark-view/<impression>/<runner_id>/<filename>", methods=['GET'])
+@bp.route("/watermark-view/<project_uuid>/<impression>/<runner_id>/<filename>", methods=['GET'])
 def watermarkview(project_uuid, impression, runner_id, filename):
     """View a specific file."""
     job_path = config.get_job_path(project_uuid, impression)

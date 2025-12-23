@@ -37,6 +37,10 @@ def runnerconnection(runner):
     token = tokens.get(runner_id, "")
     urls = config_file.read_variable("urls", {})
     url = urls.get(runner_id, "")
+    backend_types = config_file.read_variable("backend_types", {})
+    backend_type = backend_types.get(runner_id, "reana")
+    if backend_type != "reana":
+        return {'status': 'Connected'}
     return ping(url, token)
 
 
@@ -48,6 +52,7 @@ def registerrunner():
         runner = request.form["runner"]
         runner_url = request.form["url"]
         runner_token = request.form["token"]
+        backend_type = request.form.get("backend_type", "dry")
         runner_id = csys.generate_uuid()
 
         config_file = config.get_config_file()
@@ -55,16 +60,19 @@ def registerrunner():
         runners_id = config_file.read_variable("runners_id", {})
         runners_url = config_file.read_variable("urls", {})
         tokens = config_file.read_variable("tokens", {})
+        backend_types = config_file.read_variable("backend_types", {})
 
         runners_list.append(runner)
         runners_id[runner] = runner_id
         runners_url[runner_id] = runner_url
         tokens[runner_id] = runner_token
+        backend_types[runner_id] = backend_type
 
         config_file.write_variable("runners", runners_list)
         config_file.write_variable("runners_id", runners_id)
         config_file.write_variable("urls", runners_url)
         config_file.write_variable("tokens", tokens)
+        config_file.write_variable("backend_types", backend_types)
     return "successful"
 
 
@@ -75,6 +83,9 @@ def removerunner(runner):
     runners_list = config_file.read_variable("runners", [])
     runners_id = config_file.read_variable("runners_id", {})
     urls = config_file.read_variable("urls", {})
+    tokens = config_file.read_variable("tokens", {})
+    backend_types = config_file.read_variable("backend_types", {})
+
 
     if runner not in runners_list:
         return "runner not found"
@@ -88,9 +99,19 @@ def removerunner(runner):
     if runner_id in urls:
         del urls[runner_id]
 
+    # Safe deletion of token
+    if runner_id in tokens:
+        del tokens[runner_id]
+
+    # Safe deletion of backend type
+    if runner_id in backend_types:
+        del backend_types[runner_id]
+
     config_file.write_variable("runners", runners_list)
     config_file.write_variable("runners_id", runners_id)
     config_file.write_variable("urls", urls)
+    config_file.write_variable("tokens", tokens)
+    config_file.write_variable("backend_types", backend_types)
     return "successful"
 
 

@@ -6,7 +6,7 @@ import time
 from flask import Blueprint, render_template
 from CelebiChrono.utils.metadata import ConfigFile
 from Yuki.kernel.VJob import VJob
-from Yuki.kernel.VWorkflow import VWorkflow
+from Yuki.kernel.vworkflow import VWorkflow
 from ..config import config
 from ..tasks import task_update_workflow_status
 from CelebiChrono.kernel.chern_cache import ChernCache
@@ -46,7 +46,7 @@ def status(project_uuid, impression_name):
         if job.workflow_id() == "":
             continue
         print("Checking status for job", job)
-        workflow = VWorkflow(project_uuid, [], job.workflow_id())
+        workflow = VWorkflow.create(project_uuid, [], job.workflow_id())
         workflow_status = workflow.status()
         # print("Status from workflow", workflow_status)
         print("Path:", os.path.join(os.path.join(os.environ["HOME"], ".Yuki", "Workflows", job.workflow_id())))
@@ -90,12 +90,12 @@ def runstatus(project_uuid, impression_name, machine):
         for runner in runners_id:
             machine_id = runners_id[runner]
             job = VJob(job_path, None)
-            workflow = VWorkflow(project_uuid, [], job.workflow_id())
+            workflow = VWorkflow.create(project_uuid, [], job.workflow_id())
             return workflow.status()
 
     machine_id = runners_id[machine]
     job = VJob(job_path, machine_id)
-    workflow = VWorkflow(project_uuid, [], job.workflow_id())
+    workflow = VWorkflow.create(project_uuid, [], job.workflow_id())
     return workflow.status()
 
 

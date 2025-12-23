@@ -1,98 +1,72 @@
-"""
-Construction of a workflow with the jobs, especially from the task.
-
-This module provides the VWorkflow class which manages workflow execution
-and coordination between jobs using the REANA workflow management system.
-"""
 import os
 import time
 import json
+from abc import ABC, abstractmethod
+from PIL import Image, ImageDraw, ImageFont
 
-from CelebiChrono.utils import csys
-from CelebiChrono.utils import metadata
+from CelebiChrono.utils import csys, metadata
 from CelebiChrono.kernel.chern_cache import ChernCache
 from Yuki.kernel.VJob import VJob
 from Yuki.kernel.VContainer import VContainer
 from Yuki.kernel.VImage import VImage
 from Yuki.utils import snakefile
 
-# Comments:
-# To use the reana api, we need the environment variable REANA_SERVER_URL
-# However, setting the environment variable in the python script "might" not work
-# Maybe we can try the execv function in the os module, let me see
-# It seems to works at my MacOS, but I don't know whether it will still work at, for example, Ubuntu
 CHERN_CACHE = ChernCache.instance()
 
-class VWorkflow:
-    """
-    Virtual Workflow class for managing job execution workflows.
+class VWorkflow(ABC):
+    def __init__(self, project_uuid, jobs, uuid=None, machine_id=None):
+        self.project_uuid = project_uuid
+        self.uuid = uuid or csys.generate_uuid()
+        self.path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", self.uuid)
+        os.makedirs(self.path, exist_ok=True)
 
-    This class handles the construction and execution of workflows
-    containing multiple jobs, managing dependencies and orchestrating
-    execution through the REANA workflow management system.
-    """
-    uuid = None
+        self.config_file = metadata.ConfigFile(os.path.join(self.path, "config.json"))
+        self.jobs = []
+        self.dependencies = {}
+        self.steps = []
+        self.snakefile_path = os.path.join(self.path, "Snakefile")
 
-    def __init__(self, project_uuid, jobs, uuid=None):
-        """Initialize workflow with jobs and optional UUID."""
-        # Create a uuid for the workflow
         if uuid:
-            self.project_uuid = project_uuid
-            self.uuid = uuid
             self.start_job = None
-            self.path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", self.uuid)
-            self.config_file = metadata.ConfigFile(os.path.join(self.path, "config.json"))
-            self.machine_id = self.config_file.read_variable("machine_id", "")
+            self.machine_id = self.config_file.read_variable("machine_id", machine_id or "")
         else:
-            self.project_uuid = project_uuid
-            self.uuid = csys.generate_uuid()
-            print("The jobs is: ")
-            print(jobs)
-            self.start_job = jobs.copy()
-            self.path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", self.uuid)
-            self.config_file = metadata.ConfigFile(os.path.join(self.path, "config.json"))
-            # print("The start job(s) are", self.start_job)
-            self.machine_id = self.start_job[0].machine_id
+            self.start_job = jobs.copy() if isinstance(jobs, list) else [jobs]
+            self.machine_id = self.start_job[0].machine_id if self.start_job else (machine_id or "")
             self.config_file.write_variable("machine_id", self.machine_id)
 
-        # FIXME: if it is not the starting of the workflow, one should read the
-        # information from bookkeeping, except for the access_token
-        self.yaml_file = None  # YamlFile()
-        self.jobs = []
-
-        # Initialize attributes that may be set later
-        self.snakefile_path = None
-        self.dependencies = None
-        self.steps = None
-
-        self.set_enviroment(self.machine_id)
-        self.access_token = self.get_access_token(self.machine_id)
+    @staticmethod
+    def create(project_uuid, jobs, uuid=None, mode=None):
+        """Factory method to instantiate the correct workflow type."""
+        if not mode:
+            workflow_path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", uuid)
+            runner_id = metadata.ConfigFile(os.path.join(workflow_path, "config.json")).read_variable("machine_id", "")
+            config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki", "config.json"))
+            backend_types = config.read_variable("backend_types", {})
+            mode = backend_types.get(runner_id, "reana")
+        if mode == "dry":
+            from .dry_workflow import DryWorkflow
+            return DryWorkflow(project_uuid, jobs, uuid)
+        else:
+            from .reana_workflow import ReanaWorkflow
+            return ReanaWorkflow(project_uuid, jobs, uuid)
 
     def get_name(self):
-        """Get the workflow name."""
-        return "w-" + self.uuid[:8]
+        return f"w-{self.uuid[:8]}"
 
     def run(self):
-        """
-        Run the workflow:
-        1. Construct the workflow from the start_job
-        2. Set all the jobs to be the waiting status
-        3. Check the dependencies
-        4. Run
-        """
-        # Construct the workflow
+        """Common execution flow."""
         print("Constructing the workflow")
         print(f"Start job: {self.start_job}")
         if isinstance(self.start_job, list):
             self.construct_workflow_jobs(self.start_job)
         else:
-            self.construct_workflow_jobs([self.start_job])
+            self.construct_workflow_jobs([self.start_job] if self.start_job else [])
 
         print(f"Jobs after the construction: {self.jobs}")
+
         # Set all the jobs to be the waiting status
         for job in self.jobs:
             print(f"job: {job}, is input: {job.is_input}, job status: {job.status()}, job type: {job.job_type()}")
-            # print(f"job machine: {job.machine_id}")
 
         for job in self.jobs:
             if job.is_input:
@@ -101,6 +75,60 @@ class VWorkflow:
                 continue
             job.set_status("waiting")
 
+        # Wait for dependencies
+        if not self._wait_for_dependencies():
+            return
+
+        # Set workflow IDs for jobs
+        for job in self.jobs:
+            if job.is_input:
+                continue
+            if job.job_type() == "algorithm":
+                continue
+            print(f"Set workflow id to job {job}")
+            job.set_workflow_id(self.uuid)
+            job.set_status("running")
+
+        # Prepare and Execute
+        print("Constructing")
+        try:
+            print("Constructing the snakefile")
+            self.construct_snake_file()
+        except:
+            print("Failed to construct the snakefile")
+            self.set_workflow_status("failed")
+            for job in self.jobs:
+                if job.is_input:
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
+                job.set_status("failed")
+            raise
+
+        try:
+            print("Executing backend")
+            self._execute_backend()
+        except:
+            print("Failed to execute backend")
+            self.set_workflow_status("failed")
+            for job in self.jobs:
+                if job.is_input:
+                    continue
+                if job.job_type() == "algorithm":
+                    continue
+                job.set_status("failed")
+            raise
+
+    @abstractmethod
+    def _execute_backend(self):
+        pass
+
+    @abstractmethod
+    def _sync_external_job_status(self, job):
+        pass
+
+    def _wait_for_dependencies(self):
+        """Wait for dependencies to be satisfied."""
         # First, check whether the dependencies are satisfied
         for iTries in range(60):
             print("Checking finished")
@@ -117,7 +145,7 @@ class VWorkflow:
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                workflow = VWorkflow(self.project_uuid, [], job.workflow_id())
+                workflow = VWorkflow.create(self.project_uuid, [], job.workflow_id())
                 if workflow and workflow not in workflow_list:
                     workflow_list.append(workflow)
                 # FIXME: may check if some of the dependence fail
@@ -134,7 +162,7 @@ class VWorkflow:
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                workflow = VWorkflow(self.project_uuid, [], job.workflow_id())
+                workflow = VWorkflow.create(self.project_uuid, [], job.workflow_id())
                 if workflow in workflow_list:
                     job.update_status_from_workflow(
                         os.path.join(os.environ["HOME"], ".Yuki", "Workflows", job.workflow_id())
@@ -156,193 +184,9 @@ class VWorkflow:
                     continue
                 job.set_status("raw")
             print("Some dependencies are not finished yet.")
-            return
+            return False
 
-        for job in self.jobs:
-            if job.is_input:
-                continue
-            if job.job_type() == "algorithm":
-                continue
-            print(f"Set workflow id to job {job}")
-            job.set_workflow_id(self.uuid)
-            job.set_status("running")
-
-        print("Constructing")
-        try:
-            print("Constructing the snakefile")
-            self.construct_snake_file()
-        except:
-            print("Failed to construct the snakefile")
-            self.set_workflow_status("failed")
-            for job in self.jobs:
-                if job.is_input:
-                    continue
-                if job.job_type() == "algorithm":
-                    continue
-                job.set_status("failed")
-            raise
-
-        try:
-            print("Creating the workflow")
-            self.create_workflow()
-        except:
-            print("Failed to create the workflow")
-            self.set_workflow_status("failed")
-            for job in self.jobs:
-                if job.is_input:
-                    continue
-                if job.job_type() == "algorithm":
-                    continue
-                job.set_status("failed")
-            raise
-
-        try:
-            print("Upload file")
-            self.upload_file()
-        except:
-            print("Failed to upload the files")
-            self.set_workflow_status("failed")
-            for job in self.jobs:
-                if job.is_input:
-                    continue
-                if job.job_type() == "algorithm":
-                    continue
-                job.set_status("failed")
-            raise
-
-        try:
-            self.start_workflow()
-        except:
-            self.set_workflow_status("failed")
-            for job in self.jobs:
-                if job.is_input:
-                    continue
-                if job.job_type() == "algorithm":
-                    continue
-                job.set_status("failed")
-            raise
-
-    def kill(self):
-        """Kill the workflow execution."""
-        from reana_client.api import client
-        client.stop_workflow(
-            self.get_name(),
-            False,
-            self.get_access_token(self.machine_id)
-        )
-
-    def construct_workflow_jobs(self, root_jobs):
-        """
-        Construct workflow jobs iteratively including dependencies (DAG-safe, no recursion).
-        root_jobs: list of VJob
-        """
-        visited = set()
-        # Initialize stack with all root jobs, marked as not expanded
-        stack = [(job, False) for job in root_jobs]
-
-        while stack:
-            job, expanded = stack.pop()
-
-            # Skip if already processed (only if first time)
-            if job.path in visited and not expanded:
-                continue
-
-            # Ensure job has machine_id
-            if job.machine_id is None:
-                job = VJob(job.path, self.machine_id)
-                if job.machine_id is None:
-                    continue
-
-            status = job.status()
-            obj_type = job.object_type()
-
-            # For terminal jobs, add immediately
-            if status in ("finished", "failed", "pending", "running", "archived"):
-                if obj_type == "task":
-                    job.is_input = True
-                self.jobs.append(job)
-                visited.add(job.path)
-                continue
-
-            if expanded:
-                # Second time we pop the job: all dependencies are done
-                self.jobs.append(job)
-                visited.add(job.path)
-                continue
-
-            # Otherwise, expand dependencies first
-            stack.append((job, True))  # mark job to add after deps
-            for dep in job.dependencies():
-                dep_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, dep)
-                dep_job = VJob(dep_path, None)
-                if dep_job.path not in visited:
-                    stack.append((dep_job, False))
-
-    def create_workflow(self):
-        """Create a workflow using REANA client."""
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-
-        reana_json = {"workflow": {}}
-        reana_json["workflow"]["specification"] = {
-                "job_dependencies": self.dependencies,
-                "steps": self.steps,
-                }
-        reana_json["workflow"]["type"] = "snakemake"
-        reana_json["workflow"]["file"] = "Snakefile"
-        reana_json["inputs"] = {"files": self.get_files()}
-        client.create_workflow(
-                reana_json,
-                self.get_name(),
-                self.get_access_token(self.machine_id)
-                )
-
-    def get_files(self):
-        """Get list of all files from jobs."""
-        files = []
-        for job in self.jobs:
-            files.extend(job.files())
-        return files
-
-    def parameters(self):
-        """Get workflow parameters."""
-        return []
-
-    def get_file_list(self):
-        """Get file list (broken method - needs fixing)."""
-        # This method references undefined 'jobs' variable
-        # Should use self.jobs instead
-        for job in self.jobs:
-            for filename in job.files():
-                file = f"impression/{job.impression()}/{filename}"
-                # self.files doesn't exist - this method needs to be fixed
-                # self.files.append(file)
-
-    def get_parameters(self):
-        """Get parameters (broken method - needs fixing)."""
-        # This method references undefined 'jobs' variable
-        # Should use self.jobs instead
-        pass
-        # job.parameters doesn't exist in VJob
-        # for parameter in job.parameters:
-        #     parname = f"par_{job.impression()}_{parameter}"
-        #     value = self.get_parameter(parameter)  # This method doesn't exist
-        #     self.parameters[parname] = value  # self.parameters is not a dict
-
-    def get_steps(self):
-        """Get workflow steps (broken method - needs fixing)."""
-        steps = []  # Initialize local variable
-        for job in self.jobs:
-            if job.object_type() == "algorithm":
-                # In this case, if the command is compile, we need to compile it
-                pass
-            if job.object_type() == "task":
-                steps.append(VContainer(job.path, job.machine_id).step())
-                # Replace the ${alg} -> algorithm folder
-                # Replace the ${parameters} -> actual parameters
-                # Replace the ${}
-        return steps
-
+        return True
 
     def construct_snake_file(self):
         """Construct snakemake file for workflow execution."""
@@ -398,136 +242,52 @@ class VWorkflow:
 
         snake_file.write()
 
-    def get_access_token(self, machine_id):
-        """Get access token for the specified machine."""
-        path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
-        config_file = metadata.ConfigFile(path)
-        tokens = config_file.read_variable("tokens", {})
-        token = tokens.get(machine_id, "")
-        return token
+    def construct_workflow_jobs(self, root_jobs):
+        """
+        Construct workflow jobs iteratively including dependencies (DAG-safe, no recursion).
+        root_jobs: list of VJob
+        """
+        visited = set()
+        # Initialize stack with all root jobs, marked as not expanded
+        stack = [(job, False) for job in root_jobs]
 
-    def set_enviroment(self, machine_id):
-        """Set the environment variable for REANA server URL."""
-        # Set the environment variable
-        path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
-        config_file = metadata.ConfigFile(path)
-        urls = config_file.read_variable("urls", {})
-        url = urls.get(machine_id, "")
-        from reana_client.api import client
-        from reana_commons.api_client import BaseAPIClient
-        os.environ["REANA_SERVER_URL"] = url
-        BaseAPIClient("reana-server")
+        while stack:
+            job, expanded = stack.pop()
 
+            # Skip if already processed (only if first time)
+            if job.path in visited and not expanded:
+                continue
 
-    def upload_file(self):
-        """Upload files to REANA workflow."""
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-        for job in self.jobs:
-            for name in job.files():
-                print(f"upload file: {name}")
-                with open(os.path.join(job.path, "contents", name[8:]), "rb") as f:
-                    client.upload_file(
-                        self.get_name(),
-                        f,
-                        "imp" + name,
-                        self.get_access_token(self.machine_id)
-                    )
-            if job.environment() == "rawdata":
-                filelist = os.listdir(os.path.join(job.path, "rawdata"))
-                for filename in filelist:
-                    with open(os.path.join(job.path, "rawdata", filename), "rb") as f:
-                        client.upload_file(
-                            self.get_name(),
-                            f,
-                            "imp" + job.short_uuid() + "/stageout/" + filename,
-                            self.get_access_token(self.machine_id)
-                        )
-            elif job.is_input:
-                impression = job.path.split("/")[-1]
-                # print(f"Downloading the files from impression {impression}")
-                path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, job.machine_id)
-                if not os.path.exists(os.path.join(path, "stageout")):
-                    workflow = VWorkflow(self.project_uuid, [], job.workflow_id())
-                    workflow.download_outputs(impression)
+            # Ensure job has machine_id
+            if job.machine_id is None:
+                job = VJob(job.path, self.machine_id)
+                if job.machine_id is None:
+                    continue
 
-                # Reset the id
-                self.set_enviroment(self.machine_id)
-                filelist = os.listdir(os.path.join(path, "stageout"))
-                for filename in filelist:
-                    with open(os.path.join(path, "stageout", filename), "rb") as f:
-                        client.upload_file(
-                            self.get_name(),
-                            f,
-                            "imp"+job.short_uuid() + "/stageout/" + filename,
-                            self.get_access_token(self.machine_id)
-                        )
+            status = job.status()
+            obj_type = job.object_type()
 
-        with open(self.snakefile_path, "rb") as f:
-            client.upload_file(
-                self.get_name(),
-                f,
-                "Snakefile",
-                self.get_access_token(self.machine_id)
-            )
-        yaml_file = metadata.YamlFile(os.path.join(self.path, "reana.yaml"))
-        yaml_file.write_variable("workflow", {
-            "type": "snakemake",
-            "file": "Snakefile",
-            })
-        with open(os.path.join(self.path, "reana.yaml"), "rb") as f:
-            client.upload_file(
-                self.get_name(),
-                f,
-                "reana.yaml",
-                self.get_access_token(self.machine_id)
-            )
+            # For terminal jobs, add immediately
+            if status in ("finished", "failed", "pending", "running", "archived"):
+                if obj_type == "task":
+                    job.is_input = True
+                self.jobs.append(job)
+                visited.add(job.path)
+                continue
 
-    def check_status(self):
-        """Check the status of the workflow periodically."""
-        # Check the status of the workflow
-        # Check whether the workflow is finished, every 5 seconds
-        counter = 0
-        while True:
-            # Check the status every minute
-            if counter % 60 == 0:
-                self.update_workflow_status()
+            if expanded:
+                # Second time we pop the job: all dependencies are done
+                self.jobs.append(job)
+                visited.add(job.path)
+                continue
 
-            status = self.status()
-            if status in ('finished', 'failed'):
-                return status
-            time.sleep(1)
-            counter += 1
-
-    def set_workflow_status(self, status):
-        """Set the workflow status."""
-        path = os.path.join(self.path, "results.json")
-        results_file = metadata.ConfigFile(path)
-        results = results_file.read_variable("results", {})
-        results["status"] = status
-        results_file.write_variable("results", results)
-
-    def update_workflow_status(self):
-        """Update workflow status from REANA."""
-        try:
-            from reana_client.api import client
-            self.set_enviroment(self.machine_id)
-            results = client.get_workflow_status(
-                self.get_name(),
-                self.get_access_token(self.machine_id))
-            path = os.path.join(self.path, "results.json")
-            results_file = metadata.ConfigFile(path)
-            results_file.write_variable("results", results)
-            logpath = os.path.join(self.path, "log.json")
-            log_file = metadata.ConfigFile(logpath)
-            logstring = results.get("logs", "{}")
-            # decode the logstring with json
-            log = json.loads(logstring)
-            log_file.write_variable("logs", log)
-        except Exception as e:
-            print("Failed to update the workflow status")
-            print(e)
-
+            # Otherwise, expand dependencies first
+            stack.append((job, True))  # mark job to add after deps
+            for dep in job.dependencies():
+                dep_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, dep)
+                dep_job = VJob(dep_path, None)
+                if dep_job.path not in visited:
+                    stack.append((dep_job, False))
 
     def status(self):
         """Get the current workflow status."""
@@ -536,6 +296,9 @@ class VWorkflow:
             return status
 
         path = os.path.join(self.path, "results.json")
+        if not os.path.exists(path):
+            return "unknown"
+
         results_file = metadata.ConfigFile(path)
         results = results_file.read_variable("results", {})
         # print("Results:", results)
@@ -547,138 +310,15 @@ class VWorkflow:
             print("Failed to get the status")
         return "unknown"
 
-    def writeline(self, line):
-        """Write a line to the YAML file."""
-        self.yaml_file.writeline(line)
-
-    def start_workflow(self):
-        """Start the workflow execution."""
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-        client.start_workflow(
-            self.get_name(),
-            self.get_access_token(self.machine_id),
-            {}
-        )
-
-    def download(self, impression=None):
-        """Download workflow results."""
-        # print("Downloading the files")
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-        if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
-            try: # try to download the files
-                if not os.path.exists(os.path.join(path, "stageout.downloaded")):
-                    files = client.list_files(
-                        self.get_name(),
-                        self.get_access_token(self.machine_id),
-                        "imp"+impression[0:7]+"/stageout"
-                    )
-                    os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
-                    # print(f"Files: {files}")
-                    for file in files:
-                        # print(f'Downloading {file["name"]}')
-                        output = client.download_file(
-                            self.get_name(),
-                            file["name"],
-                            self.get_access_token(self.machine_id),
-                        )
-                        print(f'Downloading {file["name"]}')
-                        filename = os.path.join(path, file["name"][11:])
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
-                    # all done, make a finish file
-                    open(os.path.join(path, "stageout.downloaded"), "w").close()
-            except Exception as e:
-                print("Failed to download stageout:", e)
-
-            try:
-                if not os.path.exists(os.path.join(path, "logs.downloaded")):
-                    files = client.list_files(
-                        self.get_name(),
-                        self.get_access_token(self.machine_id),
-                        "imp"+impression[0:7]+"/logs"
-                    )
-                    os.makedirs(os.path.join(path, "logs"), exist_ok=True)
-                    for file in files:
-                        output = client.download_file(
-                            self.get_name(),
-                            file["name"],
-                            self.get_access_token(self.machine_id),
-                        )
-                        print(f'Downloading {file["name"]}')
-                        filename = os.path.join(path, file["name"][11:])
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
-                    # all done, make a finish file
-                    open(os.path.join(path, "logs.downloaded"), "w").close()
-            except Exception as e:
-                print("Failed to download logs:", e)
-
-    def download_outputs(self, impression=None):
-        """Download workflow results."""
-        # print("Downloading the files")
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-        if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
-            try:
-                if not os.path.exists(os.path.join(path, "stageout.downloaded")):
-                    files = client.list_files(
-                        self.get_name(),
-                        self.get_access_token(self.machine_id),
-                        "imp"+impression[0:7]+"/stageout"
-                    )
-                    os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
-                    # print(f"Files: {files}")
-                    for file in files:
-                        # print(f'Downloading {file["name"]}')
-                        output = client.download_file(
-                            self.get_name(),
-                            file["name"],
-                            self.get_access_token(self.machine_id),
-                        )
-                        print(f'Downloading {file["name"]}')
-                        filename = os.path.join(path, file["name"][11:])
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
-                    # all done, make a finish file
-                    open(os.path.join(path, "stageout.downloaded"), "w").close()
-            except Exception as e:
-                print("Failed to download stageout:", e)
-
-    def download_logs(self, impression=None):
-        """Download workflow logs."""
-        # print("Downloading the files")
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-        if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
-            try:
-                if not os.path.exists(os.path.join(path, "logs.downloaded")):
-                    files = client.list_files(
-                        self.get_name(),
-                        self.get_access_token(self.machine_id),
-                        "imp"+impression[0:7]+"/logs"
-                    )
-                    os.makedirs(os.path.join(path, "logs"), exist_ok=True)
-                    for file in files:
-                        output = client.download_file(
-                            self.get_name(),
-                            file["name"],
-                            self.get_access_token(self.machine_id),
-                        )
-                        print(f'Downloading {file["name"]}')
-                        filename = os.path.join(path, file["name"][11:])
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
-                    # all done, make a finish file
-                    open(os.path.join(path, "logs.downloaded"), "w").close()
-            except Exception as e:
-                print("Failed to download logs:", e)
+    def set_workflow_status(self, status):
+        path = os.path.join(self.path, "results.json")
+        results_file = metadata.ConfigFile(path)
+        results = results_file.read_variable("results", {})
+        results["status"] = status
+        results_file.write_variable("results", results)
 
     def watermark(self, impression=None):
+        """Add watermark to PNG images."""
         print("Called", impression)
         if impression:
             path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
@@ -690,65 +330,56 @@ class VWorkflow:
             os.makedirs(watermark_path, exist_ok=True)
             filelist = os.listdir(outputs_path)
             print(filelist)
-            # Water mark the png files
-            # Water mark the png files
 
+            # Water mark the png files
             for filename in filelist:
                 if not filename.endswith(".png"):
                     continue
 
-                # Water mark the png files
-                for filename in filelist:
-                    if not filename.endswith(".png"):
-                        continue
+                # 1. Open the image and convert it to RGBA.
+                # The watermark will be drawn directly onto this image object.
+                image = Image.open(os.path.join(outputs_path, filename)).convert("RGBA")
 
-                    from PIL import Image, ImageDraw, ImageFont
+                # 2. Create the drawing context directly on the image
+                draw = ImageDraw.Draw(image)
 
-                    # 1. Open the image and convert it to RGBA.
-                    # The watermark will be drawn directly onto this image object.
-                    image = Image.open(os.path.join(outputs_path, filename)).convert("RGBA")
+                # --- Watermark Setup ---
 
-                    # 2. Create the drawing context directly on the image
-                    draw = ImageDraw.Draw(image)
+                # Use the same logic for sizing the font (using the original code's approach)
+                font_size = int(min(image.size) / 20)
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except:
+                    font = ImageFont.load_default()
 
-                    # --- Watermark Setup ---
+                text = f"Imp:{impression}"
+                print(text)
 
-                    # Use the same logic for sizing the font (using the original code's approach)
-                    font_size = int(min(image.size) / 20)
-                    try:
-                        font = ImageFont.truetype("arial.ttf", font_size)
-                    except:
-                        font = ImageFont.load_default()
+                # Use the positioning logic from the original code (top-right corner)
+                textwidth = draw.textlength(text, font=font)
 
-                    text = f"Imp:{impression}"
-                    print(text)
+                # The original code's positioning (using y=10)
+                x = image.size[0] - textwidth - 10
+                y = 10
 
-                    # Use the positioning logic from the original code (top-right corner)
-                    textwidth = draw.textlength(text, font=font)
+                # Define the color and opacity
+                # fill_color = (255, 255, 255, 50)
+                # fill_color = (255, 255, 255, 255)
+                fill_color = (0, 0, 0, 255)
 
-                    # The original code's positioning (using y=10)
-                    x = image.size[0] - textwidth - 10
-                    y = 10
+                # 3. Draw the text directly onto the image object
+                draw.text((x, y), text, font=font, fill=fill_color)
 
-                    # Define the color and opacity (e.g., White with 50% opacity, (255, 255, 255, 128)
-                    # from your original code block, or use the light grey/opaque from the function: (192, 192, 192, 180))
-                    # We will stick to the original code's color for consistency:
-                    # fill_color = (255, 255, 255, 180)
-                    fill_color = (255, 255, 255, 50)
-                    # fill_color = (255, 255, 255, 128)
+                # 4. Save the resulting image.
+                image.save(os.path.join(watermark_path, f"imp{impression[:8]}_{filename}"), format="PNG")
 
-                    # 3. Draw the text directly onto the image object
-                    # This step is the key change: drawing directly, no separate 'watermark' layer needed.
-                    draw.text((x, y), text, font=font, fill=fill_color)
+    @abstractmethod
+    def update_workflow_status(self):
+        """Update workflow status - must be implemented by subclass."""
+        pass
 
-                    # 4. Save the resulting image. Since we modified the 'image' object directly,
-                    # we save it without further compositing. Saving as PNG retains the alpha channel.
-                    image.save(os.path.join(watermark_path, f"imp{impression[:8]}_{filename}"), format="PNG")
+    def kill(self):
+        """Kill the workflow execution - must be implemented by subclass."""
+        raise NotImplementedError("Subclass must implement kill method")
 
-    def ping(self):
-        """Ping the REANA server (FIXME: This function is not used)."""
-        # Ping the server
-        # We must import the client here because we need to set the environment variable first
-        from reana_client.api import client
-        self.set_enviroment(self.machine_id)
-        return client.ping(self.access_token)
+

@@ -148,7 +148,7 @@ class VContainer(VJob):
             dict: A dictionary containing rule configuration including commands,
                   environment, memory, inputs, and outputs for Snakemake workflow
         """
-        commands = [f"pwd && echo $REANA_WORKSPACE && mkdir -p imp{self.short_uuid()}/stageout"]
+        commands = [f"pwd && mkdir -p imp{self.short_uuid()}/stageout"]
         commands.append(f"mkdir -p imp{self.short_uuid()}/logs")
         commands.append(f"cd imp{self.short_uuid()}")
 

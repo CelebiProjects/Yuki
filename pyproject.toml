@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "Yuki"
-version = "0.0.2"  # Or dynamically load from the package
+version = "0.0.3"  # Or dynamically load from the package
 description = "A data analysis management toolkit for high energy physics"
 readme = "README.md"
 license = {text = "Apache License, Version 2.0"}
@@ -28,7 +28,8 @@ dependencies = [
     "PyYAML>=5.1",
     "reana-client",
     "flask",
-    "celery"
+    "celery",
+    "pillow"
 ]
 
 [project.urls]

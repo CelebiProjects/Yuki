@@ -87,7 +87,6 @@ class VJob:
             )
         return yaml_file.read_variable("environment", "")
 
-
     def status(self):
         """Get the current status of the job."""
         config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
@@ -95,6 +94,19 @@ class VJob:
         if status != "raw":
             return status
         return "raw"
+
+    def set_use_eos(self, use: bool):
+        """Set whether the job should use EOS storage."""
+        self.run_config_file.write_variable("use_eos", use)
+
+    def use_eos(self):
+        """Check if the job is set to use EOS storage."""
+        return self.run_config_file.read_variable("use_eos", False)
+
+    def use_kerberos(self):
+        config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki", "config.json"))
+        use_kerberos = config.read_variable("use_kerberos", {}).get(self.machine_id, False)
+        return use_kerberos
 
     def set_status(self, status):
         """Set the status of the job."""
@@ -114,71 +126,51 @@ class VJob:
         if status == "SUCCESS":
             config_file.write_variable("status", "success")
 
-    def update_status_from_workflow(self, workflow_path):
-        """Update job status based on workflow status."""
-        # now = time.time()
-        if self.job_type() == "algorithm":
-            return
-        config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
-        current_status = config_file.read_variable("status", "raw")
-        config_file.write_variable("machine_id", self.machine_id)
-        print("Current status is: ", current_status)
-        if current_status in ('finished', 'success', 'failed'):
-            return
-
-        # print(f"Time to update status from workflow... {time.time() - now:.2f} seconds" )
-
+    def _read_workflow_results(self, workflow_path):
+        """Read workflow results and return status."""
         try:
             results_file = metadata.ConfigFile(os.path.join(workflow_path, "results.json"))
             results = results_file.read_variable("results", {})
-            full_workflow_status = results.get("status", "unknown")
+            return results.get("status", "unknown")
         except Exception:
             print("Update status from workflow failed.")
-            return
+            return None
 
-        # print(f"Time to read results... {time.time() - now:.2f} seconds" )
-
-        matched_step = None
+    def _find_matched_step(self, workflow_path):
+        """Find the matched step in workflow log for this job."""
         try:
             log_file = metadata.ConfigFile(os.path.join(workflow_path, "log.json"))
             log = log_file.read_variable("logs", {})
             for step in log.values():
                 if step.get("job_name", "") == f"step{self.short_uuid()}":
-                    matched_step = step
-                    break
+                    return step
         except Exception:
             print("No log file found.")
-            return
+        return None
 
-        # print(f"Time to find matched step... {time.time() - now:.2f} seconds" )
+    def _write_step_logs(self, matched_step):
+        """Write step logs to the job's log directory."""
+        if matched_step and matched_step.get("status") in ("finished", "failed"):
+            logs = matched_step.get("logs", "")
+            log_dir = os.path.join(self.path, self.machine_id, "logs")
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            with open(os.path.join(log_dir, "chern.stdout"), "w", encoding='utf-8') as f:
+                f.write(logs)
 
-        status = full_workflow_status
-        print("Full workflow status:", full_workflow_status)
-        if matched_step:
-            status = matched_step.get("status", "unknown")
-            print("status from matched step:", status)
-            if status in ("finished", "failed"):
-                logs = matched_step.get("logs", "")
-                if not os.path.exists(os.path.join(self.path, self.machine_id, "logs")):
-                    os.makedirs(os.path.join(self.path, self.machine_id, "logs"))
-                with open(os.path.join(self.path, self.machine_id, "logs/chern.stdout"), "w", encoding='utf-8') as f:
-                    f.write(logs)
-                started_at = matched_step.get("started_at", "")
-                finished_at = matched_step.get("ended_at", "")
+    def _update_job_status(self, config_file, current_status, step_status, full_workflow_status):
+        """Update job status based on current status, step status, and workflow status."""
+        print("New status:", step_status)
 
-        # print(f"Time to write outputs... {time.time() - now:.2f} seconds" )
-
-        print("New status:", status)
         if current_status == "raw":
-            if len(status) < 20:
-                config_file.write_variable("status", status)
+            if len(step_status) < 20:
+                config_file.write_variable("status", step_status)
         elif current_status == "running":
-            if status == "success":
+            if step_status == "success":
                 config_file.write_variable("status", "success")
-            elif status == "finished":
-                # print("Updating job status")
+            elif step_status == "finished":
                 config_file.write_variable("status", "finished")
-            elif status == "failed" or status == "stopped":
+            elif step_status in ("failed", "stopped"):
                 config_file.write_variable("status", "failed")
             elif full_workflow_status == "failed":
                 config_file.write_variable("status", "failed")
@@ -187,11 +179,43 @@ class VJob:
         elif current_status in ('finished', 'success', 'failed'):
             pass
         else:
-            if len(status) < 20:
-                config_file.write_variable("status", status)
+            if len(step_status) < 20:
+                config_file.write_variable("status", step_status)
             else:
                 config_file.write_variable("status", "unknown")
 
+    def update_status_from_workflow(self, workflow_path):
+        """Update job status based on workflow status."""
+        if self.job_type() == "algorithm":
+            return
+
+        config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
+        current_status = config_file.read_variable("status", "raw")
+        config_file.write_variable("machine_id", self.machine_id)
+        print("Current status is: ", current_status)
+
+        if current_status in ('finished', 'success', 'failed'):
+            return
+
+        # Read workflow results
+        full_workflow_status = self._read_workflow_results(workflow_path)
+        if full_workflow_status is None:
+            return
+
+        print("Full workflow status:", full_workflow_status)
+
+        # Find matched step
+        matched_step = self._find_matched_step(workflow_path)
+
+        # Determine status from matched step or use full workflow status
+        status = full_workflow_status
+        if matched_step:
+            status = matched_step.get("status", "unknown")
+            print("status from matched step:", status)
+            self._write_step_logs(matched_step)
+
+        # Update job status
+        self._update_job_status(config_file, current_status, status, full_workflow_status)
 
     def error(self):
         """Get error message if any."""

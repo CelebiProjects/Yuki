@@ -7,6 +7,7 @@ environment management, command execution, and input/output handling.
 """
 import os
 from CelebiChrono.utils import csys
+from CelebiChrono.utils import metadata
 from Yuki.kernel.VJob import VJob
 from Yuki.kernel.VImage import VImage
 
@@ -36,7 +37,6 @@ class VContainer(VJob):
             tuple: A tuple containing (alias_keys, alias_to_impression_map)
         """
         alias_to_imp = self.config_file.read_variable("alias_to_impression", {})
-        print(alias_to_imp)
         return (alias_to_imp.keys(), alias_to_imp)
 
     def image(self):
@@ -53,7 +53,7 @@ class VContainer(VJob):
                 return VImage(pred_job.path, self.machine_id)
         return None
 
-    def step(self):
+    def step(self, request_machine_id):
         """
         Generate a step configuration for REANA workflow execution.
 
@@ -61,68 +61,72 @@ class VContainer(VJob):
             dict: A dictionary containing step configuration with commands,
                   environment, memory limits, and other execution parameters
         """
-        commands = [f"mkdir -p imp{self.short_uuid()}/stageout"]
-        commands.append(f"mkdir -p imp{self.short_uuid()}/logs")
-        commands.append(f"cd imp{self.short_uuid()}")
-
-        # Add ln -s $REANA_WORKSPACE/{alias} {alias} to the commands
-        image = self.image()
-        if image:
-            # commands.append(f"ln -s $REANA_WORKSPACE/imp{image.short_uuid()} code")
-            commands.append(f"ln -s ../imp{image.short_uuid()} code")
-        alias_list, alias_map = self.inputs()
-        for alias in alias_list:
-            impression = alias_map[alias]
-            # command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
-            command = f"ln -s ../imp{impression[:7]} {alias}"
-            commands.append(command)
-
-        if self.is_input:
-            raw_commands = []
-        else:
-            raw_commands = self.image().yaml_file.read_variable("commands", [])
-
-        if self.compute_backend() == "htcondorcern":
-            raw_commands = []
-
-        for i, command in enumerate(raw_commands):
-            parameters, values = self.parameters()
-            for parameter in parameters:
-                value = values[parameter]
-                name = "${"+ parameter +"}"
-                command = command.replace(name, value)
-
-            # Replace the commands (inputs):
-            alias_list, alias_map = self.inputs()
-            for alias in alias_list:
-                impression = alias_map[alias]
-                name = "${"+ alias +"}"
-                # command = command.replace(name, f"$REANA_WORKSPACE/imp{impression[:7]}")
-                command = command.replace(name, f"../imp{impression[:7]}")
-            # command = command.replace("${workspace}", "$REANA_WORKSPACE")
-            command = command.replace("${workspace}", "..")
-            command = command.replace("${output}", f"imp{self.short_uuid()}")
-            image = self.image()
-            if image:
-                # command = command.replace("${code}", f"$REANA_WORKSPACE/imp{image.short_uuid()}")
-                command = command.replace("${code}", f"../imp{image.short_uuid()}")
-            command = f"{{ " + command + f" ; }} >> logs/chern_user_step{i}.log 2>&1"
-            commands.append(command.replace("\"", "\\\""))
-        step = {}
-        step["commands"] = commands
-        # commands.append("cd $REANA_WORKSPACE")
+        commands = []
+        commands.extend(self._create_directory_commands())
+        commands.extend(self._create_symlink_commands())
+        commands.extend(self._process_user_commands_for_reana())
+        print("-------------")
+        print("self.is_input", self.is_input)
+        print("self.use_eos()", self.use_eos())
+        if (not self.is_input) and self.use_eos():
+            print("Using EOS for stageout")
+            config_path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
+            eos_mount_points = metadata.ConfigFile(config_path).read_variable("eos_mount_point", {})
+            eos_path = eos_mount_points.get(request_machine_id, "/eos/user/unknown")
+            commands.append("mkdir -p " + eos_path + f"/{self.impression()}/")
+            commands.append("cp -r stageout/* " + eos_path + f"/{self.impression()}/")
         commands.append("cd ..")
         commands.append(f"touch {self.short_uuid()}.done")
-        commands = " && ".join(commands)
-        if self.is_input:
-            step["environment"] = self.default_environment()
-        else:
-            step["environment"] = self.environment()
-        step["name"] = f"step{self.short_uuid()}"
+
+        step = self._create_reana_step_metadata()
+        # step["commands"] = " && ".join(commands)
+        step["commands"] = commands
+
+        return step
+
+    def _process_user_commands_for_reana(self):
+        """
+        Process and prepare user-defined commands for REANA execution.
+
+        Returns:
+            list: List of processed commands ready for REANA execution
+        """
+        if self.is_input or self.compute_backend() == "htcondorcern":
+            return []
+
+        raw_commands = self.image().yaml_file.read_variable("commands", [])
+        processed_commands = []
+
+        for i, command in enumerate(raw_commands):
+            command = self._substitute_parameters(command)
+            command = self._substitute_inputs(command)
+            command = self._substitute_paths(command)
+            command = f"{{ " + command + f" ; }} >> logs/celebi_user_step{i}.log 2>&1"
+            processed_commands.append(command.replace("\"", "\\\""))
+
+        return processed_commands
+
+    def _create_reana_step_metadata(self):
+        """
+        Create step metadata for REANA execution.
+
+        Returns:
+            dict: Dictionary containing REANA-specific step metadata
+        """
+        environment = self.default_environment() if self.is_input else self.environment()
         compute_backend = self.compute_backend()
+
+        step = {
+            "environment": environment,
+            "name": f"step{self.short_uuid()}"
+        }
+
+        if self.use_eos() and self.use_kerberos():
+            step["kerberos"] = True
+
         if compute_backend != "unsigned":
             step["compute_backend"] = compute_backend
-            step["htcondor_max_runtime"] = "expresso"
+            step["htcondor_max_runtime"] = "espresso"
             step["kerberos"] = True
         else:
             step["compute_backend"] = None
@@ -140,7 +144,7 @@ class VContainer(VJob):
         """
         return "docker.io/reanahub/reana-env-root6:6.18.04"
 
-    def snakemake_rule(self):
+    def snakemake_rule(self, request_machine_id):
         """
         Generate a Snakemake rule configuration for workflow execution.
 
@@ -148,83 +152,194 @@ class VContainer(VJob):
             dict: A dictionary containing rule configuration including commands,
                   environment, memory, inputs, and outputs for Snakemake workflow
         """
-        commands = [f"pwd && mkdir -p imp{self.short_uuid()}/stageout"]
-        commands.append(f"mkdir -p imp{self.short_uuid()}/logs")
-        commands.append(f"cd imp{self.short_uuid()}")
-
-        # Add ln -s $REANA_WORKSPACE/{alias} {alias} to the commands
-        image = self.image()
-        if image:
-            # commands.append(f"ln -s $REANA_WORKSPACE/imp{image.short_uuid()} code")
-            commands.append(f"ln -s ../imp{image.short_uuid()} code")
-        print("self.inputs", self.inputs())
-        alias_list, alias_map = self.inputs()
-        for alias in alias_list:
-            impression = alias_map[alias]
-            # command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
-            command = f"ln -s ../imp{impression[:7]} {alias}"
-            commands.append(command)
-
-        raw_commands = []
-        if not self.is_input:
-            raw_commands = self.image().yaml_file.read_variable("commands", [])
-
-
-        if self.compute_backend() == "htcondorcern":
-            raw_commands = []
-
-        for i, command in enumerate(raw_commands):
-            # Replace the commands (parameters):
-            parameters, values = self.parameters()
-            for parameter in parameters:
-                value = values[parameter]
-                name = "${"+ parameter +"}"
-                command = command.replace(name, value)
-
-            # Replace the commands (inputs):
-            alias_list, alias_map = self.inputs()
-            for alias in alias_list:
-                impression = alias_map[alias]
-                name = "${"+ alias +"}"
-                # command = command.replace(name, f"$REANA_WORKSPACE/imp{impression[:7]}")
-                command = command.replace(name, f"../imp{impression[:7]}")
-            # command = command.replace("${workspace}", "$REANA_WORKSPACE")
-            command = command.replace("${workspace}", "..")
-            command = command.replace("${output}", f"imp{self.short_uuid()}")
-            image = self.image()
-            if image:
-                # command = command.replace("${code}", f"$REANA_WORKSPACE/imp{image.short_uuid()}")
-                command = command.replace("${code}", f"../imp{image.short_uuid()}")
-            command = f"{{{{ " + command + f" ; }}}} >> logs/chern_user_step{i}.log 2>&1"
-            commands.append(command.replace("\"", "\\\""))
-        step = {}
-        step["commands"] = commands
-        # commands.append("cd $REANA_WORKSPACE")
+        commands = []
+        commands.extend(self._create_directory_commands())
+        commands.extend(self._create_symlink_commands())
+        commands.extend(self._process_user_commands())
+        if (not self.is_input) and self.use_eos():
+            print("Using EOS for stageout")
+            config_path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
+            eos_mount_points = metadata.ConfigFile(config_path).read_variable("eos_mount_point", {})
+            eos_path = eos_mount_points.get(request_machine_id, "/eos/user/unknown")
+            commands.append("mkdir -p " + eos_path + f"/{self.impression()}/")
+            commands.append("cp -r stageout/* " + eos_path + f"/{self.impression()}/")
         commands.append("cd ..")
         commands.append(f"touch {self.short_uuid()}.done")
-        environment = self.default_environment() if self.is_input else self.environment()
-        step["environment"] = environment
-        step["memory"] = self.memory()
-        compute_backend = self.compute_backend()
-        if compute_backend != "unsigned":
-            step["compute_backend"] = compute_backend
-        else:
-            step["compute_backend"] = None
-        step["name"] = f"step{self.short_uuid()}"
-        step["output"] = f"{self.short_uuid()}.done"
 
-        step["inputs"] = []
-        if not self.is_input:
-            alias_list, alias_map = self.inputs()
-            for alias in alias_list:
-                impression = alias_map[alias]
-                step["inputs"].append(f"{impression[:7]}.done")
-            image = self.image()
-            if image:
-                step["inputs"].append(f"{image.short_uuid()}.done")
+        step = self._create_step_metadata()
+        step["commands"] = commands
+        step["inputs"] = self._get_step_inputs()
 
         return step
 
+    def _create_directory_commands(self):
+        """
+        Create commands for setting up required directories.
+
+        Returns:
+            list: List of directory setup commands
+        """
+        return [
+            f"mkdir -p imp{self.short_uuid()}/stageout",
+            f"mkdir -p imp{self.short_uuid()}/logs",
+            f"cd imp{self.short_uuid()}"
+        ]
+
+    def _create_symlink_commands(self):
+        """
+        Create symbolic link commands for code and inputs.
+
+        Returns:
+            list: List of symlink commands
+        """
+        commands = []
+
+        # Link to code directory if image exists
+        image = self.image()
+        if image:
+            commands.append(f"ln -s ../imp{image.short_uuid()} code")
+
+        # Link to input impressions
+        alias_list, alias_map = self.inputs()
+        for alias in alias_list:
+            impression = alias_map[alias]
+            commands.append(f"ln -s ../imp{impression[:7]} {alias}")
+
+        return commands
+
+    def _process_user_commands(self):
+        """
+        Process and prepare user-defined commands with parameter substitution.
+
+        Returns:
+            list: List of processed commands ready for execution
+        """
+        if self.is_input or self.compute_backend() == "htcondorcern":
+            return []
+
+        raw_commands = self.image().yaml_file.read_variable("commands", [])
+        processed_commands = []
+
+        for i, command in enumerate(raw_commands):
+            command = self._substitute_parameters(command)
+            command = self._substitute_inputs(command)
+            command = self._substitute_paths(command)
+            command = f"{{{{ " + command + f" ; }}}} >> logs/celebi_user_step{i}.log 2>&1"
+            processed_commands.append(command.replace("\"", "\\\""))
+
+        return processed_commands
+
+    def _substitute_parameters(self, command):
+        """
+        Replace parameter placeholders in command with actual values.
+
+        Args:
+            command (str): Command string with parameter placeholders
+
+        Returns:
+            str: Command with parameters substituted
+        """
+        parameters, values = self.parameters()
+        for parameter in parameters:
+            value = values[parameter]
+            placeholder = "${" + parameter + "}"
+            command = command.replace(placeholder, value)
+        return command
+
+    def _substitute_inputs(self, command):
+        """
+        Replace input alias placeholders in command with impression paths.
+
+        Args:
+            command (str): Command string with input placeholders
+
+        Returns:
+            str: Command with inputs substituted
+        """
+        alias_list, alias_map = self.inputs()
+        for alias in alias_list:
+            impression = alias_map[alias]
+            placeholder = "${" + alias + "}"
+            command = command.replace(placeholder, f"../imp{impression[:7]}")
+        return command
+
+    def _substitute_paths(self, command):
+        """
+        Replace workspace and code path placeholders in command.
+
+        Args:
+            command (str): Command string with path placeholders
+
+        Returns:
+            str: Command with paths substituted
+        """
+        command = command.replace("${workspace}", "..")
+        command = command.replace("${output}", f"imp{self.short_uuid()}")
+
+        image = self.image()
+        if image:
+            command = command.replace("${code}", f"../imp{image.short_uuid()}")
+
+        return command
+
+    def _create_step_metadata(self):
+        """
+        Create step metadata including environment, memory, and compute backend.
+
+        Returns:
+            dict: Dictionary containing step metadata
+        """
+        environment = self.default_environment() if self.is_input else self.environment()
+        compute_backend = self.compute_backend()
+
+        step = {
+            "environment": environment,
+            "memory": self.memory(),
+            "compute_backend": compute_backend if compute_backend != "unsigned" else None,
+            "name": f"step{self.short_uuid()}",
+            "output": f"{self.short_uuid()}.done"
+        }
+
+        return step
+
+    def _get_step_inputs(self):
+        """
+        Get list of input dependencies for this step.
+
+        Returns:
+            list: List of input file dependencies
+        """
+        if self.is_input:
+            return ["setup.done"]
+
+        inputs = ["setup.done"]
+
+        # Add input impression dependencies
+        alias_list, alias_map = self.inputs()
+        for alias in alias_list:
+            impression = alias_map[alias]
+            inputs.append(f"{impression[:7]}.done")
+
+        # Add image dependency
+        image = self.image()
+        if image:
+            inputs.append(f"{image.short_uuid()}.done")
+
+        return inputs
+
+    def setup_commands(self):
+        config_path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
+        eos_mount_points = metadata.ConfigFile(config_path).read_variable("eos_mount_point", {})
+        eos_path = eos_mount_points.get(self.machine_id, "/eos/user/unknown")
+        commands = []
+        commands.append(f"mkdir -p imp{self.short_uuid()}/stageout")
+        commands.append(f"cp -r {eos_path}/{self.impression()}/* imp{self.short_uuid()}/stageout/")
+        return commands
+
+    def finalize_commands(self):
+        commands = []
+        commands.append(f"rm -rf imp{self.short_uuid()}/stageout")
+        return commands
 
     def environment(self):
         """

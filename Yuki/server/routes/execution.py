@@ -10,6 +10,7 @@ from Yuki.kernel.VContainer import VContainer
 from ..config import config
 from ..tasks import task_exec_impression
 import shutil
+import json
 
 bp = Blueprint('execution', __name__)
 logger = getLogger("YukiLogger")
@@ -20,14 +21,19 @@ def execute():
     """Execute impressions."""
     print("# >>> execute")
     if request.method == 'POST':
+        print(request)
         machine = request.form["machine"]
-        contents = request.files["impressions"].read().decode()
         project_uuid = request.form['project_uuid']
+        use_eos_dict = request.form["use_eos"]
+        use_eos_dict = json.loads(use_eos_dict)
+        contents = request.files["impressions"].read().decode()
         start_jobs = []
+        print("use_eos:", use_eos_dict)
         print("machine:", machine)
         print("contents:", contents.split(" "))
 
         for impression in contents.split(" "):
+            print("--------------")
             print("impression:", impression)
             job_path = config.get_job_path(project_uuid, impression)
             job = VJob(job_path, None)
@@ -38,6 +44,10 @@ def execute():
                     print("job status is not raw or failed")
                     continue
                 job.set_status("waiting")
+                # Redefine, only aim for write use_eos variable
+                start_job = VJob(job_path, machine)
+                use_eos = use_eos_dict.get(impression, False)
+                start_job.set_use_eos(use_eos)
                 start_jobs.append(job)
             elif job.job_type() == "algorithm":
                 if job.environment() == "script":
@@ -61,7 +71,8 @@ def execute():
             job_path = config.get_job_path(project_uuid, impression)
             print("Project_uuid is:", project_uuid)
             print("Job path is:", job_path)
-            VJob(job_path, machine).set_runid(task.id)
+            job = VJob(job_path, machine)
+            job.set_runid(task.id)
         print("### <<< execute")
         return task.id
 
@@ -69,8 +80,8 @@ def execute():
 
 @bp.route('/purge', methods=['GET', 'POST'])
 def purge():
-    """Execute impressions."""
-    print("# >>> execute")
+    """Purge impressions."""
+    print("# >>> purge")
     if request.method == 'POST':
         contents = request.files["impressions"].read().decode()
         project_uuid = request.form['project_uuid']
@@ -84,7 +95,7 @@ def purge():
             shutil.rmtree(job_path, ignore_errors=True)
 
         print("contents", contents)
-        print("### <<< execute")
+        print("### <<< purge")
     return ""  # For GET requests
 
 

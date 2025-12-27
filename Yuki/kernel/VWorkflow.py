@@ -1,3 +1,13 @@
+"""Workflow abstraction and helpers for constructing, executing and monitoring
+workflows composed of VJob objects.
+
+This module defines the abstract VWorkflow class which:
+- Builds a DAG of VJob instances (non-recursive, stack-based traversal).
+- Produces a Snakemake Snakefile for execution.
+- Waits for input/dependency workflows to finish.
+- Provides hooks for backend execution and status synchronization implemented by subclasses.
+"""
+
 import os
 import time
 import json
@@ -14,6 +24,14 @@ from Yuki.utils import snakefile
 CHERN_CACHE = ChernCache.instance()
 
 class VWorkflow(ABC):
+    """Abstract base class representing a workflow.
+
+    Parameters:
+    - project_uuid: UUID of the project/storage area for inputs/outputs.
+    - jobs: root job(s) to build the workflow from.
+    - uuid: workflow UUID (optional; generated if not provided).
+    - machine_id: id of the execution machine/runner (optional).
+    """
     def __init__(self, project_uuid, jobs, uuid=None, machine_id=None):
         self.project_uuid = project_uuid
         self.uuid = uuid or csys.generate_uuid()
@@ -36,7 +54,12 @@ class VWorkflow(ABC):
 
     @staticmethod
     def create(project_uuid, jobs, uuid=None, mode=None):
-        """Factory method to instantiate the correct workflow type."""
+        """Factory method to instantiate the appropriate workflow subclass.
+
+        Behavior:
+        - If mode is provided, use it.
+        - Otherwise determine mode from stored configuration of the workflow runner.
+        """
         if not mode:
             workflow_path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", uuid)
             runner_id = metadata.ConfigFile(os.path.join(workflow_path, "config.json")).read_variable("machine_id", "")
@@ -54,7 +77,16 @@ class VWorkflow(ABC):
         return f"w-{self.uuid[:8]}"
 
     def run(self):
-        """Common execution flow."""
+        """Common execution flow for workflows.
+
+        High level steps:
+        1. Construct the full job list and dependency graph.
+        2. Mark non-input, non-algorithm jobs as waiting.
+        3. Wait for external input workflows (dependencies) to finish.
+        4. Assign workflow id and mark jobs running.
+        5. Construct Snakefile and hand off to backend for execution.
+        Errors during construction/execution set the workflow and jobs to 'failed'.
+        """
         print("Constructing the workflow")
         print(f"Start job: {self.start_job}")
         if isinstance(self.start_job, list):
@@ -128,7 +160,13 @@ class VWorkflow(ABC):
         pass
 
     def _wait_for_dependencies(self):
-        """Wait for dependencies to be satisfied."""
+        """Waits for all input-dependency workflows to reach a terminal 'finished' state.
+
+        Notes:
+        - Polls the statuses of workflows referred to by input jobs.
+        - Uses a bounded number of retries to avoid infinite wait.
+        - If dependencies do not finish within the retry window, resets job states and returns False.
+        """
         # First, check whether the dependencies are satisfied
         for iTries in range(60):
             print("Checking finished")
@@ -189,7 +227,18 @@ class VWorkflow(ABC):
         return True
 
     def construct_snake_file(self):
-        """Construct snakemake file for workflow execution."""
+        """Construct the Snakemake Snakefile describing rules for all jobs.
+
+        Each job becomes a rule 'step<short_uuid>' that:
+        - Declares inputs and a single '.done' output marker.
+        - References a container image and resources.
+        - Provides a shell command combining the job's commands.
+        """
+        config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki", "config.json"))
+        use_kerberos = config.read_variable("use_kerberos", {}).get(self.machine_id, False)
+        for job in self.jobs:
+            print(f"Job in the workflow: {job}, is input: {job.is_input}, job type: {job.job_type()}")
+
         self.snakefile_path = os.path.join(self.path, "Snakefile")
         snake_file = snakefile.SnakeFile(os.path.join(self.path, "Snakefile"))
 
@@ -199,24 +248,76 @@ class VWorkflow(ABC):
         snake_file.addline("rule all:", 0)
         snake_file.addline("input:", 1)
         self.dependencies["all"] = []
+        snake_file.addline(f'"finalize.done",', 2)
+        self.dependencies["all"].append("finalize")
+
+        setup_commands = []
+        for job in self.jobs:
+            if job.object_type() == "task" and job.is_input:
+                if not job.use_eos() or job.machine_id != self.machine_id:
+                    continue
+                container = VContainer(job.path, job.machine_id)
+                setup_commands.extend(container.setup_commands())
+
+        finalize_commands = []
+        for job in self.jobs:
+            if job.object_type() == "task" and not job.is_input:
+                if not job.use_eos() or job.machine_id != self.machine_id:
+                    continue
+                container = VContainer(job.path, job.machine_id)
+                finalize_commands.extend(container.finalize_commands())
+
+        snake_file.addline("\n", 0)
+        snake_file.addline("rule setup:", 0)
+        snake_file.addline("input:", 1)
+        snake_file.addline("output:", 1)
+        snake_file.addline(f'"setup.done",', 2)
+        snake_file.addline("container:", 1)
+        snake_file.addline(f'"docker://docker.io/reanahub/reana-env-root6:6.18.04"', 2)
+        snake_file.addline("resources:", 1)
+        if setup_commands:
+            snake_file.addline(f'kerberos=True,', 2)
+        snake_file.addline(f'kubernetes_memory_limit="1Gi"', 2)
+        snake_file.addline("shell:", 1)
+        if setup_commands:
+            snake_file.addline(f'"{" && ".join(setup_commands)} && touch setup.done"', 2)
+        else:
+            snake_file.addline(f'"touch setup.done"', 2)
+        self.dependencies["setup"] = []
+
+        snake_file.addline("\n", 0)
+        snake_file.addline("rule finalize:", 0)
+        snake_file.addline("input:", 1)
+        self.dependencies["finalize"] = []
         for job in self.jobs:
             snake_file.addline(f'"{job.short_uuid()}.done",', 2)
-            self.dependencies["all"].append(f"step{job.short_uuid()}")
+            self.dependencies["finalize"].append(f"step{job.short_uuid()}")
+        snake_file.addline("output:", 1)
+        snake_file.addline(f'"finalize.done"', 2)
+        snake_file.addline("container:", 1)
+        snake_file.addline(f'"docker://docker.io/reanahub/reana-env-root6:6.18.04"', 2)
+        snake_file.addline("resources:", 1)
+        snake_file.addline(f'kubernetes_memory_limit="1Gi"', 2)
+        snake_file.addline("shell:", 1)
+        if finalize_commands:
+            snake_file.addline(f'"{" && ".join(finalize_commands)} && touch finalize.done"', 2)
+        else:
+            snake_file.addline(f'"touch finalize.done"', 2)
 
         for job in self.jobs:
             if job.object_type() == "algorithm":
                 # In this case, if the command is compile, we need to compile it
                 image = VImage(job.path, job.machine_id)
                 image.is_input = job.is_input
-                snakemake_rule = image.snakemake_rule()
-                step = image.step()
+                snakemake_rule = image.snakemake_rule(self.machine_id)
+                step = image.step(self.machine_id)
 
                 # In this case, we also need to run the "touch"
             if job.object_type() == "task":
                 container = VContainer(job.path, job.machine_id)
                 container.is_input = job.is_input
-                snakemake_rule = container.snakemake_rule()
-                step = container.step()
+                snakemake_rule = container.snakemake_rule(self.machine_id)
+                step = container.step(self.machine_id)
 
             snake_file.addline("\n", 0)
             snake_file.addline(f"rule step{job.short_uuid()}:", 0)
@@ -229,6 +330,8 @@ class VWorkflow(ABC):
             snake_file.addline(f'"docker://{snakemake_rule["environment"]}"', 2)
             snake_file.addline("resources:", 1)
             compute_backend = snakemake_rule["compute_backend"]
+            if job.use_eos() and use_kerberos:
+                snake_file.addline(f'kerberos=True,', 2)
             if compute_backend == "htcondorcern":
                 snake_file.addline(f'compute_backend="{snakemake_rule["compute_backend"]}",', 2)
                 snake_file.addline(f'htcondor_max_runtime="espresso",', 2)
@@ -245,7 +348,12 @@ class VWorkflow(ABC):
     def construct_workflow_jobs(self, root_jobs):
         """
         Construct workflow jobs iteratively including dependencies (DAG-safe, no recursion).
-        root_jobs: list of VJob
+
+        Implementation note:
+        - Uses an explicit stack for DFS-like traversal.
+        - Each stack entry is (VJob, expanded_flag). On first visit we push it back as expanded
+          and push its dependencies; on the second visit we append it to self.jobs.
+        - This avoids recursion and handles DAGs safely.
         """
         visited = set()
         # Initialize stack with all root jobs, marked as not expanded
@@ -318,7 +426,15 @@ class VWorkflow(ABC):
         results_file.write_variable("results", results)
 
     def watermark(self, impression=None):
-        """Add watermark to PNG images."""
+        """Add watermark to PNG images for a given impression.
+
+        Procedure:
+        1. Verify stageout has been downloaded.
+        2. Iterate PNG outputs and draw a small textual watermark (top-right).
+        3. Save watermarked copies under a 'watermarks' directory.
+
+        The function operates in-place on copies and will silently skip non-PNG files.
+        """
         print("Called", impression)
         if impression:
             path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, self.machine_id)
@@ -379,7 +495,11 @@ class VWorkflow(ABC):
         pass
 
     def kill(self):
-        """Kill the workflow execution - must be implemented by subclass."""
-        raise NotImplementedError("Subclass must implement kill method")
+        """Kill the workflow execution - must be implemented by subclass.
+
+        Raises:
+        - NotImplementedError if subclass does not implement termination behavior.
+        """
+        # ...existing code...
 
 

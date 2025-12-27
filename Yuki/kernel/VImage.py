@@ -58,7 +58,82 @@ class VImage(VJob):
                     return config_file.read_variable("image_id")
         return ""
 
-    def step(self):
+    def _setup_directory_commands(self):
+        """
+        Generate commands to create and navigate to the impression directory.
+
+        Returns:
+            list: Commands to create and change to the impression directory
+        """
+        return [
+            f"mkdir -p imp{self.short_uuid()}",
+            f"cd imp{self.short_uuid()}"
+        ]
+
+    def _create_symlink_commands(self):
+        """
+        Generate commands to create symbolic links for input aliases.
+
+        Returns:
+            list: Commands to create symbolic links to input impressions
+        """
+        commands = []
+        alias_list, alias_map = self.inputs()
+        for alias in alias_list:
+            impression = alias_map[alias]
+            command = f"ln -s ../imp{impression[:7]} {alias}"
+            commands.append(command)
+        return commands
+
+    def _process_build_rules(self):
+        """
+        Process and substitute variables in build rules.
+
+        Returns:
+            list: Processed build commands with substituted variables
+        """
+        commands = []
+        compile_rules = self.yaml_file.read_variable("build", [])
+        alias_list, alias_map = self.inputs()
+
+        for rule in compile_rules:
+            rule = rule.replace("${workspace}", "..")
+            rule = rule.replace("${code}", f"../imp{self.short_uuid()}")
+
+            for alias in alias_list:
+                impression = alias_map[alias]
+                rule = rule.replace("${"+ alias +"}", f"../imp{impression[:7]}")
+            commands.append(rule)
+
+        return commands
+
+    def _cleanup_commands(self):
+        """
+        Generate cleanup commands to return to parent directory and mark completion.
+
+        Returns:
+            list: Commands to navigate back and create completion marker
+        """
+        return [
+            "cd ..",
+            f"touch {self.short_uuid()}.done"
+        ]
+
+    def _generate_all_commands(self):
+        """
+        Generate all build commands by combining setup, symlinks, build rules, and cleanup.
+
+        Returns:
+            list: Complete list of shell commands to build the image
+        """
+        commands = []
+        commands.extend(self._setup_directory_commands())
+        commands.extend(self._create_symlink_commands())
+        commands.extend(self._process_build_rules())
+        commands.extend(self._cleanup_commands())
+        return commands
+
+    def step(self, request_machine):
         """
         Generate a step configuration for REANA workflow execution.
 
@@ -66,44 +141,15 @@ class VImage(VJob):
             dict: A dictionary containing step configuration with commands,
                   environment, memory limits, and other execution parameters
         """
-        commands = [f"mkdir -p imp{self.short_uuid()}"]
-        commands.append(f"cd imp{self.short_uuid()}")
+        return {
+            "inputs": ["setup.done"],
+            "commands": self._generate_all_commands(),
+            "environment": self.environment(),
+            "memory": self.memory(),
+            "name": f"step{self.short_uuid()}"
+        }
 
-        # Add ln -s $REANA_WORKSPACE/{alias} {alias} to the commands
-        alias_list, alias_map = self.inputs()
-        for alias in alias_list:
-            impression = alias_map[alias]
-            # command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
-            command = f"ln -s ../imp{impression[:7]} {alias}"
-            commands.append(command)
-
-        compile_rules = self.yaml_file.read_variable("build", [])
-        for rule in compile_rules:
-            # Replace the ${code} with the code path
-            # rule = rule.replace("${workspace}", "$REANA_WORKSPACE")
-            rule = rule.replace("${workspace}", "..")
-            # rule = rule.replace("${code}", f"$REANA_WORKSPACE/imp{self.short_uuid()}")
-            rule = rule.replace("${code}", f"../imp{self.short_uuid()}")
-
-            alias_list, alias_map = self.inputs()
-            for alias in alias_list:
-                impression = alias_map[alias]
-                # rule = rule.replace("${"+ alias +"}", f"$REANA_WORKSPACE/imp{impression[:7]}")
-                rule = rule.replace("${"+ alias +"}", f"../imp{impression[:7]}")
-            commands.append(rule)
-
-        # commands.append("cd $REANA_WORKSPACE")
-        commands.append("cd ..")
-        commands.append(f"touch {self.short_uuid()}.done")
-        step = {}
-        step["inputs"] = []
-        step["commands"] = commands
-        step["environment"] = self.environment()
-        step["memory"] = self.memory()
-        step["name"] = f"step{self.short_uuid()}"
-        return step
-
-    def snakemake_rule(self):
+    def snakemake_rule(self, request_machine):
         """
         Generate a Snakemake rule configuration for workflow execution.
 
@@ -111,44 +157,14 @@ class VImage(VJob):
             dict: A dictionary containing rule configuration including commands,
                   environment, memory, inputs, and name for Snakemake workflow
         """
-        commands = [f"mkdir -p imp{self.short_uuid()}"]
-        commands.append(f"cd imp{self.short_uuid()}")
-
-        # Add ln -s $REANA_WORKSPACE/{alias} {alias} to the commands
-        alias_list, alias_map = self.inputs()
-        for alias in alias_list:
-            impression = alias_map[alias]
-            # command = f"ln -s $REANA_WORKSPACE/imp{impression[:7]} {alias}"
-            command = f"ln -s ../imp{impression[:7]} {alias}"
-            commands.append(command)
-
-        compile_rules = self.yaml_file.read_variable("build", [])
-        for rule in compile_rules:
-            # Replace the ${code} with the code path
-            # rule = rule.replace("${workspace}", "$REANA_WORKSPACE")
-            rule = rule.replace("${workspace}", "..")
-            # rule = rule.replace("${code}", f"$REANA_WORKSPACE/imp{self.short_uuid()}")
-            rule = rule.replace("${code}", f"../imp{self.short_uuid()}")
-
-            alias_list, alias_map = self.inputs()
-            for alias in alias_list:
-                impression = alias_map[alias]
-                rule = rule.replace("${"+ alias +"}", f"../imp{impression[:7]}")
-                # rule = rule.replace("${"+ alias +"}", f"$REANA_WORKSPACE/imp{impression[:7]}")
-            commands.append(rule)
-
-        # commands.append("cd $REANA_WORKSPACE")
-        commands.append("cd ..")
-        commands.append(f"touch {self.short_uuid()}.done")
-        step = {}
-        step["inputs"] = []
-        step["commands"] = commands
-        step["environment"] = self.environment()
-        step["memory"] = self.memory()
-        step["compute_backend"] = None
-        step["name"] = f"step{self.short_uuid()}"
-
-        return step
+        return {
+            "inputs": ["setup.done"],
+            "commands": self._generate_all_commands(),
+            "environment": self.environment(),
+            "memory": self.memory(),
+            "compute_backend": None,
+            "name": f"step{self.short_uuid()}"
+        }
 
     def default_environment(self):
         """

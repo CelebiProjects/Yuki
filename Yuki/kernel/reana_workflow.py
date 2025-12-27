@@ -12,7 +12,7 @@ from CelebiChrono.utils import metadata
 
 class ReanaWorkflow(VWorkflow):
     """REANA implementation of VWorkflow."""
-    
+
     def __init__(self, project_uuid, jobs, uuid=None):
         """Initialize REANA workflow."""
         super().__init__(project_uuid, jobs, uuid)
@@ -182,6 +182,8 @@ class ReanaWorkflow(VWorkflow):
                             self.get_access_token(self.machine_id)
                         )
             elif job.is_input:
+                if job.use_eos() and job.machine_id == self.machine_id:
+                    continue
                 impression = job.path.split("/")[-1]
                 # print(f"Downloading the files from impression {impression}")
                 path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, job.machine_id)

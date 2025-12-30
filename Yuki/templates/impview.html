@@ -337,10 +337,17 @@
                 {{ file.name }}
               </a>
               {% else %}
-              <a href="{{ url_for('upload.fileview', project_uuid=project_uuid, impression=impression, runner_id=runner_id, filename=file.name) }}" download>
+                {% if file.is_log %}
+                <a href="{{ url_for('upload.logview', project_uuid=project_uuid, impression=impression, runner_id=runner_id, filename=file.name) }}" download>
                 <span class="download-icon">⬇️</span>
                 {{ file.name }}
-              </a>
+                </a>
+                {% else %}
+                <a href="{{ url_for('upload.fileview', project_uuid=project_uuid, impression=impression, runner_id=runner_id, filename=file.name) }}" download>
+                <span class="download-icon">⬇️</span>
+                {{ file.name }}
+                </a>
+                {% endif %}
               {% endif %}
               {% if file.is_image %}
                 {% if file.watermarked %}

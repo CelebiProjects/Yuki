@@ -49,9 +49,17 @@ def status(project_uuid, impression_name):
         workflow = VWorkflow.create(project_uuid, [], job.workflow_id())
         workflow_status = workflow.status()
         # print("Status from workflow", workflow_status)
-        print("Path:", os.path.join(os.path.join(os.environ["HOME"], ".Yuki", "Workflows", job.workflow_id())))
+        workflow_path = os.path.join(
+            os.environ["HOME"],
+            ".Yuki",
+            "Workflows",
+            project_uuid,
+            job.workflow_id()
+        )
+
+        print("Path:", workflow_path)
         job.update_status_from_workflow( # workflow path
-                os.path.join(os.path.join(os.environ["HOME"], ".Yuki", "Workflows", job.workflow_id()))
+                    workflow_path
                 )
         if workflow_status not in ('finished', 'failed'):
             last_update_time = CHERN_CACHE.update_table.get(workflow.uuid, -1)
@@ -157,11 +165,13 @@ def process_directory(job_path, runner_id, base_dir, file_infos_dict, max_previe
         is_image = ext in ('.png', '.jpg', '.jpeg', '.gif')
         is_text = ext in ('.txt', '.log', '.stdout')
         watermarked = (base_dir == 'watermarks')
+        is_log = (base_dir == 'logs')
 
         file_info = {
             'name': filename,
             'is_image': is_image,
             'is_text': is_text,
+            'is_log': is_log,
             'watermarked': watermarked,
             'source_dir': base_dir, # Store the source directory
             'content': None,

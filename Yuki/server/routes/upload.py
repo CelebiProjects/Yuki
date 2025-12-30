@@ -82,13 +82,19 @@ def get_file(project_uuid, impression, filename):
             return path
     return "NOTFOUND"
 
+@bp.route("/log-view/<project_uuid>/<impression>/<runner_id>/<filename>", methods=['GET'])
+def logview(project_uuid, impression, runner_id, filename):
+    """View a specific file."""
+    job_path = config.get_job_path(project_uuid, impression)
+    path = os.path.join(job_path, runner_id, "logs")
+    return send_from_directory(path, filename)
+
 
 @bp.route("/file-view/<project_uuid>/<impression>/<runner_id>/<filename>", methods=['GET'])
 def fileview(project_uuid, impression, runner_id, filename):
     """View a specific file."""
     job_path = config.get_job_path(project_uuid, impression)
     path = os.path.join(job_path, runner_id, "stageout")
-    print(path)
     return send_from_directory(path, filename)
 
 @bp.route("/watermark-view/<project_uuid>/<impression>/<runner_id>/<filename>", methods=['GET'])

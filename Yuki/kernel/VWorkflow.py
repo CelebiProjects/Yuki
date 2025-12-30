@@ -35,7 +35,7 @@ class VWorkflow(ABC):
     def __init__(self, project_uuid, jobs, uuid=None, machine_id=None):
         self.project_uuid = project_uuid
         self.uuid = uuid or csys.generate_uuid()
-        self.path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", self.uuid)
+        self.path = os.path.join(os.environ["HOME"], ".Yuki", "Workflows", self.project_uuid, self.uuid)
         os.makedirs(self.path, exist_ok=True)
 
         self.config_file = metadata.ConfigFile(os.path.join(self.path, "config.json"))
@@ -74,7 +74,7 @@ class VWorkflow(ABC):
             return ReanaWorkflow(project_uuid, jobs, uuid)
 
     def get_name(self):
-        return f"w-{self.uuid[:8]}"
+        return f"w-{self.project_uuid[:8]}-{self.uuid[:8]}"
 
     def run(self):
         """Common execution flow for workflows.
@@ -203,7 +203,13 @@ class VWorkflow(ABC):
                 workflow = VWorkflow.create(self.project_uuid, [], job.workflow_id())
                 if workflow in workflow_list:
                     job.update_status_from_workflow(
-                        os.path.join(os.environ["HOME"], ".Yuki", "Workflows", job.workflow_id())
+                        os.path.join(
+                            os.environ["HOME"],
+                            ".Yuki",
+                            "Workflows",
+                            self.project_uuid,
+                            job.workflow_id()
+                            )
                         )
                 if job.status() != "finished":
                     all_finished = False

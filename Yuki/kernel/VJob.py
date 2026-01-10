@@ -14,6 +14,11 @@ class VJob:
 
     def __init__(self, path, machine_id):
         """Initialize the project with the only **information** of an object instance."""
+        self._use_eos = None
+        self._use_kerberos = None
+        self._environment = None
+        self._workflow = None
+
         self.is_input = False
         self.path = path
         self.uuid = path[-32:]
@@ -78,14 +83,20 @@ class VJob:
     def workflow_id(self):
         """Get the workflow ID for this job."""
         # print("The machine id is:", self.machine_id)
-        return self.run_config_file.read_variable("workflow", "")
+        if self._workflow is not None:
+            return self._workflow
+        self._workflow = self.run_config_file.read_variable("workflow", "")
+        return self._workflow
 
     def environment(self):
         """Get the environment type from the YAML configuration."""
+        if self._environment is not None:
+            return self._environment
         yaml_file = metadata.YamlFile(
             os.path.join(self.path, "contents", "celebi.yaml")
             )
-        return yaml_file.read_variable("environment", "")
+        self._environment = yaml_file.read_variable("environment", "")
+        return self._environment
 
     def status(self):
         """Get the current status of the job."""
@@ -101,12 +112,17 @@ class VJob:
 
     def use_eos(self):
         """Check if the job is set to use EOS storage."""
-        return self.run_config_file.read_variable("use_eos", False)
+        if self._use_eos is not None:
+            return self._use_eos
+        self._use_eos = self.run_config_file.read_variable("use_eos", False)
+        return self._use_eos
 
     def use_kerberos(self):
+        if self._use_kerberos is not None:
+            return self._use_kerberos
         config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki", "config.json"))
-        use_kerberos = config.read_variable("use_kerberos", {}).get(self.machine_id, False)
-        return use_kerberos
+        self._use_kerberos = config.read_variable("use_kerberos", {}).get(self.machine_id, False)
+        return self._use_kerberos
 
     def set_status(self, status):
         """Set the status of the job."""

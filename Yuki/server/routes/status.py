@@ -17,7 +17,7 @@ CHERN_CACHE = ChernCache.instance()
 
 
 @bp.route('/set-job-status/<project_uuid>/<impression_name>/<job_status>', methods=['GET'])
-def setjobstatus(impression_name, job_status):
+def setjobstatus(project_uuid, impression_name, job_status):
     """Set job status for an impression."""
     job_path = config.get_job_path(project_uuid, impression_name)
     job = VJob(job_path, None)

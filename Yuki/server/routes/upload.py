@@ -13,25 +13,47 @@ bp = Blueprint('upload', __name__)
 logger = getLogger("YukiLogger")
 
 
-@bp.route('/upload', methods=['GET', 'POST'])
+@bp.route('/upload', methods=['POST'])
 def upload_file():
-    """Handle file uploads."""
-    if request.method == 'POST':
-        print("Trying to upload files:", request.form)
-        project_uuid = request.form["project_uuid"]
-        tarname = request.form["tarname"]
-        request.files[tarname].save(os.path.join("/tmp", tarname))
+    project_uuid = request.form["project_uuid"]
+    tarname = request.form["tarname"]
 
-        with tarfile.open(os.path.join("/tmp", tarname), "r") as tar:
-            for ti in tar:
-                tar.extract(ti, os.path.join(config.storage_path, project_uuid, tarname[:-7]))
+    target_dir = os.path.join(
+        config.storage_path, project_uuid, tarname[:-7]
+    )
+    os.makedirs(target_dir, exist_ok=True)
 
-        config_file = request.form['config']
-        logger.info(config_file)
-        request.files[config_file].save(
-            os.path.join(config.storage_path, project_uuid, tarname[:-7], config_file)
-        )
+    tar_file = request.files[tarname]
+
+    with tarfile.open(fileobj=tar_file.stream, mode="r:*") as tar:
+        tar.extractall(target_dir)
+
+    config_file = request.form['config']
+    request.files[config_file].save(
+        os.path.join(target_dir, config_file)
+    )
+
     return "Successful"
+
+# @bp.route('/upload', methods=['GET', 'POST'])
+# def upload_file():
+#     """Handle file uploads."""
+#     if request.method == 'POST':
+#         print("Trying to upload files:", request.form)
+#         project_uuid = request.form["project_uuid"]
+#         tarname = request.form["tarname"]
+#         request.files[tarname].save(os.path.join("/tmp", tarname))
+#
+#         with tarfile.open(os.path.join("/tmp", tarname), "r") as tar:
+#             for ti in tar:
+#                 tar.extract(ti, os.path.join(config.storage_path, project_uuid, tarname[:-7]))
+#
+#         config_file = request.form['config']
+#         logger.info(config_file)
+#         request.files[config_file].save(
+#             os.path.join(config.storage_path, project_uuid, tarname[:-7], config_file)
+#         )
+#     return "Successful"
 
 
 @bp.route("/download/<filename>", methods=['GET'])

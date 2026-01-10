@@ -92,6 +92,8 @@ class ReanaWorkflow(VWorkflow):
         config_file = metadata.ConfigFile(path)
         urls = config_file.read_variable("urls", {})
         url = urls.get(machine_id, "")
+        print(f"machine_id = {machine_id}")
+        print(f"url = {url}")
         from reana_client.api import client
         from reana_commons.api_client import BaseAPIClient
         os.environ["REANA_SERVER_URL"] = url
@@ -228,6 +230,8 @@ class ReanaWorkflow(VWorkflow):
         """Update workflow status from REANA."""
         try:
             from reana_client.api import client
+            print("This workflow is ", self.uuid)
+            print("The machine id is ", self.machine_id)
             self.set_enviroment(self.machine_id)
             results = client.get_workflow_status(
                 self.get_name(),

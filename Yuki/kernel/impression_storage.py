@@ -41,7 +41,8 @@ class ImpressionStorage:
         for name, job, workflow in self._get_runner_contexts():
             if job.status() == "finished":
                 print(f"[{name}] Collecting results...")
-                workflow.download(self.impression)
+                # workflow.download(self.impression)
+                workflow.download_outputs(self.impression)
             elif job.status() == "failed":
                 print(f"[{name}] Collecting logs...")
                 workflow.download_logs(self.impression)

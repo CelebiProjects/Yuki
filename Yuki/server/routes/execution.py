@@ -16,6 +16,100 @@ bp = Blueprint('execution', __name__)
 logger = getLogger("YukiLogger")
 
 
+# @bp.route('/execute', methods=['GET', 'POST'])
+# def execute():
+#     """Execute impressions with memory-safe processing."""
+#     print("# >>> execute")
+#
+#     if request.method != 'POST':
+#         return ""
+#
+#     # 1. Extraction and Validation
+#     try:
+#         machine = request.form.get("machine")
+#         project_uuid = request.form.get("project_uuid")
+#
+#         # Safely parse JSON with a default empty dict
+#         use_eos_dict = json.loads(request.form.get("use_eos", "{}"))
+#
+#         # Access the file handle without reading it into memory yet
+#         impressions_file = request.files.get("impressions")
+#         if not impressions_file:
+#             return "No impressions file provided", 400
+#
+#     except (json.JSONDecodeError, KeyError) as e:
+#         logging.error(f"Input validation failed: {e}")
+#         return "Invalid request data", 400
+#
+#     # 2. Memory-Safe Impression Generator
+#     # This prevents loading a massive file into RAM all at once.
+#     def get_impression_tokens(file_storage):
+#         for line in file_storage:
+#             # Decode line by line and split on any whitespace
+#             for token in line.decode().split():
+#                 yield token
+#
+#     start_jobs = []
+#
+#     # 3. Single-Pass Job Preparation
+#     for impression in get_impression_tokens(impressions_file):
+#         job_path = config.get_job_path(project_uuid, impression)
+#
+#         # Instantiate once with the target machine
+#         job = VJob(job_path, machine)
+#
+#         job_type = job.job_type()
+#         job_status = job.status()
+#
+#         # Logic for Task types
+#         if job_type == "task":
+#             if job_status not in ("raw", "failed"):
+#                 continue
+#
+#             # Apply EOS setting directly
+#             use_eos = use_eos_dict.get(impression, False)
+#             job.set_use_eos(use_eos)
+#
+#         # Logic for Algorithm types
+#         elif job_type == "algorithm":
+#             if job.environment() == "script":
+#                 continue
+#
+#         # Skip unknown job types
+#         else:
+#             continue
+#
+#         # Prepare for execution
+#         job.set_status("waiting")
+#         start_jobs.append(job)
+#
+#     # 4. Final Execution Check
+#     if not start_jobs:
+#         print("no job to run")
+#         print("# <<< execute")
+#         return "no job to run"
+#
+#     # Construct the UUID string for the async task
+#     job_uuids_content = " ".join([j.uuid for j in start_jobs])
+#
+#     print("Asynchronous execution")
+#     try:
+#         # Trigger the Celery task
+#         task = task_exec_impression.apply_async(
+#             args=[project_uuid, job_uuids_content, machine]
+#         )
+#
+#         # 5. Link Run ID to all prepared job objects
+#         for job in start_jobs:
+#             job.set_runid(task.id)
+#
+#     except Exception as e:
+#         logging.error(f"Failed to dispatch async task: {e}")
+#         return "Internal execution error", 500
+#
+#     print(f"### <<< execute | Task ID: {task.id}")
+#     return task.id
+
 @bp.route('/execute', methods=['GET', 'POST'])
 def execute():
     """Execute impressions."""

@@ -76,6 +76,64 @@ class VWorkflow(ABC):
     def get_name(self):
         return f"w-{self.project_uuid[:8]}-{self.uuid[:8]}"
 
+    # def run(self):
+    #     """
+    #     Common execution flow for workflows.
+    #     Fixed: Consolidated iterations and unified error handling while keeping debug prints.
+    #     """
+    #     print("Constructing the workflow")
+    #     print(f"Start job: {self.start_job}")
+
+    #     # 1. Construct the full job list
+    #     start_jobs = self.start_job if isinstance(self.start_job, list) else ([self.start_job] if self.start_job else [])
+    #     self.construct_workflow_jobs(start_jobs)
+
+    #     print(f"Jobs after the construction: {self.jobs}")
+
+    #     # 2. Consolidated Pass: Set 'waiting' and collect 'active' jobs
+    #     # This prevents us from re-filtering the list in every subsequent step.
+    #     active_jobs = []
+    #     for job in self.jobs:
+    #         # Keep your original debug print
+    #         print(f"job: {job}, is input: {job.is_input}, job status: {job.status()}, job type: {job.job_type()}")
+
+    #         if not job.is_input and job.job_type() != "algorithm":
+    #             job.set_status("waiting")
+    #             active_jobs.append(job)
+
+    #     # 3. Wait for dependencies
+    #     if not self._wait_for_dependencies():
+    #         return
+
+    #     # 4. Set workflow IDs for active jobs only (Much faster)
+    #     for job in active_jobs:
+    #         print(f"Set workflow id to job {job}")
+    #         job.set_workflow_id(self.uuid)
+    #         job.set_status("running")
+
+    #     # Internal helper to handle failures without duplicating code blocks
+    #     def fail_workflow(message):
+    #         print(message)
+    #         self.set_workflow_status("failed")
+    #         for job in active_jobs:
+    #             job.set_status("failed")
+
+    #     # 5. Prepare and Execute
+    #     print("Constructing")
+    #     try:
+    #         print("Constructing the snakefile")
+    #         self.construct_snake_file()
+    #     except Exception: # Changed to Exception to avoid catching system exits
+    #         fail_workflow("Failed to construct the snakefile")
+    #         raise
+
+    #     try:
+    #         print("Executing backend")
+    #         self._execute_backend()
+    #     except Exception:
+    #         fail_workflow("Failed to execute backend")
+    #         raise
+
     def run(self):
         """Common execution flow for workflows.
 
@@ -184,6 +242,7 @@ class VWorkflow(ABC):
                 if job.job_type() == "algorithm":
                     continue
                 workflow = VWorkflow.create(self.project_uuid, [], job.workflow_id())
+                print(f"Job {job.uuid} workflow {workflow.uuid}")
                 if workflow and workflow not in workflow_list:
                     workflow_list.append(workflow)
                 # FIXME: may check if some of the dependence fail
@@ -232,6 +291,160 @@ class VWorkflow(ABC):
 
         return True
 
+    # def construct_snake_file(self):
+    #     """
+    #     Construct the Snakemake Snakefile with optimized object caching
+    #     to prevent O(N^2) slowdowns.
+    #     """
+    #     # 1. Pre-fetch constants and paths to avoid repeated syscalls
+    #     home_dir = os.environ.get("HOME", "")
+    #     yuki_base = os.path.join(home_dir, ".Yuki")
+    #     storage_base = os.path.join(yuki_base, "Storage", self.project_uuid)
+
+    #     config_file = metadata.ConfigFile(os.path.join(yuki_base, "config.json"))
+    #     use_kerberos = config_file.read_variable("use_kerberos", {}).get(self.machine_id, False)
+
+    #     # 2. OBJECT CACHE: Map UUID to VJob and Resource objects
+    #     # This prevents the constructor from hitting the disk repeatedly
+    #     job_cache = {job.uuid: job for job in self.jobs}
+    #     resource_cache = {}
+
+    #     def get_resource(job):
+    #         """Helper to get or create VContainer/VImage for a job."""
+    #         if job.uuid in resource_cache:
+    #             return resource_cache[job.uuid]
+
+    #         if job.object_type() == "algorithm":
+    #             res = VImage(job.path, job.machine_id)
+    #         else:
+    #             res = VContainer(job.path, job.machine_id)
+
+    #         res.is_input = job.is_input
+    #         resource_cache[job.uuid] = res
+    #         return res
+
+    #     # Initialize Snakefile
+    #     self.snakefile_path = os.path.join(self.path, "Snakefile")
+    #     snake_file = snakefile.SnakeFile(self.snakefile_path)
+    #     self.dependencies = {}
+    #     self.steps = []
+
+    #     # 3. GLOBAL RULES (setup and finalize)
+    #     snake_file.addline("rule all:", 0)
+    #     snake_file.addline("input:", 1)
+    #     snake_file.addline(f'"finalize.done",', 2)
+    #     self.dependencies["all"] = ["finalize"]
+
+    #     setup_commands = []
+    #     finalize_commands = []
+
+    #     for job in self.jobs:
+    #         if job.object_type() == "task" and job.use_eos() and job.machine_id == self.machine_id:
+    #             container = get_resource(job)
+    #             if job.is_input:
+    #                 setup_commands.extend(container.setup_commands())
+    #             else:
+    #                 finalize_commands.extend(container.finalize_commands())
+
+    #     # --- Write Setup Rule ---
+    #     snake_file.addline("\nrule setup:", 0)
+    #     snake_file.addline("output:", 1)
+    #     snake_file.addline('"setup.done",', 2)
+    #     snake_file.addline("container:", 1)
+    #     snake_file.addline('"docker://docker.io/reanahub/reana-env-root6:6.18.04"', 2)
+    #     snake_file.addline("resources:", 1)
+    #     if setup_commands:
+    #         snake_file.addline('kerberos=True,', 2)
+    #     snake_file.addline('kubernetes_memory_limit="1Gi"', 2)
+    #     snake_file.addline("shell:", 1)
+    #     cmd = " && ".join(setup_commands + ["touch setup.done"]) if setup_commands else "touch setup.done"
+    #     snake_file.addline(f'"{cmd}"', 2)
+    #     self.dependencies["setup"] = []
+
+    #     # --- Write Finalize Rule ---
+    #     snake_file.addline("\nrule finalize:", 0)
+    #     snake_file.addline("input:", 1)
+    #     self.dependencies["finalize"] = []
+    #     for job in self.jobs:
+    #         snake_file.addline(f'"{job.short_uuid()}.done",', 2)
+    #         self.dependencies["finalize"].append(f"step{job.short_uuid()}")
+
+    #     snake_file.addline("output:", 1)
+    #     snake_file.addline('"finalize.done"', 2)
+    #     snake_file.addline("container:", 1)
+    #     snake_file.addline('"docker://docker.io/reanahub/reana-env-root6:6.18.04"', 2)
+    #     snake_file.addline("resources:", 1)
+    #     snake_file.addline('kubernetes_memory_limit="1Gi"', 2)
+    #     snake_file.addline("shell:", 1)
+    #     cmd = " && ".join(finalize_commands + ["touch finalize.done"]) if finalize_commands else "touch finalize.done"
+    #     snake_file.addline(f'"{cmd}"', 2)
+
+    #     # 4. MAIN JOB RULES
+    #     for job in self.jobs:
+    #         start_time = time.time()
+
+    #         # Use Cached Resource
+    #         resource_obj = get_resource(job)
+    #         snakemake_rule = resource_obj.snakemake_rule(self.machine_id)
+    #         print(f"Time to get snakemake rule: {time.time() - start_time:.4f}s")
+    #         step = resource_obj.step(self.machine_id)
+    #         print(f"Time to get step: {time.time() - start_time:.4f}s")
+
+    #         snake_file.addline("\n", 0)
+    #         snake_file.addline(f"rule step{job.short_uuid()}:", 0)
+
+    #         # Inputs
+    #         snake_file.addline("input:", 1)
+    #         for input_file in snakemake_rule.get("inputs", []):
+    #             snake_file.addline(f'"{input_file}",', 2)
+
+    #         # Dependencies (Optimized lookup)
+    #         print(f"Time to add dependencies: {time.time() - start_time:.4f}s")
+    #         self.dependencies[f"step{job.short_uuid()}"] = []
+    #         for dep_uuid in job.dependencies():
+    #             # Search cache first to avoid VJob disk I/O
+    #             if dep_uuid in job_cache:
+    #                 dep_job = job_cache[dep_uuid]
+    #             else:
+    #                 # Fallback for external dependencies only
+    #                 dep_path = os.path.join(storage_base, dep_uuid)
+    #                 dep_job = VJob(dep_path, self.machine_id)
+    #                 job_cache[dep_uuid] = dep_job
+
+    #             self.dependencies[f"step{job.short_uuid()}"].append(f"step{dep_job.short_uuid()}")
+    #         print(f"Time after dependencies: {time.time() - start_time:.4f}s")
+
+    #         # Metadata/Resources
+    #         snake_file.addline("output:", 1)
+    #         snake_file.addline(f'"{job.short_uuid()}.done"', 2)
+    #         snake_file.addline("container:", 1)
+    #         snake_file.addline(f'"docker://{snakemake_rule["environment"]}"', 2)
+
+    #         snake_file.addline("resources:", 1)
+    #         compute_backend = snakemake_rule.get("compute_backend")
+
+    #         if compute_backend == "htcondorcern":
+    #             snake_file.addline('compute_backend="htcondorcern",', 2)
+    #             snake_file.addline('htcondor_max_runtime="espresso",', 2)
+    #             snake_file.addline('kerberos=True,', 2)
+    #         else:
+    #             if job.use_eos() and use_kerberos:
+    #                 snake_file.addline('kerberos=True,', 2)
+    #             snake_file.addline(f'kubernetes_memory_limit="{snakemake_rule.get("memory", "1Gi")}"', 2)
+
+    #         # Shell Command
+    #         snake_file.addline("shell:", 1)
+    #         commands = " && ".join(snakemake_rule.get("commands", ["true"]))
+    #         snake_file.addline(f'"{commands}"', 2)
+
+    #         self.steps.append(step)
+
+    #         # Log timing only if job count is small or for specific debug needs
+    #         # Excessive printing can also slow down the main loop.
+    #         print(f"Job {job.short_uuid()} processed in {time.time() - start_time:.4f}s")
+
+    #     snake_file.write()
+
     def construct_snake_file(self):
         """Construct the Snakemake Snakefile describing rules for all jobs.
 
@@ -267,7 +480,7 @@ class VWorkflow(ABC):
 
         finalize_commands = []
         for job in self.jobs:
-            if job.object_type() == "task" and not job.is_input:
+            if job.object_type() == "task" and job.is_input:
                 if not job.use_eos() or job.machine_id != self.machine_id:
                     continue
                 container = VContainer(job.path, job.machine_id)
@@ -298,6 +511,7 @@ class VWorkflow(ABC):
         for job in self.jobs:
             snake_file.addline(f'"{job.short_uuid()}.done",', 2)
             self.dependencies["finalize"].append(f"step{job.short_uuid()}")
+
         snake_file.addline("output:", 1)
         snake_file.addline(f'"finalize.done"', 2)
         snake_file.addline("container:", 1)
@@ -310,7 +524,10 @@ class VWorkflow(ABC):
         else:
             snake_file.addline(f'"touch finalize.done"', 2)
 
+
         for job in self.jobs:
+            start_time = time.time()
+            print(f"Processing job: {job} at time {time.time() - start_time}s")
             if job.object_type() == "algorithm":
                 # In this case, if the command is compile, we need to compile it
                 image = VImage(job.path, job.machine_id)
@@ -324,12 +541,29 @@ class VWorkflow(ABC):
                 container.is_input = job.is_input
                 snakemake_rule = container.snakemake_rule(self.machine_id)
                 step = container.step(self.machine_id)
+            print(f"Get the step at time {time.time() - start_time}s")
 
             snake_file.addline("\n", 0)
             snake_file.addline(f"rule step{job.short_uuid()}:", 0)
             snake_file.addline("input:", 1)
             for input_file in snakemake_rule["inputs"]:
                 snake_file.addline(f'"{input_file}",', 2)
+            # Add the dependencies
+            self.dependencies[f"step{job.short_uuid()}"] = []
+            for dep in job.dependencies():
+                dep_job = VJob(
+                    os.path.join(
+                        os.environ["HOME"],
+                        ".Yuki",
+                        "Storage",
+                        self.project_uuid,
+                        dep
+                    ),
+                    self.machine_id
+                )
+                self.dependencies[f"step{job.short_uuid()}"].append(f"step{dep_job.short_uuid()}")
+            print(f"Added inputs and dependencies at time {time.time() - start_time}s")
+
             snake_file.addline("output:", 1)
             snake_file.addline(f'"{job.short_uuid()}.done"', 2)
             snake_file.addline("container:", 1)
@@ -346,8 +580,10 @@ class VWorkflow(ABC):
                 snake_file.addline(f'kubernetes_memory_limit="{snakemake_rule["memory"]}"', 2)
             snake_file.addline("shell:", 1)
             snake_file.addline(f'"{" && ".join(snakemake_rule["commands"])}"', 2)
+            print(f"Added shell and resources at time {time.time() - start_time}s")
 
             self.steps.append(step)
+            print(f"Appended step at time {time.time() - start_time}s")
 
         snake_file.write()
 

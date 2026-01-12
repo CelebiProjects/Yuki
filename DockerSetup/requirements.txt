@@ -9,3 +9,4 @@ reana-client
 flask
 celery
 setuptools
+pillow

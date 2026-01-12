@@ -1,24 +1,37 @@
-# Use an official Python runtime as a parent image
 FROM python:3.10-slim
 
-# Update the package list and install dependencies
+# Install system deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    build-essential \
-    rabbitmq-server \
+        build-essential \
+        rabbitmq-server \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Enable RabbitMQ management plugin
-RUN rabbitmq-plugins enable rabbitmq_management
-
-# Set the working directory in the container
-WORKDIR /app
-COPY requirements.txt /app
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Set the working directory
+# Create unprivileged user
 WORKDIR /app
 
-# Copy the startup script to the container
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+# Python deps
+COPY requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --user build
+RUN pip install --user celebichrono
+
+# RUN pip install --user yuki==0.0.4
+COPY Yuki /app/Yuki
+WORKDIR /app/Yuki
+
+RUN python -m build
+RUN pip install --user dist/*.whl
+
+# App files
+WORKDIR /app
+COPY entrypoint.sh .
+# COPY --chown=appuser install.sh .
+RUN chmod +x entrypoint.sh
+# install.sh
+
+# App port only (high port = rootless OK)
+EXPOSE 3315
+
+CMD ["/app/entrypoint.sh"]

@@ -15,6 +15,18 @@ def collect(project_uuid, impression):
     storage.collect()
     return "ok"
 
+@bp.route("/collect-outputs/<project_uuid>/<impression>", methods=['GET'])
+def collect_outputs(project_uuid, impression):
+    storage = ImpressionStorage(project_uuid, impression)
+    storage.collect_outputs()
+    return "ok"
+
+@bp.route("/collect-logs/<project_uuid>/<impression>", methods=['GET'])
+def collect_logs(project_uuid, impression):
+    storage = ImpressionStorage(project_uuid, impression)
+    storage.collect_logs()
+    return "ok"
+
 @bp.route("/watermark/<project_uuid>/<impression>", methods=['GET'])
 def watermark(project_uuid, impression):
     storage = ImpressionStorage(project_uuid, impression)

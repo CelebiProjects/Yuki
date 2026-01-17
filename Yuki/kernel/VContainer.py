@@ -71,27 +71,21 @@ class VContainer(VJob):
         start_time = time.time()
         commands = []
         commands.extend(self._create_directory_commands())
-        print(f"    >>>> Step creation time after directory commands: {time.time() - start_time}")
+        # print(f"    >>>> Step creation time after directory commands: {time.time() - start_time}")
         commands.extend(self._create_symlink_commands())
-        print(f"    >>>> Step creation time after symlink commands: {time.time() - start_time}")
+        # print(f"    >>>> Step creation time after symlink commands: {time.time() - start_time}")
         commands.extend(self._process_user_commands_for_reana())
-        print(f"    >>>> Step creation time after user commands: {time.time() - start_time}")
-        print("-------------")
+        # print(f"    >>>> Step creation time after user commands: {time.time() - start_time}")
+        # print("-------------")
         # print("self.is_input", self.is_input)
         # print("self.use_eos()", self.use_eos())
         if (not self.is_input) and self.use_eos():
-            print("Using EOS for stageout")
-            print(f"   >>>> Step creation time before EOS stageout: {time.time() - start_time}")
+            # print("Using EOS for stageout")
             config_path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
-            print(f"   >>>> Step creation time after config path: {time.time() - start_time}")
             eos_mount_points = metadata.ConfigFile(config_path).read_variable("eos_mount_point", {})
-            print(f"   >>>> Step creation time after reading EOS mount points: {time.time() - start_time}")
             eos_path = eos_mount_points.get(request_machine_id, "/eos/user/unknown")
-            print(f"   >>>> Step creation time after getting EOS path: {time.time() - start_time}")
-            commands.append("mkdir -p " + eos_path + f"/{self.impression()}/")
-            print(f"   >>>> Step creation time after mkdir command: {time.time() - start_time}")
-            commands.append("cp -r stageout/* " + eos_path + f"/{self.impression()}/")
-            print(f"   >>>> Step creation time after cp command: {time.time() - start_time}")
+            commands.append("mkdir -p " + eos_path + f"/{self.project_uuid}/{self.impression()}/")
+            commands.append("cp -r stageout/* " + eos_path + f"/{self.project_uuid}/{self.impression()}/")
         commands.append("cd ..")
         commands.append(f"touch {self.short_uuid()}.done")
 
@@ -187,8 +181,8 @@ class VContainer(VJob):
             config_path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
             eos_mount_points = metadata.ConfigFile(config_path).read_variable("eos_mount_point", {})
             eos_path = eos_mount_points.get(request_machine_id, "/eos/user/unknown")
-            commands.append("mkdir -p " + eos_path + f"/{self.impression()}/")
-            commands.append("cp -r stageout/* " + eos_path + f"/{self.impression()}/")
+            commands.append("mkdir -p " + eos_path + f"/{self.project_uuid}/{self.impression()}/")
+            commands.append("cp -r stageout/* " + eos_path + f"/{self.project_uuid}/{self.impression()}/")
         commands.append("cd ..")
         commands.append(f"touch {self.short_uuid()}.done")
 
@@ -362,7 +356,7 @@ class VContainer(VJob):
         eos_path = eos_mount_points.get(self.machine_id, "/eos/user/unknown")
         commands = []
         commands.append(f"mkdir -p imp{self.short_uuid()}/stageout")
-        commands.append(f"cp -r {eos_path}/{self.impression()}/* imp{self.short_uuid()}/stageout/")
+        commands.append(f"cp -r {eos_path}/{self.project_uuid}/{self.impression()}/* imp{self.short_uuid()}/stageout/")
         return commands
 
     def finalize_commands(self):
@@ -428,8 +422,3 @@ class VContainer(VJob):
             return []
         dirs = csys.list_dir(path)
         return dirs
-
-    # def collect(self, impression):
-    #     workflow_id = self.workflow_id()
-    #     workflow = VWorkflow(os.path.join(self.path, workflow_id))
-    #     workflow.collect(impression)

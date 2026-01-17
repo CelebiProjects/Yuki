@@ -494,7 +494,7 @@ class VWorkflow(ABC):
         snake_file.addline("container:", 1)
         snake_file.addline(f'"docker://docker.io/reanahub/reana-env-root6:6.18.04"', 2)
         snake_file.addline("resources:", 1)
-        if setup_commands:
+        if setup_commands and use_kerberos:
             snake_file.addline(f'kerberos=True,', 2)
         snake_file.addline(f'kubernetes_memory_limit="1Gi"', 2)
         snake_file.addline("shell:", 1)

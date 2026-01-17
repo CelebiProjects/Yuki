@@ -21,7 +21,8 @@ class VJob:
 
         self.is_input = False
         self.path = path
-        self.uuid = path[-32:]
+        self.uuid = path[-32:]	
+        self.project_uuid = path[-64-1:-32-1]
         self.machine_id = machine_id
         self.config_file = metadata.ConfigFile(
             os.path.join(self.path, "config.json")

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Deep File Explorer</title>
+    <style>
+        /* --- CORE STYLES --- */
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #2604a2 100%);
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            color: #333;
+            overflow: hidden; /* Prevent body scroll, use container scrolls */
+        }
+
+        /* --- SIDEBAR: HANDLING DEPTH --- */
+        #sidebar {
+            width: 350px;
+            min-width: 300px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px);
+            border-right: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 1rem;
+            color: white;
+            overflow-x: auto; /* Allow horizontal scroll for deep nesting */
+            overflow-y: auto;
+            height: 100vh;
+        }
+
+        .tree-root { list-style: none; padding: 0; margin: 0; }
+        
+        .tree-ul { 
+            list-style: none; 
+            padding-left: 18px; /* Controlled indentation */
+            border-left: 1px solid rgba(255, 255, 255, 0.2); /* Visual guide lines */
+            margin-left: 8px;
+        }
+
+        .tree-li { margin: 4px 0; white-space: nowrap; }
+
+        .folder-name { 
+            font-weight: 600; 
+            cursor: pointer; 
+            display: block; 
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .folder-name:hover { background: rgba(255, 255, 255, 0.1); }
+        .folder-name::before { content: '▶ '; font-size: 0.7rem; display: inline-block; transition: transform 0.2s; margin-right: 5px; }
+        
+        /* Toggle Arrow Animation */
+        .expanded > .folder-name::before { transform: rotate(90deg); }
+        
+        .file-name { 
+            cursor: pointer; 
+            padding: 5px 10px; 
+            display: block; 
+            border-radius: 4px;
+            opacity: 0.8;
+        }
+        .file-name:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+        .file-name::before { content: '📄 '; }
+
+        .nested { display: none; }
+        .expanded > .nested { display: block; }
+
+        /* --- CONTENT AREA (YOUR STYLE) --- */
+        .main-content {
+            flex-grow: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 850px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 2.5rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+            align-self: flex-start;
+        }
+
+        .file-type {
+            background: linear-gradient(135deg, #667eea, #2604a2);
+            color: white; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.75rem;
+        }
+        
+        .text-box {
+            background: #fbfbfb; border-radius: 12px; padding: 1.5rem;
+            border: 1px solid #eee; margin-top: 1rem;
+        }
+        pre { white-space: pre-wrap; word-break: break-all; margin: 0; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h3 style="font-weight: 300; margin-bottom: 1.5rem; text-align: center;">ROOT PROJECT</h3>
+        <ul id="tree-container" class="tree-root"></ul>
+    </div>
+
+    <div class="main-content">
+        <div class="container">
+            <div id="content-viewer">
+                <h1 style="text-align: center; color: #667eea; font-weight: 300;">Explorer</h1>
+                <p style="text-align: center; color: #666;">Select a file from the tree to view its content.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // MOCK DATA: 5 LEVELS OF DEPTH
+        const deepData = {
+            name: "Level_1_Core",
+            type: "folder",
+            children: [
+                {
+                    name: "Level_2_Source",
+                    type: "folder",
+                    children: [
+                        {
+                            name: "Level_3_Frontend",
+                            type: "folder",
+                            children: [
+                                {
+                                    name: "Level_4_Assets",
+                                    type: "folder",
+                                    children: [
+                                        {
+                                            name: "Level_5_Icons",
+                                            type: "folder",
+                                            children: [
+                                                { name: "favicon.ico", type: "file", is_image: false, content: "[Binary Icon Data]" },
+                                                { name: "meta.json", type: "file", is_text: true, content: "{\n  \"icon\": \"v1.0\"\n}" }
+                                            ]
+                                        },
+                                        { name: "logo.png", type: "file", is_image: true, url: "https://via.placeholder.com/150" }
+                                    ]
+                                },
+                                { name: "index.html", type: "file", is_text: true, content: "<html><body>Deep Tree</body></html>" }
+                            ]
+                        }
+                    ]
+                },
+                { name: "config.yaml", type: "file", is_text: true, content: "version: 1.0\nmode: production" }
+            ]
+        };
+
+        const treeContainer = document.getElementById('tree-container');
+        const contentViewer = document.getElementById('content-viewer');
+
+        function buildTree(node, parentEl) {
+            const li = document.createElement('li');
+            li.className = 'tree-li';
+
+            if (node.type === 'folder') {
+                const folderHeader = document.createElement('span');
+                folderHeader.className = 'folder-name';
+                folderHeader.textContent = node.name;
+                
+                const childUl = document.createElement('ul');
+                childUl.className = 'nested tree-ul';
+                
+                li.appendChild(folderHeader);
+                li.appendChild(childUl);
+
+                folderHeader.onclick = (e) => {
+                    e.stopPropagation();
+                    li.classList.toggle('expanded');
+                };
+
+                node.children.forEach(child => buildTree(child, childUl));
+            } else {
+                const fileItem = document.createElement('span');
+                fileItem.className = 'file-name';
+                fileItem.textContent = node.name;
+                
+                fileItem.onclick = (e) => {
+                    e.stopPropagation();
+                    renderContent(node);
+                };
+                li.appendChild(fileItem);
+            }
+
+            parentEl.appendChild(li);
+        }
+
+        function renderContent(file) {
+            let html = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                    <h2 style="margin:0; font-weight:400; color:#2c3e50;">${file.name}</h2>
+                    <span class="file-type">${file.is_image ? 'IMAGE' : 'TEXT'}</span>
+                </div>
+                <hr style="border:0; border-top:1px solid #eee; margin-bottom:1.5rem;">
+            `;
+
+            if (file.is_image) {
+                html += `<img src="${file.url || 'https://via.placeholder.com/300'}" style="width:100%; border-radius:10px;">`;
+            } else {
+                html += `
+                    <div class="text-box">
+                        <pre>${file.content || 'No content available.'}</pre>
+                    </div>
+                `;
+            }
+            contentViewer.innerHTML = html;
+        }
+
+        // Initialize
+        buildTree(deepData, treeContainer);
+    </script>
+</body>
+</html>

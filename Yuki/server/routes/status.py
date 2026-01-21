@@ -260,3 +260,10 @@ def impview(project_uuid, impression_name):
                            impression=impression_name,
                            runner_id=runner_id,
                            files=final_file_infos)
+
+
+@bp.route("/test", methods=['GET'])
+def test():
+    """Test route."""
+    print("Called")
+    return render_template('test.html')

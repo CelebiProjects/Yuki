@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Yuki Project Explorer</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #2604a2 100%);
+            height: 100vh; margin: 0; display: flex; color: #333; overflow: hidden;
+        }
+
+        /* SIDEBAR */
+        #sidebar {
+            width: 350px; min-width: 300px; background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px); border-right: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 1.5rem; color: white; overflow-y: auto; height: 100vh;
+        }
+
+        /* MAIN CONTENT - Requirement: Scrolling Fix */
+        .main-content {
+            flex-grow: 1; height: 100vh; overflow-y: auto; padding: 2rem;
+            display: flex; justify-content: center;
+        }
+
+        .container {
+            width: 100%; max-width: 900px; background: rgba(255, 255, 255, 0.98);
+            border-radius: 20px; padding: 2.5rem; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+            align-self: flex-start; margin-bottom: 50px;
+        }
+
+        /* TREE UI */
+        .tree-root { list-style: none; padding: 0; }
+        .tree-ul { list-style: none; padding-left: 18px; border-left: 1px solid rgba(255,255,255,0.2); margin-left: 8px; }
+        .node-name {
+            cursor: pointer; display: block; padding: 6px; border-radius: 4px; transition: 0.2s;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .node-name:hover { background: rgba(255,255,255,0.1); }
+        .node-name.active { background: rgba(255,255,255,0.25); font-weight: bold; }
+
+        .icon-task::before { content: '🔨 '; }
+        .icon-algo::before { content: '🧮 '; }
+        .icon-dir::before { content: '📁 '; }
+
+        .nested { display: none; }
+        .expanded > .nested { display: block; }
+
+        /* RIGHT PANEL COMPONENTS */
+        .header-row { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 20px; }
+        .badge { padding: 4px 12px; border-radius: 12px; font-size: 0.75rem; color: white; text-transform: uppercase; }
+        .bg-task { background: #ff9966; }
+        .bg-algo { background: #42bcd6; }
+        .bg-dir { background: #667eea; }
+
+        .imp-box { background: #f8f9fa; border: 1px solid #eee; padding: 12px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .copy-btn { background: white; border: 1px solid #ddd; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+        .copy-btn.copied { color: #27ae60; border-color: #27ae60; }
+
+        .readme-section { background: #fdfdfd; border: 1px solid #e1e1e1; padding: 1.5rem; border-radius: 8px; margin-bottom: 30px; line-height: 1.6; white-space: pre-wrap; }
+
+        .file-card { background: white; border: 1px solid #eee; border-radius: 10px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .file-card img { max-width: 100%; border-radius: 6px; margin-top: 10px; border: 1px solid #eee; }
+        .text-preview { background: #2d2d2d; color: #eee; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; margin-top: 10px; overflow-x: auto; }
+        .action-btn { background: #f0f4ff; color: #667eea; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; text-decoration: none; font-size: 0.85rem; font-weight: 600; }
+        .action-btn:hover { background: #667eea; color: white; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h3 style="text-align: center; font-weight: 300; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 10px;">EXPLORER</h3>
+        <ul id="tree-container" class="tree-root"></ul>
+    </div>
+
+    <div class="main-content">
+        <div class="container" id="details-view">
+            <h2 style="text-align: center; color: #ccc; margin-top: 100px; font-weight: 300;">Select a folder to view details</h2>
+        </div>
+    </div>
+
+    <script>
+        const projectData = {{ project_data|tojson }};
+
+        function buildTree(node, parentEl) {
+            const li = document.createElement('li');
+            li.className = 'tree-li';
+
+            const span = document.createElement('span');
+            span.className = `node-name icon-${node.object_type === 'algorithm' ? 'algo' : node.object_type === 'task' ? 'task' : 'dir'}`;
+            span.textContent = node.name;
+            li.appendChild(span);
+
+            span.onclick = (e) => {
+                e.stopPropagation();
+                document.querySelectorAll('.node-name').forEach(el => el.classList.remove('active'));
+                span.classList.add('active');
+                renderDetails(node);
+                if (node.children.length > 0) li.classList.toggle('expanded');
+            };
+
+            if (node.children.length > 0) {
+                const ul = document.createElement('ul');
+                ul.className = 'nested tree-ul';
+                node.children.forEach(child => buildTree(child, ul));
+                li.appendChild(ul);
+            }
+            parentEl.appendChild(li);
+        }
+
+        function renderDetails(node) {
+            const view = document.getElementById('details-view');
+            let html = `
+                <div class="header-row">
+                    <h1 style="margin:0; font-weight:400;">${node.name}</h1>
+                    <span class="badge bg-${node.object_type}">${node.object_type}</span>
+                </div>
+            `;
+
+            // Impression Info
+            if (node.impression_id) {
+                html += `
+                    <div class="imp-box">
+                        <code style="font-size: 1rem;">ID: ${node.impression_id}</code>
+                        <div>
+                            <button class="copy-btn" onclick="copyText('${node.impression_id}', this)">📋 Copy ID</button>
+                            <a href="${node.imp_view_url}" target="_blank" class="action-btn" style="margin-left:8px;">🔗 Full ImpView</a>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // README
+            if (node.readme_content) {
+                html += `<div style="font-weight:bold; margin-bottom:8px;">README.md</div>
+                         <div class="readme-section">${node.readme_content}</div>`;
+            }
+
+            // Task Outputs
+            if (node.object_type === 'task' && node.impression_data.length > 0) {
+                html += `<h3 style="color:#667eea; border-bottom: 1px solid #eee; padding-bottom:10px;">Impression Outputs</h3>`;
+                node.impression_data.forEach(file => {
+                    html += `
+                        <div class="file-card">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <strong>${file.name}</strong>
+                                <a href="${file.url}" download class="action-btn">Download ⬇️</a>
+                            </div>
+                            <div style="font-size:0.75rem; color:#999; margin-top:4px;">Type: ${file.source_dir}</div>
+
+                            ${file.is_image ? `<img src="${file.url}" alt="${file.name}">` : ''}
+                            ${file.is_text ? `<div class="text-preview">${file.content}</div>` : ''}
+                        </div>
+                    `;
+                });
+            }
+
+            view.innerHTML = html;
+        }
+
+        function copyText(text, btn) {
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = btn.innerHTML;
+                btn.innerHTML = "✓ Copied!";
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        // Initialize tree
+        buildTree(projectData, document.getElementById('tree-container'));
+    </script>
+</body>
+</html>

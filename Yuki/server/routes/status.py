@@ -10,6 +10,9 @@ from Yuki.kernel.vworkflow import VWorkflow
 from ..config import config
 from ..tasks import task_update_workflow_status
 from CelebiChrono.kernel.chern_cache import ChernCache
+import json
+from flask import request, jsonify
+from werkzeug.utils import secure_filename
 
 bp = Blueprint('status', __name__)
 
@@ -122,15 +125,15 @@ def ditestatus():
     return "ok"
 
 
-@bp.route("/sample-status/<impression_name>", methods=['GET'])
-def samplestatus(impression_name):
+@bp.route("/sample-status/<project_uuid>/<impression_name>", methods=['GET'])
+def samplestatus(project_uuid, impression_name):
     """Get sample status for an impression."""
     job_config_file = ConfigFile(config.get_job_config_path(project_uuid, impression_name))
     return job_config_file.read_variable("sample_uuid", "")
 
 
 @bp.route("/impression/<project_uuid>/<impression_name>", methods=['GET'])
-def impression(impression_name):
+def impression(project_uuid, impression_name):
     """Get impression path."""
     return config.get_job_path(project_uuid, impression_name)
 
@@ -261,9 +264,180 @@ def impview(project_uuid, impression_name):
                            runner_id=runner_id,
                            files=final_file_infos)
 
+import os
+import json
+from flask import render_template, url_for
 
-@bp.route("/test", methods=['GET'])
-def test():
-    """Test route."""
-    print("Called")
-    return render_template('test.html')
+def process_directory2(job_path, runner_id, sub_dir, file_infos_dict, max_chars, project_uuid, imp_id):
+    """
+    Scans sub-directories and generates URLs for images (plots) and text files.
+    """
+    target_dir = os.path.join(job_path, runner_id, sub_dir)
+    if not os.path.exists(target_dir):
+        return
+
+    route_map = {
+        "logs": "upload.logview",
+        "stageout": "upload.fileview",
+        "watermarks": "upload.watermarkview"
+    }
+    target_route = route_map.get(sub_dir, "upload.fileview")
+
+    for fname in os.listdir(target_dir):
+        fpath = os.path.join(target_dir, fname)
+        if os.path.isfile(fpath):
+            ext = os.path.splitext(fname)[1].lower()
+            # Plot/Image extensions
+            is_image = ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']
+            # Data/Log extensions
+            is_text = ext in ['.txt', '.md', '.json', '.yaml', '.py', '.log', '.stdout', '.stderr', '.csv']
+
+            file_url = url_for(target_route,
+                               project_uuid=project_uuid,
+                               impression=imp_id,
+                               runner_id=runner_id,
+                               filename=fname)
+
+            content = ""
+            if is_text:
+                try:
+                    with open(fpath, 'r', errors='replace') as f:
+                        content = f.read(max_chars)
+                except:
+                    content = "[Error reading text content]"
+
+            file_infos_dict[fname] = {
+                "name": fname,
+                "source_dir": sub_dir,
+                "is_image": is_image,
+                "is_text": is_text,
+                "content": content,
+                "url": file_url
+            }
+
+@bp.route("/test/<project_uuid>", methods=['GET'])
+def test(project_uuid):
+    base_path = os.path.join(os.path.expanduser("~"), ".Yuki", "Bookkeep", project_uuid)
+
+    if not os.path.exists(base_path):
+        return "Project metadata not found", 404
+
+    def build_tree_data(path, is_root=False):
+        folder_name = os.path.basename(path)
+        display_name = folder_name[:8] if is_root else folder_name
+
+        data = {
+            "name": display_name,
+            "object_type": "directory",
+            "impression_id": None,
+            "readme_content": "",
+            "impression_data": [],
+            "children": [],
+            "imp_view_url": None
+        }
+
+        config_path = os.path.join(path, "config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    conf = json.load(f)
+                    data["object_type"] = conf.get("object_type", "directory")
+                    imp_id = conf.get("impression", "")
+
+                    if imp_id:
+                        data["impression_id"] = imp_id
+                        data["imp_view_url"] = url_for('status.impview',
+                                                       project_uuid=project_uuid,
+                                                       impression_name=imp_id)
+
+                        if data["object_type"] == "task":
+                            # Use your specific config helper
+                            job_path = config.get_job_path(project_uuid, imp_id)
+
+                            try:
+                                job = VJob(job_path, None)
+                                runner_id = job.machine_id
+                            except:
+                                runner_id = "default_runner"
+
+                            file_infos_dict = {}
+                            MAX_PREVIEW_CHARS = 1000
+
+                            # Gather Plots and Files from all three locations
+                            for d in ["stageout", "logs", "watermarks"]:
+                                process_directory2(job_path, runner_id, d, file_infos_dict,
+                                                   MAX_PREVIEW_CHARS, project_uuid, imp_id)
+
+                            # Sort: Plots (images) usually in stageout, so we prioritize that
+                            data["impression_data"] = sorted(
+                                file_infos_dict.values(),
+                                key=lambda x: (0 if x['is_image'] else 1, x['name'].lower())
+                            )
+            except:
+                pass
+
+        readme_path = os.path.join(path, "README.md")
+        if os.path.exists(readme_path):
+            with open(readme_path, 'r', errors='replace') as f:
+                data["readme_content"] = f.read()
+
+        for item in sorted(os.listdir(path)):
+            item_path = os.path.join(path, item)
+            if os.path.isdir(item_path):
+                # Only recurse if it's not a raw data folder
+                if not (len(item) == 32 and all(c in '0123456789abcdef' for c in item.lower())):
+                    data["children"].append(build_tree_data(item_path))
+
+        return data
+
+    tree_data = build_tree_data(base_path, is_root=True)
+    return render_template('test.html', project_data=tree_data)
+
+@bp.route("/bookkeeping", methods=['POST'])
+def bookkeeping():
+    """
+    Receives project manifest and associated files,
+    saving them to .Yuki/Bookkeep/[project_uuid]
+    """
+    # 1. Extract metadata
+    manifest_str = request.form.get("manifest")
+    project_uuid = request.form.get("project_uuid")
+
+    if not manifest_str or not project_uuid:
+        return jsonify({"error": "Missing manifest or project_uuid"}), 400
+
+    manifest = json.loads(manifest_str)
+
+    # 2. Setup the storage path
+    # Path: .Yuki/Bookkeep/[project_uuid]
+    base_save_path = os.path.join(
+            os.environ["HOME"],
+            ".Yuki", "Bookkeep", secure_filename(project_uuid))
+
+    if not os.path.exists(base_save_path):
+        os.makedirs(base_save_path)
+
+    # 3. Save the manifest itself for reference
+    with open(os.path.join(base_save_path, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=4)
+
+    # 4. Save the transmitted files
+    # The 'files' dictionary in the request contains the binary data
+    for storage_key, file_obj in request.files.items():
+        # storage_key is the relative path (e.g., "subfolder/README.md")
+        # We join this with our base path
+        target_file_path = os.path.join(base_save_path, storage_key)
+
+        # Ensure subdirectories exist (e.g., .Yuki/Bookkeep/uuid/subfolder/)
+        os.makedirs(os.path.dirname(target_file_path), exist_ok=True)
+
+        # Save the file
+        file_obj.save(target_file_path)
+
+    print(f"Project {project_uuid} bookkept successfully at {base_save_path}")
+
+    return jsonify({
+        "status": "success",
+        "message": "Project structure and files saved",
+        "path": base_save_path
+    }), 200

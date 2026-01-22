@@ -2,218 +2,178 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Deep File Explorer</title>
+    <title>Yuki Explorer</title>
     <style>
-        /* --- CORE STYLES --- */
         * { box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #2604a2 100%);
-            min-height: 100vh;
-            margin: 0;
-            display: flex;
-            color: #333;
-            overflow: hidden; /* Prevent body scroll, use container scrolls */
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #0f0c29; 
+            background: linear-gradient(135deg, #24243e, #302b63, #0f0c29);
+            height: 100vh; margin: 0; display: flex; color: #333; overflow: hidden;
         }
 
-        /* --- SIDEBAR: HANDLING DEPTH --- */
+        /* --- SIDEBAR --- */
         #sidebar {
-            width: 350px;
-            min-width: 300px;
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(15px);
-            border-right: 1px solid rgba(255, 255, 255, 0.2);
-            padding: 1rem;
-            color: white;
-            overflow-x: auto; /* Allow horizontal scroll for deep nesting */
-            overflow-y: auto;
-            height: 100vh;
+            width: 320px; min-width: 300px; background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px); border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 1.5rem; color: #eee; overflow-y: auto; height: 100vh;
         }
-
-        .tree-root { list-style: none; padding: 0; margin: 0; }
-        
-        .tree-ul { 
-            list-style: none; 
-            padding-left: 18px; /* Controlled indentation */
-            border-left: 1px solid rgba(255, 255, 255, 0.2); /* Visual guide lines */
-            margin-left: 8px;
-        }
-
-        .tree-li { margin: 4px 0; white-space: nowrap; }
-
-        .folder-name { 
-            font-weight: 600; 
-            cursor: pointer; 
-            display: block; 
-            padding: 5px;
-            border-radius: 4px;
-        }
-        .folder-name:hover { background: rgba(255, 255, 255, 0.1); }
-        .folder-name::before { content: '▶ '; font-size: 0.7rem; display: inline-block; transition: transform 0.2s; margin-right: 5px; }
-        
-        /* Toggle Arrow Animation */
-        .expanded > .folder-name::before { transform: rotate(90deg); }
-        
-        .file-name { 
-            cursor: pointer; 
-            padding: 5px 10px; 
-            display: block; 
-            border-radius: 4px;
-            opacity: 0.8;
-        }
-        .file-name:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
-        .file-name::before { content: '📄 '; }
-
+        .tree-root { list-style: none; padding: 0; }
+        .tree-ul { list-style: none; padding-left: 20px; border-left: 1px solid rgba(255,255,255,0.1); margin-left: 10px; }
+        .node-name { cursor: pointer; display: block; padding: 8px; border-radius: 6px; transition: 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .node-name:hover { background: rgba(255,255,255,0.1); }
+        .node-name.active { background: #667eea; color: white; font-weight: 600; }
+        .icon-task::before { content: '🔨 '; }
+        .icon-algo::before { content: '🧮 '; }
+        .icon-dir::before { content: '📁 '; }
         .nested { display: none; }
         .expanded > .nested { display: block; }
 
-        /* --- CONTENT AREA (YOUR STYLE) --- */
-        .main-content {
-            flex-grow: 1;
-            padding: 2rem;
-            overflow-y: auto;
-            display: flex;
-            justify-content: center;
-        }
-
+        /* --- MAIN CONTENT --- */
+        .main-content { flex-grow: 1; height: 100vh; overflow-y: auto; padding: 2rem; }
         .container {
-            width: 100%;
-            max-width: 850px;
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 2.5rem;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
-            align-self: flex-start;
+            width: 100%; max-width: 1000px; background: #fff; margin: 0 auto;
+            border-radius: 12px; padding: 2.5rem; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
         }
 
-        .file-type {
-            background: linear-gradient(135deg, #667eea, #2604a2);
-            color: white; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.75rem;
-        }
-        
-        .text-box {
-            background: #fbfbfb; border-radius: 12px; padding: 1.5rem;
-            border: 1px solid #eee; margin-top: 1rem;
-        }
-        pre { white-space: pre-wrap; word-break: break-all; margin: 0; font-size: 0.9rem; }
+        .header-area { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; border-bottom: 2px solid #f0f0f0; padding-bottom: 1rem; }
+        .badge { padding: 4px 12px; border-radius: 20px; font-size: 0.7rem; color: white; font-weight: bold; }
+        .bg-task { background: #f39c12; }
+        .bg-algorithm { background: #3498db; }
+        .bg-directory { background: #95a5a6; }
+
+        .section-title { margin-top: 2rem; font-weight: bold; color: #2c3e50; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px; }
+        .readme-box { background: #f9f9f9; border: 1px solid #ddd; padding: 1.5rem; border-radius: 8px; margin-top: 0.5rem; white-space: pre-wrap; line-height: 1.6; }
+
+        /* --- PLOTS GRID --- */
+        .plots-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-top: 1rem; }
+        .plot-card { border: 1px solid #eee; border-radius: 8px; overflow: hidden; background: #fff; transition: 0.3s; }
+        .plot-card:hover { transform: translateY(-5px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        .plot-card img { width: 100%; height: 200px; object-fit: contain; background: #fafafa; border-bottom: 1px solid #eee; cursor: zoom-in; }
+        .plot-info { padding: 10px; font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; }
+
+        /* --- FILE LIST --- */
+        .file-list { margin-top: 1rem; border: 1px solid #eee; border-radius: 8px; }
+        .file-row { padding: 12px 15px; border-bottom: 1px solid #eee; display: flex; flex-direction: column; }
+        .file-row:last-child { border-bottom: none; }
+        .file-header { display: flex; justify-content: space-between; align-items: center; }
+        .btn-action { text-decoration: none; font-size: 0.75rem; font-weight: bold; color: #667eea; border: 1px solid #667eea; padding: 4px 10px; border-radius: 4px; }
+        .btn-action:hover { background: #667eea; color: #fff; }
+        .text-preview { background: #2d2d2d; color: #ccc; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 0.8rem; margin-top: 10px; overflow-x: auto; display: none; }
     </style>
 </head>
 <body>
 
     <div id="sidebar">
-        <h3 style="font-weight: 300; margin-bottom: 1.5rem; text-align: center;">ROOT PROJECT</h3>
+        <h3 style="text-align: center; margin-bottom: 2rem; opacity: 0.8;">YUKI BOOKKEEP</h3>
         <ul id="tree-container" class="tree-root"></ul>
     </div>
 
     <div class="main-content">
-        <div class="container">
-            <div id="content-viewer">
-                <h1 style="text-align: center; color: #667eea; font-weight: 300;">Explorer</h1>
-                <p style="text-align: center; color: #666;">Select a file from the tree to view its content.</p>
-            </div>
+        <div class="container" id="details-view">
+            <h2 style="text-align: center; color: #bbb; margin-top: 5rem; font-weight: 300;">Select a node from the tree to explore</h2>
         </div>
     </div>
 
     <script>
-        // MOCK DATA: 5 LEVELS OF DEPTH
-        const deepData = {
-            name: "Level_1_Core",
-            type: "folder",
-            children: [
-                {
-                    name: "Level_2_Source",
-                    type: "folder",
-                    children: [
-                        {
-                            name: "Level_3_Frontend",
-                            type: "folder",
-                            children: [
-                                {
-                                    name: "Level_4_Assets",
-                                    type: "folder",
-                                    children: [
-                                        {
-                                            name: "Level_5_Icons",
-                                            type: "folder",
-                                            children: [
-                                                { name: "favicon.ico", type: "file", is_image: false, content: "[Binary Icon Data]" },
-                                                { name: "meta.json", type: "file", is_text: true, content: "{\n  \"icon\": \"v1.0\"\n}" }
-                                            ]
-                                        },
-                                        { name: "logo.png", type: "file", is_image: true, url: "https://via.placeholder.com/150" }
-                                    ]
-                                },
-                                { name: "index.html", type: "file", is_text: true, content: "<html><body>Deep Tree</body></html>" }
-                            ]
-                        }
-                    ]
-                },
-                { name: "config.yaml", type: "file", is_text: true, content: "version: 1.0\nmode: production" }
-            ]
-        };
+        const projectData = {{ project_data|tojson }};
 
-        const treeContainer = document.getElementById('tree-container');
-        const contentViewer = document.getElementById('content-viewer');
-
-        function buildTree(node, parentEl) {
+        function buildTree(node, container) {
             const li = document.createElement('li');
             li.className = 'tree-li';
+            const span = document.createElement('span');
+            span.className = `node-name icon-${node.object_type}`;
+            span.textContent = node.name;
+            li.appendChild(span);
 
-            if (node.type === 'folder') {
-                const folderHeader = document.createElement('span');
-                folderHeader.className = 'folder-name';
-                folderHeader.textContent = node.name;
-                
-                const childUl = document.createElement('ul');
-                childUl.className = 'nested tree-ul';
-                
-                li.appendChild(folderHeader);
-                li.appendChild(childUl);
+            span.onclick = (e) => {
+                e.stopPropagation();
+                document.querySelectorAll('.node-name').forEach(n => n.classList.remove('active'));
+                span.classList.add('active');
+                renderDetails(node);
+                if (node.children.length > 0) li.classList.toggle('expanded');
+            };
 
-                folderHeader.onclick = (e) => {
-                    e.stopPropagation();
-                    li.classList.toggle('expanded');
-                };
-
-                node.children.forEach(child => buildTree(child, childUl));
-            } else {
-                const fileItem = document.createElement('span');
-                fileItem.className = 'file-name';
-                fileItem.textContent = node.name;
-                
-                fileItem.onclick = (e) => {
-                    e.stopPropagation();
-                    renderContent(node);
-                };
-                li.appendChild(fileItem);
+            if (node.children.length > 0) {
+                const ul = document.createElement('ul');
+                ul.className = 'nested tree-ul';
+                node.children.forEach(child => buildTree(child, ul));
+                li.appendChild(ul);
             }
-
-            parentEl.appendChild(li);
+            container.appendChild(li);
         }
 
-        function renderContent(file) {
-            let html = `
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-                    <h2 style="margin:0; font-weight:400; color:#2c3e50;">${file.name}</h2>
-                    <span class="file-type">${file.is_image ? 'IMAGE' : 'TEXT'}</span>
+        function renderDetails(node) {
+            const view = document.getElementById('details-view');
+            let plotsHtml = '';
+            let filesHtml = '';
+
+            // Separate plots from files
+            if (node.impression_data) {
+                const plots = node.impression_data.filter(f => f.is_image);
+                const files = node.impression_data.filter(f => !f.is_image);
+
+                if (plots.length > 0) {
+                    plotsHtml = `<div class="section-title">📊 Visual Plots</div><div class="plots-grid">`;
+                    plots.forEach(p => {
+                        plotsHtml += `
+                            <div class="plot-card">
+                                <a href="${p.url}" target="_blank"><img src="${p.url}" alt="${p.name}"></a>
+                                <div class="plot-info">
+                                    <span style="overflow:hidden; text-overflow:ellipsis;">${p.name}</span>
+                                    <a href="${p.url}" download class="btn-action">⬇️</a>
+                                </div>
+                            </div>`;
+                    });
+                    plotsHtml += `</div>`;
+                }
+
+                if (files.length > 0) {
+                    filesHtml = `<div class="section-title">📄 Data & Log Files</div><div class="file-list">`;
+                    files.forEach((f, i) => {
+                        filesHtml += `
+                            <div class="file-row">
+                                <div class="file-header">
+                                    <span><strong>${f.name}</strong> <small style="color:#999">(${f.source_dir})</small></span>
+                                    <div>
+                                        ${f.is_text ? `<button class="btn-action" onclick="toggleText(${i})">View</button>` : ''}
+                                        <a href="${f.url}" download class="btn-action">Download</a>
+                                    </div>
+                                </div>
+                                <div id="txt-${i}" class="text-preview">${f.content}</div>
+                            </div>`;
+                    });
+                    filesHtml += `</div>`;
+                }
+            }
+
+            view.innerHTML = `
+                <div class="header-area">
+                    <h1 style="margin:0;">${node.name} <span class="badge bg-${node.object_type}">${node.object_type}</span></h1>
+                    ${node.impression_id ? `
+                        <div style="text-align:right">
+                            <code style="display:block; font-size:0.7rem;">ID: ${node.impression_id}</code>
+                            <button class="btn-action" onclick="copyId('${node.impression_id}')">📋 Copy ID</button>
+                            <a href="${node.imp_view_url}" target="_blank" class="btn-action">🔗 Full View</a>
+                        </div>
+                    ` : ''}
                 </div>
-                <hr style="border:0; border-top:1px solid #eee; margin-bottom:1.5rem;">
+                ${node.readme_content ? `<div class="section-title">📝 README</div><div class="readme-box">${node.readme_content}</div>` : ''}
+                ${plotsHtml}
+                ${filesHtml}
             `;
-
-            if (file.is_image) {
-                html += `<img src="${file.url || 'https://via.placeholder.com/300'}" style="width:100%; border-radius:10px;">`;
-            } else {
-                html += `
-                    <div class="text-box">
-                        <pre>${file.content || 'No content available.'}</pre>
-                    </div>
-                `;
-            }
-            contentViewer.innerHTML = html;
         }
 
-        // Initialize
-        buildTree(deepData, treeContainer);
+        window.toggleText = (id) => {
+            const el = document.getElementById(`txt-${id}`);
+            el.style.display = (el.style.display === 'block') ? 'none' : 'block';
+        };
+
+        window.copyId = (id) => {
+            navigator.clipboard.writeText(id).then(() => alert('Impression ID copied!'));
+        };
+
+        buildTree(projectData, document.getElementById('tree-container'));
     </script>
 </body>
 </html>

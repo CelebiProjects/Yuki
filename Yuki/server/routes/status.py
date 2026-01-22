@@ -414,8 +414,12 @@ def bookkeeping():
             os.environ["HOME"],
             ".Yuki", "Bookkeep", secure_filename(project_uuid))
 
-    if not os.path.exists(base_save_path):
-        os.makedirs(base_save_path)
+    # Clean the folder first
+    if os.path.exists(base_save_path):
+        import shutil
+        shutil.rmtree(base_save_path)
+
+    os.makedirs(base_save_path)
 
     # 3. Save the manifest itself for reference
     with open(os.path.join(base_save_path, "manifest.json"), "w") as f:

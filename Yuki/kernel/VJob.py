@@ -143,17 +143,20 @@ class VJob:
         if status == "SUCCESS":
             config_file.write_variable("status", "success")
 
-    def _read_workflow_results(self, workflow_path):
+    def _read_workflow_results(self, workflow_path, logger=None):
         """Read workflow results and return status."""
         try:
             results_file = metadata.ConfigFile(os.path.join(workflow_path, "results.json"))
             results = results_file.read_variable("results", {})
             return results.get("status", "unknown")
         except Exception:
-            print("Update status from workflow failed.")
+            if logger:
+                logger("Update status from workflow failed.")
+            else:
+                print("Update status from workflow failed.")
             return None
 
-    def _find_matched_step(self, workflow_path):
+    def _find_matched_step(self, workflow_path, logger=None):
         """Find the matched step in workflow log for this job."""
         try:
             log_file = metadata.ConfigFile(os.path.join(workflow_path, "log.json"))
@@ -162,7 +165,10 @@ class VJob:
                 if step.get("job_name", "") == f"step{self.short_uuid()}":
                     return step
         except Exception:
-            print("No log file found.")
+            if logger:
+                logger(f"No log file found at {workflow_path}")
+            else:
+                print("No log file found.")
         return None
 
     def _write_step_logs(self, matched_step):
@@ -175,9 +181,12 @@ class VJob:
             with open(os.path.join(log_dir, "chern.stdout"), "w", encoding='utf-8') as f:
                 f.write(logs)
 
-    def _update_job_status(self, config_file, current_status, step_status, full_workflow_status):
+    def _update_job_status(self, config_file, current_status, step_status, full_workflow_status, logger=None):
         """Update job status based on current status, step status, and workflow status."""
-        print("New status:", step_status)
+        if logger:
+            logger(f"Job {self.short_uuid()} new status: {step_status}")
+        else:
+            print("New status:", step_status)
 
         if current_status == "raw":
             if len(step_status) < 20:
@@ -201,7 +210,7 @@ class VJob:
             else:
                 config_file.write_variable("status", "unknown")
 
-    def update_status_from_workflow(self, workflow_path):
+    def update_status_from_workflow(self, workflow_path, logger=None):
         """Update job status based on workflow status."""
         if self.job_type() == "algorithm":
             return
@@ -209,30 +218,39 @@ class VJob:
         config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
         current_status = config_file.read_variable("status", "raw")
         config_file.write_variable("machine_id", self.machine_id)
-        print("Current status is: ", current_status)
+        if logger:
+            logger(f"Job {self.short_uuid()} current status: {current_status}")
+        else:
+            print("Current status is: ", current_status)
 
         if current_status in ('finished', 'success', 'failed'):
             return
 
         # Read workflow results
-        full_workflow_status = self._read_workflow_results(workflow_path)
+        full_workflow_status = self._read_workflow_results(workflow_path, logger)
         if full_workflow_status is None:
             return
 
-        print("Full workflow status:", full_workflow_status)
+        if logger:
+            logger(f"Full workflow status: {full_workflow_status}")
+        else:
+            print("Full workflow status:", full_workflow_status)
 
         # Find matched step
-        matched_step = self._find_matched_step(workflow_path)
+        matched_step = self._find_matched_step(workflow_path, logger)
 
         # Determine status from matched step or use full workflow status
         status = full_workflow_status
         if matched_step:
             status = matched_step.get("status", "unknown")
-            print("status from matched step:", status)
+            if logger:
+                logger(f"Status from matched step: {status}")
+            else:
+                print("status from matched step:", status)
             self._write_step_logs(matched_step)
 
         # Update job status
-        self._update_job_status(config_file, current_status, status, full_workflow_status)
+        self._update_job_status(config_file, current_status, status, full_workflow_status, logger)
 
     def error(self):
         """Get error message if any."""

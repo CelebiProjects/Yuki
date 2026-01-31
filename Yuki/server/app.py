@@ -29,6 +29,7 @@ def create_app():
     logger.setLevel(logging.DEBUG)
 
     # Flask configuration
+    flask_app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1 GB
     flask_app.config['SECRET_KEY'] = 'top-secret!'
     flask_app.config['CELERY_broker_url'] = 'amqp://localhost'
     flask_app.config['result_backend'] = 'rpc://'

@@ -22,10 +22,10 @@ class ReanaWorkflow(VWorkflow):
     def _execute_backend(self):
         """Execute workflow using REANA backend."""
         try:
-            print("Creating the workflow")
+            self.logger("Creating the workflow")
             self.create_workflow()
         except:
-            print("Failed to create the workflow")
+            self.logger("Failed to create the workflow")
             self.set_workflow_status("failed")
             for job in self.jobs:
                 if job.is_input:
@@ -36,10 +36,10 @@ class ReanaWorkflow(VWorkflow):
             raise
 
         try:
-            print("Upload file")
+            self.logger("Upload file")
             self.upload_file()
         except:
-            print("Failed to upload the files")
+            self.logger("Failed to upload the files")
             self.set_workflow_status("failed")
             for job in self.jobs:
                 if job.is_input:
@@ -64,7 +64,7 @@ class ReanaWorkflow(VWorkflow):
     def _sync_external_job_status(self, job):
         """Poll REANA for external dependency status."""
         self.update_workflow_status()
-        job.update_status_from_workflow(self.path)
+        job.update_status_from_workflow(self.path, self.logger)
 
     def create_workflow(self):
         """Create a workflow using REANA client."""
@@ -78,6 +78,7 @@ class ReanaWorkflow(VWorkflow):
                 }
         reana_json["workflow"]["type"] = "snakemake"
         reana_json["workflow"]["file"] = "Snakefile"
+        self.logger(f"reana_json: {json.dumps(reana_json, indent=2)}")
         client.create_workflow(
                 reana_json,
                 self.get_name(),
@@ -92,8 +93,8 @@ class ReanaWorkflow(VWorkflow):
         config_file = metadata.ConfigFile(path)
         urls = config_file.read_variable("urls", {})
         url = urls.get(machine_id, "")
-        print(f"machine_id = {machine_id}")
-        print(f"url = {url}")
+        self.logger(f"machine_id = {machine_id}")
+        self.logger(f"reana_url = {url}")
         from reana_client.api import client
         from reana_commons.api_client import BaseAPIClient
         os.environ["REANA_SERVER_URL"] = url
@@ -163,9 +164,12 @@ class ReanaWorkflow(VWorkflow):
         """Upload files to REANA workflow."""
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
-        for job in self.jobs:
-            for name in job.files():
-                print(f"upload file: {name}")
+        total_jobs = len(self.jobs)
+        for j_idx, job in enumerate(self.jobs):
+            files = job.files()
+            total_files = len(files)
+            for f_idx, name in enumerate(files):
+                self.logger(f"[Job {j_idx+1}/{total_jobs}] Uploading file {f_idx+1}/{total_files}: {name}")
                 with open(os.path.join(job.path, "contents", name[8:]), "rb") as f:
                     client.upload_file(
                         self.get_name(),
@@ -175,8 +179,10 @@ class ReanaWorkflow(VWorkflow):
                     )
             if job.environment() == "rawdata":
                 filelist = os.listdir(os.path.join(job.path, "rawdata"))
-                for filename in filelist:
+                total_raw = len(filelist)
+                for f_idx, filename in enumerate(filelist):
                     with open(os.path.join(job.path, "rawdata", filename), "rb") as f:
+                        self.logger(f"[Job {j_idx+1}/{total_jobs}] Uploading rawdata {f_idx+1}/{total_raw}: {filename}")
                         client.upload_file(
                             self.get_name(),
                             f,
@@ -187,7 +193,7 @@ class ReanaWorkflow(VWorkflow):
                 if job.use_eos() and job.machine_id == self.machine_id:
                     continue
                 impression = job.path.split("/")[-1]
-                # print(f"Downloading the files from impression {impression}")
+                # self.logger(f"Downloading the files from impression {impression}")
                 path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, impression, job.machine_id)
                 if not os.path.exists(os.path.join(path, "stageout")):
                     workflow = ReanaWorkflow(self.project_uuid, [], job.workflow_id())
@@ -196,8 +202,10 @@ class ReanaWorkflow(VWorkflow):
                 # Reset the id
                 self.set_enviroment(self.machine_id)
                 filelist = os.listdir(os.path.join(path, "stageout"))
-                for filename in filelist:
+                total_input = len(filelist)
+                for f_idx, filename in enumerate(filelist):
                     with open(os.path.join(path, "stageout", filename), "rb") as f:
+                        self.logger(f"[Job {j_idx+1}/{total_jobs}] Uploading input {f_idx+1}/{total_input}: {filename}")
                         client.upload_file(
                             self.get_name(),
                             f,
@@ -206,6 +214,7 @@ class ReanaWorkflow(VWorkflow):
                         )
 
         with open(self.snakefile_path, "rb") as f:
+            self.logger("Uploading Snakefile")
             client.upload_file(
                 self.get_name(),
                 f,
@@ -218,6 +227,7 @@ class ReanaWorkflow(VWorkflow):
             "file": "Snakefile",
             })
         with open(os.path.join(self.path, "reana.yaml"), "rb") as f:
+            self.logger("Uploading reana.yaml")
             client.upload_file(
                 self.get_name(),
                 f,
@@ -230,8 +240,7 @@ class ReanaWorkflow(VWorkflow):
         """Update workflow status from REANA."""
         try:
             from reana_client.api import client
-            print("This workflow is ", self.uuid)
-            print("The machine id is ", self.machine_id)
+            self.logger(f"Updating status for workflow {self.uuid} on machine {self.machine_id}")
             self.set_enviroment(self.machine_id)
             results = client.get_workflow_status(
                 self.get_name(),
@@ -245,13 +254,13 @@ class ReanaWorkflow(VWorkflow):
             # decode the logstring with json
             log = json.loads(logstring)
             log_file.write_variable("logs", log)
+            self.logger(f"Workflow status: {results.get('status', 'unknown')}")
         except Exception as e:
-            print("Failed to update the workflow status")
-            print(e)
+            self.logger(f"Failed to update the workflow status: {e}")
 
     def download(self, impression=None):
         """Download workflow results."""
-        # print("Downloading the files")
+        # self.logger("Downloading the files")
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         if impression:
@@ -264,22 +273,22 @@ class ReanaWorkflow(VWorkflow):
                         "imp"+impression[0:7]+"/stageout"
                     )
                     os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
-                    # print(f"Files: {files}")
-                    for file in files:
-                        # print(f'Downloading {file["name"]}')
+                    # self.logger(f"Files: {files}")
+                    total_files = len(files)
+                    for i, file in enumerate(files):
+                        self.logger(f'[{i+1}/{total_files}] Downloading stageout: {file["name"]}')
                         output = client.download_file(
                             self.get_name(),
                             file["name"],
                             self.get_access_token(self.machine_id),
                         )
-                        print(f'Downloading {file["name"]}')
                         filename = os.path.join(path, file["name"][11:])
                         with open(filename, "wb") as f:
                             f.write(output[0])
                     # all done, make a finish file
                     open(os.path.join(path, "stageout.downloaded"), "w").close()
             except Exception as e:
-                print("Failed to download stageout:", e)
+                self.logger(f"Failed to download stageout: {e}")
 
             try:
                 if not os.path.exists(os.path.join(path, "logs.downloaded")):
@@ -289,24 +298,25 @@ class ReanaWorkflow(VWorkflow):
                         "imp"+impression[0:7]+"/logs"
                     )
                     os.makedirs(os.path.join(path, "logs"), exist_ok=True)
-                    for file in files:
+                    total_logs = len(files)
+                    for i, file in enumerate(files):
+                        self.logger(f'[{i+1}/{total_logs}] Downloading log: {file["name"]}')
                         output = client.download_file(
                             self.get_name(),
                             file["name"],
                             self.get_access_token(self.machine_id),
                         )
-                        print(f'Downloading {file["name"]}')
                         filename = os.path.join(path, file["name"][11:])
                         with open(filename, "wb") as f:
                             f.write(output[0])
                     # all done, make a finish file
                     open(os.path.join(path, "logs.downloaded"), "w").close()
             except Exception as e:
-                print("Failed to download logs:", e)
+                self.logger(f"Failed to download logs: {e}")
 
     def download_outputs(self, impression=None):
         """Download workflow results."""
-        # print("Downloading the files")
+        # self.logger("Downloading the files")
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         if impression:
@@ -319,26 +329,26 @@ class ReanaWorkflow(VWorkflow):
                         "imp"+impression[0:7]+"/stageout"
                     )
                     os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
-                    # print(f"Files: {files}")
-                    for file in files:
-                        # print(f'Downloading {file["name"]}')
+                    # self.logger(f"Files: {files}")
+                    total_files = len(files)
+                    for i, file in enumerate(files):
+                        self.logger(f'[{i+1}/{total_files}] Downloading stageout: {file["name"]}')
                         output = client.download_file(
                             self.get_name(),
                             file["name"],
                             self.get_access_token(self.machine_id),
                         )
-                        print(f'Downloading {file["name"]}')
                         filename = os.path.join(path, file["name"][11:])
                         with open(filename, "wb") as f:
                             f.write(output[0])
                     # all done, make a finish file
                     open(os.path.join(path, "stageout.downloaded"), "w").close()
             except Exception as e:
-                print("Failed to download stageout:", e)
+                self.logger(f"Failed to download stageout: {e}")
 
     def download_logs(self, impression=None):
         """Download workflow logs."""
-        # print("Downloading the files")
+        # self.logger("Downloading the files")
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         if impression:
@@ -351,20 +361,21 @@ class ReanaWorkflow(VWorkflow):
                         "imp"+impression[0:7]+"/logs"
                     )
                     os.makedirs(os.path.join(path, "logs"), exist_ok=True)
-                    for file in files:
+                    total_logs = len(files)
+                    for i, file in enumerate(files):
+                        self.logger(f'[{i+1}/{total_logs}] Downloading log: {file["name"]}')
                         output = client.download_file(
                             self.get_name(),
                             file["name"],
                             self.get_access_token(self.machine_id),
                         )
-                        print(f'Downloading {file["name"]}')
                         filename = os.path.join(path, file["name"][11:])
                         with open(filename, "wb") as f:
                             f.write(output[0])
                     # all done, make a finish file
                     open(os.path.join(path, "logs.downloaded"), "w").close()
             except Exception as e:
-                print("Failed to download logs:", e)
+                self.logger(f"Failed to download logs: {e}")
 
     def ping(self):
         """Ping the REANA server."""

@@ -32,10 +32,10 @@ class DryWorkflow(VWorkflow):
     def _execute_backend(self):
         """Execute workflow using local backend (copy files locally)."""
         try:
-            print("[LOCAL] Creating workflow structure")
+            self.logger("[LOCAL] Creating workflow structure")
             self.create_local_structure()
         except Exception as e:
-            print(f"[LOCAL] Failed to create workflow structure: {e}")
+            self.logger(f"[LOCAL] Failed to create workflow structure: {e}")
             self.set_workflow_status("failed")
             for job in self.jobs:
                 if job.is_input:
@@ -46,10 +46,10 @@ class DryWorkflow(VWorkflow):
             raise
 
         try:
-            print("[LOCAL] Copying files")
+            self.logger("[LOCAL] Copying files")
             self.copy_files_local()
         except Exception as e:
-            print(f"[LOCAL] Failed to copy files: {e}")
+            self.logger(f"[LOCAL] Failed to copy files: {e}")
             self.set_workflow_status("failed")
             for job in self.jobs:
                 if job.is_input:
@@ -61,14 +61,14 @@ class DryWorkflow(VWorkflow):
 
         # Set status to ready for local execution
         self.set_workflow_status("ready_for_local_execution")
-        print(f"[LOCAL] Workflow prepared in: {self.local_exec_path}")
-        print(f"[LOCAL] Snakefile: {os.path.join(self.local_exec_path, 'Snakefile')}")
-        print("[LOCAL] You can now run: snakemake --cores all")
+        self.logger(f"[LOCAL] Workflow prepared in: {self.local_exec_path}")
+        self.logger(f"[LOCAL] Snakefile: {os.path.join(self.local_exec_path, 'Snakefile')}")
+        self.logger("[LOCAL] You can now run: snakemake --cores all")
 
     def _sync_external_job_status(self, job):
         """Poll local status for external dependency."""
         # In local mode, check if files exist
-        job.update_status_from_workflow(self.path)
+        job.update_status_from_workflow(self.path, self.logger)
 
     def create_local_structure(self):
         """Create local workflow structure."""
@@ -86,29 +86,34 @@ class DryWorkflow(VWorkflow):
         }
 
         # Write workflow info
+        self.logger(f"[LOCAL] Writing workflow info to {os.path.join(self.local_exec_path, 'workflow_info.json')}")
         with open(os.path.join(self.local_exec_path, "workflow_info.json"), "w") as f:
             json.dump(workflow_info, f, indent=2)
 
     def copy_files_local(self):
         """Copy all files to local execution directory."""
-        for job in self.jobs:
+        total_jobs = len(self.jobs)
+        for j_idx, job in enumerate(self.jobs):
             job_dir = os.path.join(self.local_exec_path, f"imp{job.short_uuid()}")
 
             # Copy job files
-            for name in job.files():
+            files = job.files()
+            total_files = len(files)
+            for f_idx, name in enumerate(files):
                 src_path = os.path.join(job.path, "contents", name[8:])
                 dst_path = os.path.join(self.local_exec_path, "imp" + name)
                 os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                 if os.path.exists(src_path):
                     shutil.copy2(src_path, dst_path)
-                    print(f"[LOCAL] Copied: {name}")
+                    self.logger(f"[LOCAL] [Job {j_idx+1}/{total_jobs}] Copied file {f_idx+1}/{total_files}: {name}")
 
             # Handle rawdata environment
             if job.environment() == "rawdata":
                 rawdata_path = os.path.join(job.path, "rawdata")
                 if os.path.exists(rawdata_path):
                     filelist = os.listdir(rawdata_path)
-                    for filename in filelist:
+                    total_raw = len(filelist)
+                    for f_idx, filename in enumerate(filelist):
                         src_path = os.path.join(rawdata_path, filename)
                         dst_path = os.path.join(
                             self.local_exec_path,
@@ -118,7 +123,7 @@ class DryWorkflow(VWorkflow):
                         )
                         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                         shutil.copy2(src_path, dst_path)
-                        print(f"[LOCAL] Copied rawdata: {filename}")
+                        self.logger(f"[LOCAL] [Job {j_idx+1}/{total_jobs}] Copied rawdata {f_idx+1}/{total_raw}: {filename}")
 
             # Handle input jobs (copy from dependency workflows)
             elif job.is_input:
@@ -135,7 +140,8 @@ class DryWorkflow(VWorkflow):
 
                 if os.path.exists(src_stageout):
                     filelist = os.listdir(src_stageout)
-                    for filename in filelist:
+                    total_input = len(filelist)
+                    for f_idx, filename in enumerate(filelist):
                         src_path = os.path.join(src_stageout, filename)
                         dst_path = os.path.join(
                             self.local_exec_path,
@@ -145,21 +151,21 @@ class DryWorkflow(VWorkflow):
                         )
                         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                         shutil.copy2(src_path, dst_path)
-                        print(f"[LOCAL] Copied input: {filename}")
+                        self.logger(f"[LOCAL] [Job {j_idx+1}/{total_jobs}] Copied input {f_idx+1}/{total_input}: {filename}")
 
         # Copy Snakefile
         shutil.copy2(
             self.snakefile_path,
             os.path.join(self.local_exec_path, "Snakefile")
         )
-        print(f"[LOCAL] Copied: Snakefile")
+        self.logger(f"[LOCAL] Copied: Snakefile")
 
     def update_workflow_status(self):
         """Update workflow status from local execution."""
         try:
             # Check if all output files exist
             all_done = True
-            print("The jobs are:")
+            self.logger("[LOCAL] Checking jobs status...")
 
             # Get jobs from json
             workflow_info_json = os.path.join(self.local_exec_path, "workflow_info.json")
@@ -170,11 +176,10 @@ class DryWorkflow(VWorkflow):
                 name = step["name"]
                 jobs.append(name[4:])
 
-            print(self.jobs)
-            for job in jobs:
+            for job_uuid in jobs:
                 done_file = os.path.join(
                     self.local_exec_path,
-                    f"{job}.done"
+                    f"{job_uuid}.done"
                     )
 
                 if not os.path.exists(done_file):
@@ -192,33 +197,34 @@ class DryWorkflow(VWorkflow):
                 "progress": {
                     "total": len(jobs),
                     "completed": sum(
-                        1 for job in jobs
+                        1 for job_uuid in jobs
                         if os.path.exists(
                             os.path.join(
                                 self.local_exec_path,
-                                f"{job}.done"
+                                f"{job_uuid}.done"
                             )
                         )
                     )
                 }
             }
+            self.logger(f"[LOCAL] Workflow status: {status}, Progress: {results['progress']['completed']}/{results['progress']['total']}")
 
             path = os.path.join(self.path, "results.json")
             results_file = metadata.ConfigFile(path)
             results_file.write_variable("results", results)
 
         except Exception as e:
-            print(f"[LOCAL] Failed to update workflow status: {e}")
+            self.logger(f"[LOCAL] Failed to update workflow status: {e}")
 
     def check_status(self):
         """Check the status of local workflow execution."""
-        print("[LOCAL] Checking status...")
+        self.logger("[LOCAL] Checking status...")
         self.update_workflow_status()
         return self.status()
 
     def kill(self):
         """Kill local workflow execution."""
-        print("[LOCAL] Killing local workflow (manual intervention required)")
+        self.logger("[LOCAL] Killing local workflow (manual intervention required)")
         self.set_workflow_status("killed")
         for job in self.jobs:
             if job.is_input:
@@ -229,7 +235,7 @@ class DryWorkflow(VWorkflow):
 
     def download(self, impression=None):
         """Download/collect results from local execution."""
-        print("[LOCAL] Collecting results from local execution")
+        self.logger("[LOCAL] Collecting results from local execution")
         if impression:
             src_path = os.path.join(
                 self.local_exec_path,
@@ -248,11 +254,13 @@ class DryWorkflow(VWorkflow):
 
             if os.path.exists(src_path):
                 os.makedirs(dst_path, exist_ok=True)
-                for filename in os.listdir(src_path):
+                filelist = os.listdir(src_path)
+                total_files = len(filelist)
+                for i, filename in enumerate(filelist):
                     src_file = os.path.join(src_path, filename)
                     dst_file = os.path.join(dst_path, filename)
                     shutil.copy2(src_file, dst_file)
-                    print(f"[LOCAL] Collected: {filename}")
+                    self.logger(f"[LOCAL] [{i+1}/{total_files}] Collected: {filename}")
 
                 # Mark as downloaded
                 open(os.path.join(os.path.dirname(dst_path), "stageout.downloaded"), "w").close()
@@ -263,7 +271,7 @@ class DryWorkflow(VWorkflow):
 
     def download_logs(self, impression=None):
         """Download logs from local execution."""
-        print("[LOCAL] Collecting logs from local execution")
+        self.logger("[LOCAL] Collecting logs from local execution")
         if impression:
             src_path = os.path.join(
                 self.local_exec_path,
@@ -282,17 +290,19 @@ class DryWorkflow(VWorkflow):
 
             if os.path.exists(src_path):
                 os.makedirs(dst_path, exist_ok=True)
-                for filename in os.listdir(src_path):
+                filelist = os.listdir(src_path)
+                total_logs = len(filelist)
+                for i, filename in enumerate(filelist):
                     src_file = os.path.join(src_path, filename)
                     dst_file = os.path.join(dst_path, filename)
                     shutil.copy2(src_file, dst_file)
-                    print(f"[LOCAL] Collected log: {filename}")
+                    self.logger(f"[LOCAL] [{i+1}/{total_logs}] Collected log: {filename}")
 
                 # Mark as downloaded
                 open(os.path.join(os.path.dirname(dst_path), "logs.downloaded"), "w").close()
 
     def ping(self):
         """Ping local system."""
-        print("[LOCAL] Local workflow system is available")
+        self.logger("[LOCAL] Local workflow system is available")
         return True
 

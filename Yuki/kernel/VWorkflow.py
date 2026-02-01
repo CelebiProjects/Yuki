@@ -16,9 +16,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from CelebiChrono.utils import csys, metadata
 from CelebiChrono.kernel.chern_cache import ChernCache
-from Yuki.kernel.VJob import VJob
-from Yuki.kernel.VContainer import VContainer
-from Yuki.kernel.VImage import VImage
+from Yuki.kernel.vjob import VJob
+from Yuki.kernel.container_job import ContainerJob
+from Yuki.kernel.image_job import ImageJob
 from Yuki.utils import snakefile
 
 CHERN_CACHE = ChernCache.instance()
@@ -182,7 +182,7 @@ class VWorkflow(ABC):
             workflow_list = []
             input_jobs = [j for j in self.jobs if j.is_input and j.status() not in ("archived", "finished") and j.job_type() != "algorithm"]
             total_inputs = len(input_jobs)
-            
+
             for i, job in enumerate(input_jobs):
                 workflow = VWorkflow.create(self.project_uuid, [], job.workflow_id())
                 self.logger(f"[{i+1}/{total_inputs}] Checking dependency: Job {job.uuid} workflow {workflow.uuid}")
@@ -214,7 +214,7 @@ class VWorkflow(ABC):
                             ),
                         self.logger
                         )
-                
+
                 job_status = job.status()
                 # self.logger(f"Job {job.short_uuid()} status: {job_status}")
                 if job_status != "finished":
@@ -268,7 +268,7 @@ class VWorkflow(ABC):
             if job.object_type() == "task" and job.is_input:
                 if not job.use_eos() or job.machine_id != self.machine_id:
                     continue
-                container = VContainer(job.path, job.machine_id)
+                container = ContainerJob(job.path, job.machine_id)
                 setup_commands.extend(container.setup_commands())
 
         finalize_commands = []
@@ -276,7 +276,7 @@ class VWorkflow(ABC):
             if job.object_type() == "task" and job.is_input:
                 if not job.use_eos() or job.machine_id != self.machine_id:
                     continue
-                container = VContainer(job.path, job.machine_id)
+                container = ContainerJob(job.path, job.machine_id)
                 finalize_commands.extend(container.finalize_commands())
 
         snake_file.addline("\n", 0)
@@ -323,14 +323,14 @@ class VWorkflow(ABC):
             self.logger(f"[{i+1}/{total_jobs}] Processing job: {job}")
             if job.object_type() == "algorithm":
                 # In this case, if the command is compile, we need to compile it
-                image = VImage(job.path, job.machine_id)
+                image = ImageJob(job.path, job.machine_id)
                 image.is_input = job.is_input
                 snakemake_rule = image.snakemake_rule(self.machine_id)
                 step = image.step(self.machine_id)
 
                 # In this case, we also need to run the "touch"
             if job.object_type() == "task":
-                container = VContainer(job.path, job.machine_id)
+                container = ContainerJob(job.path, job.machine_id)
                 container.is_input = job.is_input
                 snakemake_rule = container.snakemake_rule(self.machine_id)
                 step = container.step(self.machine_id)

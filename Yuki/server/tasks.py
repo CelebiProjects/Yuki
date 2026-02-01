@@ -4,8 +4,8 @@ Celery tasks for Yuki server.
 import os
 from celery import Celery
 from CelebiChrono.utils import metadata
-from Yuki.kernel.VJob import VJob
-from Yuki.kernel.vworkflow import VWorkflow
+from ..kernel.vjob import VJob
+from ..kernel.vworkflow import VWorkflow
 
 
 def create_celery_app():

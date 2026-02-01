@@ -1,18 +1,18 @@
 """
 Virtual Container module for Yuki kernel.
 
-This module contains the VContainer class which represents a container-based job
+This module contains the ContainerJob class which represents a container-based job
 that extends VJob functionality with container-specific operations like
 environment management, command execution, and input/output handling.
 """
 import os
 from CelebiChrono.utils import csys
 from CelebiChrono.utils import metadata
-from Yuki.kernel.VJob import VJob
-from Yuki.kernel.VImage import VImage
+from .VJob import VJob
+from .image_job import ImageJob
 import time
 
-class VContainer(VJob):
+class ContainerJob(VJob):
     """
     Virtual Container class that extends VJob for container-based operations.
 
@@ -22,7 +22,7 @@ class VContainer(VJob):
 
     def __init__(self, path, machine_id):
         """
-        Initialize a VContainer instance.
+        Initialize a ContainerJob instance.
 
         Args:
             path (str): Path to the container job
@@ -43,10 +43,10 @@ class VContainer(VJob):
 
     def image(self):
         """
-        Get the VImage instance from predecessor algorithm jobs.
+        Get the ImageJob instance from predecessor algorithm jobs.
 
         Returns:
-            VImage or None: The image associated with predecessor algorithm jobs
+            ImageJob or None: The image associated with predecessor algorithm jobs
         """
         if self._image:
             return self._image
@@ -56,7 +56,7 @@ class VContainer(VJob):
         for pred_job in predecessors:
             if pred_job.job_type() == "algorithm":
                 print(f"    >>>> >>>> Image retrieval time after finding predecessor: {time.time() - start_time}")
-                self._image = VImage(pred_job.path, self.machine_id)
+                self._image = ImageJob(pred_job.path, self.machine_id)
                 return self._image
         return None
 

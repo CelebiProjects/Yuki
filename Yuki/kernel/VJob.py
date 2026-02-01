@@ -1,16 +1,17 @@
 """
 Virtual Job module for Yuki kernel.
 
-This module contains the VJob class which represents a virtual job object
-that can include VVolume, VImage, VContainer and other related entities.
+This module contains the VJob abstract base class which represents a virtual job object
+that can include VVolume, ImageJob, ContainerJob and other related entities.
 """
 import os
 import time
+from abc import ABC, abstractmethod
 
 from CelebiChrono.utils import metadata
 
-class VJob:
-    """Virtual class of the objects, including VVolume, VImage, VContainer."""
+class VJob(ABC):
+    """Abstract base class for virtual job objects, including VVolume, ImageJob, ContainerJob."""
 
     def __init__(self, path, machine_id):
         """Initialize the project with the only **information** of an object instance."""
@@ -21,7 +22,7 @@ class VJob:
 
         self.is_input = False
         self.path = path
-        self.uuid = path[-32:]	
+        self.uuid = path[-32:]
         self.project_uuid = path[-64-1:-32-1]
         self.machine_id = machine_id
         self.config_file = metadata.ConfigFile(
@@ -43,6 +44,30 @@ class VJob:
                 os.path.join(self.path, self.machine_id, "config.json")
                 )
 
+    def __new__(cls, path, machine_id):
+        """Factory method to automatically create suitable ImageJob or ContainerJob."""
+        # If VJob is being directly instantiated, determine the correct subclass
+        if cls is VJob:
+            # Create a temporary instance to read the object type
+            temp_instance = object.__new__(cls)
+            temp_instance.__init__(path, machine_id)
+            job_type = temp_instance.job_type()
+
+            # Import here to avoid circular imports
+            from Yuki.kernel.image_job import ImageJob
+            from Yuki.kernel.container_job import ContainerJob
+
+            # Create the appropriate subclass instance
+            if job_type == "algorithm":
+                return object.__new__(ImageJob)
+            elif job_type == "task":
+                return object.__new__(ContainerJob)
+            else:
+                # Default to ContainerJob for unknown types
+                return object.__new__(ContainerJob)
+        else:
+            # Normal instantiation for subclasses
+            return object.__new__(cls)
 
     def __str__(self):
         """Define the behavior of print(vobject)."""

@@ -1,7 +1,7 @@
 """
 Virtual Image module for Yuki kernel.
 
-This module contains the VImage class which represents a container image job
+This module contains the ImageJob class which represents a container image job
 that extends VJob functionality with image building, environment management,
 and workflow execution capabilities. A image can be determined uniquely by its
 build configuration and dependencies.
@@ -10,9 +10,9 @@ import os
 
 from CelebiChrono.utils import csys
 from CelebiChrono.utils import metadata
-from Yuki.kernel.VJob import VJob
+from .vjob import VJob
 # from Yuki.kernel.VWorkflow import VWorkflow
-class VImage(VJob):
+class ImageJob(VJob):
     """
     Virtual Image class that extends VJob for container image operations.
 
@@ -22,7 +22,7 @@ class VImage(VJob):
 
     def __init__(self, path, machine_id):
         """
-        Initialize a VImage instance.
+        Initialize a ImageJob instance.
 
         Args:
             path (str): Path to the image job

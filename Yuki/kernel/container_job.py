@@ -8,7 +8,7 @@ environment management, command execution, and input/output handling.
 import os
 from CelebiChrono.utils import csys
 from CelebiChrono.utils import metadata
-from .VJob import VJob
+from .vjob import VJob
 from .image_job import ImageJob
 import time
 

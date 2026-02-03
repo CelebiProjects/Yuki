@@ -1,6 +1,6 @@
 import os
 from CelebiChrono.utils.metadata import ConfigFile
-from .VJob import VJob
+from .vjob import VJob
 from .vworkflow import VWorkflow
 from ..server.config import config
 

@@ -48,6 +48,13 @@ class VWorkflow(ABC):
         if uuid:
             self.start_job = None
             self.machine_id = self.config_file.read_variable("machine_id", machine_id or "")
+            # load the jobs from the config file
+            jobs_info = self.config_file.read_variable("jobs_info", {})
+            for job_uuid, info in jobs_info.items():
+                job_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage", self.project_uuid, job_uuid)
+                job = VJob(job_path, self.machine_id)
+                job.is_input = info.get("is_input", False)
+                self.jobs.append(job)
         else:
             self.start_job = jobs.copy() if isinstance(jobs, list) else [jobs]
             self.machine_id = self.start_job[0].machine_id if self.start_job else (machine_id or "")
@@ -109,6 +116,17 @@ class VWorkflow(ABC):
         total_jobs = len(self.jobs)
         for i, job in enumerate(self.jobs):
             self.logger(f"[{i+1}/{total_jobs}] job: {job}, is input: {job.is_input}, job status: {job.status()}, job type: {job.job_type()}")
+
+        # Save the jobs info to the config file
+        jobs_info = {}
+        for job in self.jobs:
+            jobs_info[job.uuid] = {
+                "is_input": job.is_input,
+                "job_type": job.job_type(),
+                "status": job.status(),
+                "workflow_id": job.workflow_id()
+            }
+        self.config_file.write_variable("jobs_info", jobs_info)
 
         for job in self.jobs:
             if job.is_input:
@@ -459,8 +477,8 @@ class VWorkflow(ABC):
         results_file = metadata.ConfigFile(path)
         results = results_file.read_variable("results", {})
         results["status"] = status
-        results_file.write_variable("results", results)
-
+        results_file.write_variable("results", results) 
+                
     def watermark(self, impression=None):
         """Add watermark to PNG images for a given impression.
 

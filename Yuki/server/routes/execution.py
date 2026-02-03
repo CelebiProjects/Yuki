@@ -5,8 +5,8 @@ from logging import getLogger
 
 from flask import Blueprint, request
 
-from ..kernel.vjob import vjob
-from ..kernel.container_job import container_job
+from ...kernel.vjob import VJob
+from ...kernel.container_job import ContainerJob
 from ..config import config
 from ..tasks import task_exec_impression
 import shutil
@@ -35,7 +35,7 @@ def execute():
             print("--------------")
             print("impression:", impression)
             job_path = config.get_job_path(project_uuid, impression)
-            job = vjob(job_path, None)
+            job = VJob(job_path, None)
             print("job", job, job.job_type(), job.status())
 
             if job.job_type() == "task":
@@ -44,7 +44,7 @@ def execute():
                     continue
                 job.set_status("waiting")
                 # Redefine, only aim for write use_eos variable
-                start_job = vjob(job_path, machine)
+                start_job = VJob(job_path, machine)
                 use_eos = use_eos_dict.get(impression, False)
                 start_job.set_use_eos(use_eos)
                 start_jobs.append(job)
@@ -70,7 +70,7 @@ def execute():
             job_path = config.get_job_path(project_uuid, impression)
             print("Project_uuid is:", project_uuid)
             print("Job path is:", job_path)
-            job = vjob(job_path, machine)
+            job = VJob(job_path, machine)
             job.set_runid(task.id)
         print("### <<< execute")
         return task.id
@@ -106,7 +106,7 @@ def run(project_uuid, impression, machine):
     logger.info("Trying to run it")
     task = task_exec_impression.apply_async(args=[project_uuid, impression, machine])
     job_path = config.get_job_path(project_uuid, impression)
-    vjob(job_path, machine).set_runid(task.id)
+    VJob(job_path, machine).set_runid(task.id)
     logger.info("Run id = %s", task.id)
     return task.id
 
@@ -116,12 +116,12 @@ def outputs(project_uuid, impression, machine):
     """Get outputs for an impression on a specific machine."""
     if machine == "none":
         path = config.get_job_path(project_uuid, impression)
-        job = vjob(path, None)
+        job = VJob(path, None)
         if job.job_type() == "task":
-            return " ".join(container_job(path, None).outputs())
+            return " ".join(ContainerJob(path, None).outputs())
 
     path = config.get_job_path(project_uuid, impression)
-    job = vjob(path, machine)
+    job = VJob(path, machine)
     if job.job_type() == "task":
-        return " ".join(container_job(path, machine).outputs())
+        return " ".join(ContainerJob(path, machine).outputs())
     return ""

@@ -54,8 +54,8 @@ class VJob(ABC):
             job_type = temp_instance.job_type()
 
             # Import here to avoid circular imports
-            from Yuki.kernel.image_job import ImageJob
-            from Yuki.kernel.container_job import ContainerJob
+            from ..kernel.image_job import ImageJob
+            from ..kernel.container_job import ContainerJob
 
             # Create the appropriate subclass instance
             if job_type == "algorithm":
@@ -203,8 +203,26 @@ class VJob(ABC):
             log_dir = os.path.join(self.path, self.machine_id, "logs")
             if not os.path.exists(log_dir):
                 os.makedirs(log_dir)
-            with open(os.path.join(log_dir, "chern.stdout"), "w", encoding='utf-8') as f:
+            with open(os.path.join(log_dir, "celebi.stdout"), "w", encoding='utf-8') as f:
                 f.write(logs)
+            config_file = metadata.ConfigFile(os.path.join(self.path, self.machine_id, "status.json"))
+            # print(matched_step)
+            start_time = matched_step.get("started_at", "")
+            end_time = matched_step.get("finished_at", "")
+            config_file.write_variable("status", matched_step.get("status", ""))
+            config_file.write_variable("started_at", start_time)
+            config_file.write_variable("finished_at", end_time)
+            # Format of times:
+            # 2026-01-21T16:40:34
+            # 2026-01-21T16:40:41
+            time_format = "%Y-%m-%dT%H:%M:%S"
+            # Get the end_time - start_time in seconds
+            start_struct = time.strptime(start_time, time_format)
+            end_struct = time.strptime(end_time, time_format)
+            start_epoch = time.mktime(start_struct)
+            end_epoch = time.mktime(end_struct)
+            duration = int(end_epoch - start_epoch)
+            config_file.write_variable("duration", duration)
 
     def _update_job_status(self, config_file, current_status, step_status, full_workflow_status, logger=None):
         """Update job status based on current status, step status, and workflow status."""

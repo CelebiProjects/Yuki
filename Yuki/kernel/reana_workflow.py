@@ -24,8 +24,8 @@ class ReanaWorkflow(VWorkflow):
         try:
             self.logger("Creating the workflow")
             self.create_workflow()
-        except:
-            self.logger("Failed to create the workflow")
+        except Exception as e:
+            self.logger(f"Failed to create the workflow: {e}")
             self.set_workflow_status("failed")
             for job in self.jobs:
                 if job.is_input:
@@ -34,6 +34,7 @@ class ReanaWorkflow(VWorkflow):
                     continue
                 job.set_status("failed")
             raise
+        
 
         try:
             self.logger("Upload file")
@@ -84,7 +85,6 @@ class ReanaWorkflow(VWorkflow):
                 self.get_name(),
                 self.get_access_token(self.machine_id)
                 )
-
 
     def set_enviroment(self, machine_id):
         """Set the environment variable for REANA server URL."""
@@ -154,7 +154,6 @@ class ReanaWorkflow(VWorkflow):
             False,
             self.get_access_token(self.machine_id)
         )
-
 
     def writeline(self, line):
         """Write a line to the YAML file."""
@@ -234,7 +233,6 @@ class ReanaWorkflow(VWorkflow):
                 "reana.yaml",
                 self.get_access_token(self.machine_id)
             )
-
 
     def update_workflow_status(self):
         """Update workflow status from REANA."""
@@ -384,3 +382,44 @@ class ReanaWorkflow(VWorkflow):
         from reana_client.api import client
         self.set_enviroment(self.machine_id)
         return client.ping(self.access_token)
+
+    def homekeep(self):
+        """Perform homekeeping tasks for the workflow.
+        Download all the results for the jobs in the workflow.
+        """
+        # if os.path.exists(os.path.join(self.path, "homekeep.done")):
+        #     self.logger("Homekeeping already done, skipping")
+        #     return
+        if self.status() != "finished":
+            self.logger("Workflow not finished, skipping homekeeping")
+            return
+        self.logger("Starting homekeeping")
+        print(self.jobs)
+        for job in self.jobs:
+            print("Homekeeping job:", job)
+            if job.is_input:
+                continue
+            self.logger(f"Homekeeping job: {job}")
+            job.update_status_from_workflow(
+                self.path,
+                self.logger
+                )
+            print("Downloading", job.uuid)
+            self.download(job.uuid)
+        # Remove the online workflow
+        from reana_client.api import client
+        self.set_enviroment(self.machine_id)
+        self.logger("Deleting the online workflow")
+        try:
+            print("Deleting workflow", self.get_name())
+            client.delete_workflow(
+                self.get_name(),
+                True, True,
+                self.get_access_token(self.machine_id)
+            )
+        except Exception as e:
+            self.logger(f"Failed to delete the online workflow: {e}")
+        # Write the workflow homekeep done file
+        homekeep_done_path = os.path.join(self.path, "homekeep.done")
+        with open(homekeep_done_path, "w") as f:
+            f.write("done")

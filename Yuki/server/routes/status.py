@@ -5,8 +5,8 @@ import os
 import time
 from flask import Blueprint, render_template
 from CelebiChrono.utils.metadata import ConfigFile
-from Yuki.kernel.VJob import VJob
-from Yuki.kernel.vworkflow import VWorkflow
+from ...kernel.vjob import VJob
+from ...kernel.vworkflow import VWorkflow
 from ..config import config
 from ..tasks import task_update_workflow_status
 from CelebiChrono.kernel.chern_cache import ChernCache
@@ -445,3 +445,35 @@ def bookkeeping():
         "message": "Project structure and files saved",
         "path": base_save_path
     }), 200
+
+@bp.route("/workflows/<project_uuid>", methods=['GET'])
+def workflows(project_uuid):
+    """Get list of workflows for a project."""
+    workflows_path = os.path.join(
+        os.environ["HOME"],
+        ".Yuki",
+        "Workflows",
+        project_uuid
+    )
+    if not os.path.exists(workflows_path):
+        return ""
+
+    workflow_ids = os.listdir(workflows_path)
+    return " ".join(workflow_ids)
+
+@bp.route("/homekeep/<project_uuid>", methods=['GET'])
+def homekeep(project_uuid):
+    # Get the list of workflows
+    workflows_path = os.path.join(
+        os.environ["HOME"],
+        ".Yuki",
+        "Workflows",
+        project_uuid
+    )
+    if not os.path.exists(workflows_path):
+        return ""
+    workflow_ids = os.listdir(workflows_path)
+    for workflow_id in workflow_ids:
+        workflow = VWorkflow.create(project_uuid, [], workflow_id)
+        workflow.homekeep()
+    return "ok"

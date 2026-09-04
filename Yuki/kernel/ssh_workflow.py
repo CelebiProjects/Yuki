@@ -616,6 +616,22 @@ exit ${{rc:-0}}
         out, _err, _code = ssh.exec(f"tail -c {max_chars} {latest}")
         return out
 
+    def _record_job_distribution(self, job):
+        """Best-effort: record a finished/failed job's produced data registry.
+
+        Runs on the per-job terminal transition inside
+        propagate_job_statuses, after the job's live listing has been
+        refreshed, so /whereabouts sees the final file set before the
+        whole workflow ends. Failures are swallowed: a status update must
+        never fail over a stale registry.
+        """
+        try:
+            from Yuki.kernel.impression_storage import ImpressionStorage
+            ImpressionStorage(self.project_uuid, job.uuid).update_distribution()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger(f"[SSH] Failed to record distribution for "
+                        f"{job.short_uuid()}: {exc}")
+
     def propagate_job_statuses(self, workflow_terminal=False):
         """Reconcile each VJob's status.json with remote markers."""
         with self._ssh() as ssh:
@@ -631,6 +647,7 @@ exit ${{rc:-0}}
                 done_path = f"{self.remote_exec_path}/{short}.done"
                 if ssh.exists(done_path):
                     job.set_status("finished", "Remote execution completed")
+                    self._record_job_distribution(job)
                     continue
 
                 if not workflow_terminal:
@@ -643,6 +660,7 @@ exit ${{rc:-0}}
                     detail = (f"Remote execution failed: {tail}"
                               if tail else "Remote execution failed")
                     job.set_status(FAILED, detail)
+                    self._record_job_distribution(job)
                 else:
                     job.set_status(
                         FAILED,
@@ -741,15 +759,21 @@ exit ${{rc:-0}}
             results_file.write_variable("results", results)
 
             workflow_terminal = status in ("finished", "failed")
+
+            # Refresh listings before propagating per-job statuses: a job
+            # that just finished must be listed one final time while it is
+            # still non-terminal (the refresh skips terminal jobs while the
+            # workflow is running), and the per-job distribution recording
+            # inside propagate_job_statuses reads that fresh listing.
+            self._refresh_job_filelists(status, entered_terminal)
             self.propagate_job_statuses(workflow_terminal=workflow_terminal)
             self.logger(
                 f"[SSH] propagate_job_statuses finished "
                 f"workflow_terminal={workflow_terminal}"
             )
 
-            # Refresh listings first: the terminal distribution recording
-            # below reads them and must see the final file set.
-            self._refresh_job_filelists(status, entered_terminal)
+            # The terminal distribution recording below also reads the
+            # refreshed listings and must see the final file set.
             if entered_terminal:
                 self.logger(
                     f"[SSH] workflow={self.uuid} entered terminal status={status} "

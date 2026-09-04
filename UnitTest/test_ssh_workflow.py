@@ -1,5 +1,5 @@
 """Unit tests for SshWorkflow remote backend."""
-# pylint: disable=protected-access
+# pylint: disable=protected-access,too-many-lines
 import json
 import os
 import shutil
@@ -164,6 +164,25 @@ class _MockStderr:  # pylint: disable=too-few-public-methods
         return self._text.encode("utf-8")
 
 
+def _fake_server_config(home):
+    """A server-config double rooted at the test HOME.
+
+    ImpressionStorage resolves paths through the Yuki.server.config
+    singleton, whose home_dir is baked at import time; this double keeps
+    real-storage tests inside the tmpdir.
+    """
+    from CelebiChrono.utils.metadata import ConfigFile
+    config = MagicMock()
+    config.storage_path = os.path.join(home, ".Yuki", "Storage")
+    config.get_job_path.side_effect = lambda project_uuid, impression: os.path.join(
+        config.storage_path, project_uuid, impression)
+    config.get_job_config_path.side_effect = lambda project_uuid, impression: os.path.join(
+        config.storage_path, project_uuid, impression, "config.json")
+    config.get_config_file.side_effect = lambda: ConfigFile(
+        os.path.join(home, ".Yuki", "config.json"))
+    return config
+
+
 class TestSshWorkflow(unittest.TestCase):
     """Test SshWorkflow with an in-memory Paramiko mock."""
     # pylint: disable=too-many-instance-attributes,too-many-public-methods
@@ -235,6 +254,48 @@ class TestSshWorkflow(unittest.TestCase):
         job.files.return_value = files or []
         job.environment.return_value = "docker.io/reanahub/reana-env-root6:6.18.04"
         return job
+
+    def _prepare_real_storage_jobs(self):
+        """Create the Storage layout for two real jobs: one with a run
+        config (the finished job), one without (the pending job).
+
+        Returns (done_job_dir, pending_job_dir).
+        """
+        storage = os.path.join(self.tmpdir, ".Yuki", "Storage", self.project_uuid)
+        done_job_dir = os.path.join(storage, "a" * 32)
+        os.makedirs(os.path.join(done_job_dir, "runner-uuid"), exist_ok=True)
+        with open(os.path.join(done_job_dir, "config.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"object_type": "task"}, f)
+        with open(os.path.join(done_job_dir, "runner-uuid", "config.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({"workflow": self.workflow_uuid}, f)
+        pending_job_dir = os.path.join(storage, "b" * 32)
+        os.makedirs(pending_job_dir, exist_ok=True)
+        with open(os.path.join(pending_job_dir, "config.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"object_type": "task"}, f)
+        return done_job_dir, pending_job_dir
+
+    def _add_runner_to_runners_list(self):
+        """Append the fake runner to the runners list in the config."""
+        config_path = os.path.join(self.tmpdir, ".Yuki", "config.json")
+        with open(config_path, encoding="utf-8") as f:
+            conf = json.load(f)
+        conf["runners"] = ["myrunner"]
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(conf, f)
+
+    def _write_workflow_backend_config(self):
+        """Write the workflow config so update_distribution's runner
+        context resolves the ssh backend."""
+        workflow_dir = os.path.join(self.tmpdir, ".Yuki", "Workflows",
+                                    self.project_uuid, self.workflow_uuid)
+        os.makedirs(workflow_dir, exist_ok=True)
+        with open(os.path.join(workflow_dir, "config.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"backend_type": "ssh",
+                       "machine_id": "runner-uuid"}, f)
 
     @patch("paramiko.SSHClient")
     def test_start_snakemake_failure_includes_log_tail(self, mock_ssh_cls):
@@ -598,6 +659,128 @@ class TestSshWorkflow(unittest.TestCase):
         self.workflow.propagate_job_statuses(workflow_terminal=False)
 
         job.set_status.assert_called_once_with("finished", "Remote execution completed")
+
+    @patch("paramiko.SSHClient")
+    def test_running_poll_records_distribution_for_finished_job(
+            self, mock_ssh_cls):
+        """The poll where one job finishes while the workflow is still
+        running must list that job's final files and record the produced
+        registry entry in distribution.json.
+
+        The refresh must happen before the job is marked finished:
+        afterwards the listing refresh skips terminal jobs, so the
+        produced entry would be built from a stale (or missing) listing.
+        """
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+
+        done_short = "a" * 7
+        self.mock_sftp.files[
+            f"{self.workflow.remote_exec_path}/{done_short}.done"] = b""
+        remote_stageout = f"{self.workflow.remote_exec_path}/imp{done_short}/stageout"
+        self.mock_sftp.dirs.add(remote_stageout)
+        self.mock_sftp.files[f"{remote_stageout}/output.root"] = b"data"
+
+        # Real storage layout for two jobs: the finished one has a run
+        # config (so its runner context resolves), the pending one does not.
+        done_job_dir, pending_job_dir = self._prepare_real_storage_jobs()
+        # The workflow config resolves the ssh backend for the runner
+        # context built by update_distribution.
+        self._write_workflow_backend_config()
+        # Add the runner to the runners list (runners_id already has it).
+        self._add_runner_to_runners_list()
+
+        # update_distribution resolves paths through the server config
+        # singleton; point it at the tmp HOME.
+        with patch("Yuki.server.config.config", _fake_server_config(self.tmpdir)):
+            from Yuki.kernel.vjob import VJob
+            self.workflow.jobs = [
+                VJob(done_job_dir, "runner-uuid"),
+                VJob(pending_job_dir, "runner-uuid"),
+            ]
+
+            self.workflow.update_workflow_status()
+
+        results_path = os.path.join(self.workflow.path, "results.json")
+        with open(results_path, encoding="utf-8") as f:
+            results = json.load(f)
+        self.assertEqual(results["results"]["status"], "running")
+
+        dist_path = os.path.join(done_job_dir, "distribution.json")
+        self.assertTrue(os.path.exists(dist_path),
+                        "distribution.json must record the finished job")
+        with open(dist_path, encoding="utf-8") as f:
+            dist = json.load(f)
+        self.assertEqual(dist["produced_on"], "myrunner")
+        produced = dist["locations"]["runner:myrunner"]["workflow"]
+        self.assertEqual(produced["origin"], "produced")
+        self.assertEqual(produced["files"], 1)
+
+    @patch("paramiko.SSHClient")
+    def test_propagate_records_distribution_on_finished_transition(
+            self, mock_ssh_cls):
+        """Marking a job finished must also record its data registry."""
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+
+        job = self._make_job("a" * 32)
+        self.workflow.jobs = [job]
+        self.mock_sftp.files[
+            f"{self.workflow.remote_exec_path}/{job.short_uuid()}.done"] = b""
+
+        with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
+            self.workflow.propagate_job_statuses(workflow_terminal=False)
+
+        job.set_status.assert_called_once_with("finished",
+                                               "Remote execution completed")
+        mock_storage.assert_called_once_with(self.project_uuid, job.uuid)
+        mock_storage.return_value.update_distribution.assert_called_once_with()
+
+    @patch("paramiko.SSHClient")
+    def test_propagate_records_distribution_on_failed_transition(
+            self, mock_ssh_cls):
+        """A job that ran and failed must also record its produced data."""
+        from Yuki.kernel.status_constants import FAILED
+
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+
+        job = self._make_job("a" * 32)
+        self.workflow.jobs = [job]
+        short = job.short_uuid()
+        logs_dir = f"{self.workflow.remote_exec_path}/imp{short}/logs"
+        self.mock_sftp.dirs.add(logs_dir)
+        self.mock_sftp.files[f"{logs_dir}/celebi_user_step0.log"] = b"err"
+        self.mock_client.exec_command.return_value = (
+            MagicMock(), _MockStdout("RuntimeError: segfault"), _MockStderr(""))
+
+        with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
+            self.workflow.propagate_job_statuses(workflow_terminal=True)
+
+        args, _kwargs = job.set_status.call_args
+        self.assertEqual(args[0], FAILED)
+        self.assertIn("RuntimeError", args[1])
+        mock_storage.assert_called_once_with(self.project_uuid, job.uuid)
+        mock_storage.return_value.update_distribution.assert_called_once_with()
+
+    @patch("paramiko.SSHClient")
+    def test_propagate_survives_distribution_failure(self, mock_ssh_cls):
+        """A failing registry update must not break the status write."""
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+
+        job = self._make_job("a" * 32)
+        self.workflow.jobs = [job]
+        self.mock_sftp.files[
+            f"{self.workflow.remote_exec_path}/{job.short_uuid()}.done"] = b""
+
+        with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
+            mock_storage.return_value.update_distribution.side_effect = OSError("boom")
+            self.workflow.propagate_job_statuses(workflow_terminal=False)  # no raise
+
+        job.set_status.assert_called_once_with("finished",
+                                               "Remote execution completed")
+        mock_storage.return_value.update_distribution.assert_called_once_with()
 
     @patch("paramiko.SSHClient")
     def test_download_outputs_pulls_remote_stageout_files(self, mock_ssh_cls):

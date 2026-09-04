@@ -6,6 +6,7 @@ and status tracking for individual impressions across different execution runner
 import datetime
 import os
 import json
+import shutil
 from CelebiChrono.utils.metadata import ConfigFile
 from . import file_types
 from . import remote_data_ops
@@ -422,6 +423,103 @@ class ImpressionStorage:
         for name, _, workflow in self._get_runner_contexts():
             return f"{name} {workflow.uuid}"
         return "UNDEFINED"
+
+    def purge_collected_data(self, force=False):
+        """Remove locally collected data (stageout/logs/watermarks) for the impression.
+
+        Refuses — returning {"refused": reason, "running": bool} — when a
+        workflow is running or, without ``force``, when the collected data
+        cannot be re-collected from a runner (purged workspace, missing
+        runner files, unverifiable backend). Keeps the impression
+        metadata, run configs, and saved file listings, and recomputes
+        the distribution registry afterwards.
+        """
+        report = {"purged": True, "impression": self.impression,
+                  "machines": {}, "freed_bytes": 0}
+        planned = []
+        for name, _job, workflow in self._get_runner_contexts():
+            if translate_to_musical(workflow.status()) == IN_MOVEMENT:
+                return {"refused": "workflow is running; kill it first",
+                        "running": True}
+            machine_dir = os.path.join(
+                self.job_path, self.runners_id.get(name, ""))
+            kinds = self._collected_kinds(machine_dir)
+            if not kinds:
+                continue
+            refusal = self._purge_refusal(name, workflow, kinds)
+            if refusal and not force:
+                return {"refused": refusal, "running": False}
+            planned.append((name, machine_dir, kinds))
+
+        for name, machine_dir, kinds in planned:
+            entry = {}
+            for kind, files in kinds.items():
+                entry[kind] = {"files": len(files),
+                               "bytes": sum(os.path.getsize(path)
+                                            for _rel, path in files)}
+                report["freed_bytes"] += entry[kind]["bytes"]
+                shutil.rmtree(os.path.join(machine_dir, kind),
+                              ignore_errors=True)
+            for marker in ("stageout.downloaded", "logs.downloaded"):
+                marker_path = os.path.join(machine_dir, marker)
+                if os.path.isfile(marker_path):
+                    os.remove(marker_path)
+            report["machines"][name] = entry
+
+        if planned:
+            self.update_distribution()
+        return report
+
+    def _collected_kinds(self, machine_dir):
+        """Map kind -> [(relative_name, absolute_path)] for collected files."""
+        kinds = {}
+        for kind in ("stageout", "logs", "watermarks"):
+            root = os.path.join(machine_dir, kind)
+            if not os.path.isdir(root):
+                continue
+            files = []
+            for dirpath, _dirs, fnames in os.walk(root):
+                for fname in fnames:
+                    full = os.path.join(dirpath, fname)
+                    files.append((os.path.relpath(full, root), full))
+            if files:
+                kinds[kind] = files
+        return kinds
+
+    def _purge_refusal(self, name, workflow, kinds):
+        """Reason the collected data must not be purged, or None.
+
+        The data is safe to purge only when the runner is known to still
+        hold a copy: an ssh runner whose live listing covers every local
+        file. Backends Yuki cannot inspect (reana) and unreachable or
+        incomplete listings refuse unless the caller passes force.
+        """
+        workflow_config = ConfigFile(
+            os.path.join(workflow.path, "config.json"))
+        if workflow_config.read_variable("workspace_purged_at", ""):
+            return (f"runner '{name}' workspace was purged; the collected "
+                    f"data is the only copy (pass force to delete anyway)")
+        backend = workflow.backend_type()
+        if backend != "ssh":
+            return (f"cannot verify a runner copy for backend "
+                    f"'{backend}' (pass force to purge anyway)")
+        for kind in ("stageout", "logs"):
+            files = kinds.get(kind)
+            if not files:
+                continue
+            try:
+                remote = {row["name"] for row in
+                          workflow.list_runner_files(self.impression, kind)}
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                return (f"runner '{name}' unreachable "
+                        f"({type(exc).__name__}: {exc}); "
+                        f"pass force to purge anyway")
+            missing = [rel for rel, _path in files if rel not in remote]
+            if missing:
+                return (f"runner '{name}' no longer holds "
+                        f"{len(missing)} {kind} file(s); "
+                        f"pass force to purge anyway")
+        return None
 
     def update_distribution(self, overrides=None,  # pylint: disable=too-many-locals,too-many-branches,too-many-statements,too-many-arguments,too-many-positional-arguments
                             refresh_cache=False, cache_runner_id=None):

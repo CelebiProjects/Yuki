@@ -154,3 +154,21 @@ def refresh_filelists(project_uuid, impression):
     """
     storage = ImpressionStorage(project_uuid, impression)
     return jsonify(storage.force_refresh_filelists())
+
+
+@bp.route("/purge-impression-data/<project_uuid>/<impression>",
+          methods=['POST'])
+def purge_impression_data(project_uuid, impression):
+    """Purge locally collected data (stageout/logs/watermarks) for an impression.
+
+    Body: {"force": bool}. Without force the purge refuses when the data
+    cannot be re-collected from a runner. Running workflows always refuse.
+    """
+    data = request.get_json(silent=True) or request.form
+    force = str(data.get("force", "")).lower() in ("1", "true", "yes")
+    storage = ImpressionStorage(project_uuid, impression)
+    report = storage.purge_collected_data(force=force)
+    if "refused" in report:
+        status_code = 409 if report.get("running") else 400
+        return jsonify({"error": report["refused"]}), status_code
+    return jsonify(report)

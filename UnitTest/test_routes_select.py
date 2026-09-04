@@ -117,3 +117,59 @@ def test_refresh_filelists_route_returns_report():
         r = c.get("/refresh-filelists/proj/imp")
         assert r.status_code == 200
         assert r.get_json()["runner"]["stageout"]["files"] == 23
+
+
+def test_purge_impression_data_route_purges():
+    """purge-impression-data forwards force and returns the report."""
+    app = _app(ex_routes.bp)
+    with mock.patch.object(ex_routes, "ImpressionStorage") as storage_cls:
+        storage_cls.return_value.purge_collected_data.return_value = {
+            "purged": True, "impression": "imp", "machines": {},
+            "freed_bytes": 0}
+        c = app.test_client()
+        r = c.post("/purge-impression-data/proj/imp",
+                   json={"force": True})
+        assert r.status_code == 200
+        assert r.get_json()["purged"] is True
+        storage_cls.return_value.purge_collected_data.assert_called_once_with(
+            force=True)
+
+
+def test_purge_impression_data_route_default_force():
+    """Without a body the purge is non-forced."""
+    app = _app(ex_routes.bp)
+    with mock.patch.object(ex_routes, "ImpressionStorage") as storage_cls:
+        storage_cls.return_value.purge_collected_data.return_value = {
+            "purged": True, "impression": "imp", "machines": {},
+            "freed_bytes": 0}
+        c = app.test_client()
+        r = c.post("/purge-impression-data/proj/imp")
+        assert r.status_code == 200
+        storage_cls.return_value.purge_collected_data.assert_called_once_with(
+            force=False)
+
+
+def test_purge_impression_data_route_refuses_running():
+    """A running refusal maps to 409."""
+    app = _app(ex_routes.bp)
+    with mock.patch.object(ex_routes, "ImpressionStorage") as storage_cls:
+        storage_cls.return_value.purge_collected_data.return_value = {
+            "refused": "workflow is running; kill it first",
+            "running": True}
+        c = app.test_client()
+        r = c.post("/purge-impression-data/proj/imp")
+        assert r.status_code == 409
+        assert "running" in r.get_json()["error"]
+
+
+def test_purge_impression_data_route_refuses():
+    """A re-collectability refusal maps to 400."""
+    app = _app(ex_routes.bp)
+    with mock.patch.object(ex_routes, "ImpressionStorage") as storage_cls:
+        storage_cls.return_value.purge_collected_data.return_value = {
+            "refused": "cannot verify a runner copy for backend 'reana'",
+            "running": False}
+        c = app.test_client()
+        r = c.post("/purge-impression-data/proj/imp")
+        assert r.status_code == 400
+        assert "reana" in r.get_json()["error"]

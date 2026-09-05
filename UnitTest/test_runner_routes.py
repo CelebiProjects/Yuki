@@ -373,8 +373,9 @@ def test_register_runner_uploads_ssh_key(monkeypatch):
     assert cfg["runner_settings"][runner_id]["ssh_key_path"] == key_file
 
 
-def test_update_runner_uploads_ssh_key(monkeypatch):  # pylint: disable=unused-argument
+def test_update_runner_uploads_ssh_key(monkeypatch):
     """Updating a runner with ssh_key_data rewrites the stored key."""
+    _temp_config(monkeypatch)
     c = _app(runner_routes.bp).test_client()
     c.post("/register-runner", data={
         "runner": "cluster", "url": "", "token": "", "backend_type": "ssh",
@@ -394,8 +395,9 @@ def test_update_runner_uploads_ssh_key(monkeypatch):  # pylint: disable=unused-a
     assert cfg["ssh_hosts"][runner_id] == "h"  # untouched
 
 
-def test_remove_runner_deletes_stored_key(monkeypatch):  # pylint: disable=unused-argument
+def test_remove_runner_deletes_stored_key(monkeypatch):
     """Removing a runner deletes its stored ssh key file."""
+    _temp_config(monkeypatch)
     c = _app(runner_routes.bp).test_client()
     c.post("/register-runner", data={
         "runner": "cluster", "url": "", "token": "", "backend_type": "ssh",

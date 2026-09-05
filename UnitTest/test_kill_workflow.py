@@ -68,11 +68,12 @@ def test_ssh_force_kill_escalates_to_kill9(tmp_path):
 
     commands = [c for c in ssh.exec.call_args_list]
     flattened = [c[0][0] for c in commands]
-    assert any("kill -TERM 1234" in c for c in flattened)
-    assert any("kill -9 1234" in c for c in flattened)
+    assert any("kill -TERM -- 1234" in c for c in flattened)
+    assert any("kill -KILL -- 1234" in c for c in flattened)
     assert any("pkill -f /remote/workflows/proj/wf1" in c
                for c in flattened)
-    assert any("echo 137 > /remote/workflows/proj/wf1/yuki.exit" in c
+    assert any("printf '137\\n' > "
+               "/remote/workflows/proj/wf1/yuki.exit.tmp.kill" in c
                for c in flattened)
     results = json.load(open(os.path.join(workflow.path, "results.json")))
     assert results["results"]["status"] == "killed"

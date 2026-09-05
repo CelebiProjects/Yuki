@@ -287,7 +287,6 @@ class TestReanaBooker(unittest.TestCase):
             # Create Yuki storage with stageout files
             # Structure: Storage/{project}/{impression}/{runner}/stageout/
             yuki_home = os.path.join(tmpdir, ".Yuki")
-            os.environ["YUKIDIR"] = yuki_home
             stageout_dir = os.path.join(yuki_home, "Storage", "proj-123",
                                         "imp-abc", "runner-1", "stageout")
             os.makedirs(stageout_dir)
@@ -302,9 +301,10 @@ class TestReanaBooker(unittest.TestCase):
                 ]
             }
 
-            self.booker._upload_stageout_files(
-                "workflow-123", tmpdir, repo_metadata, upload_mode="all"
-            )
+            with patch.dict(os.environ, {"YUKIDIR": yuki_home}):
+                self.booker._upload_stageout_files(
+                    "workflow-123", tmpdir, repo_metadata, upload_mode="all"
+                )
 
         calls = mock_upload_file.call_args_list
         uploaded_files = [c.kwargs.get("file_name", "") for c in calls]

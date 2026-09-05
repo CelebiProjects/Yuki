@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -298,11 +299,11 @@ class TestSshWorkflow(unittest.TestCase):
                        "machine_id": "runner-uuid"}, f)
 
     @patch("paramiko.SSHClient")
-    def test_start_snakemake_failure_includes_log_tail(self, mock_ssh_cls):
-        """A failed remote start surfaces the runner's snakemake.log tail."""
+    def test_start_snakemake_failure_includes_wrapper_log_tail(self, mock_ssh_cls):
+        """A failed remote launch surfaces the wrapper log tail."""
         mock_ssh_cls.return_value = self.mock_client
         self.mock_sftp.files[
-            f"{self.workflow.remote_exec_path}/snakemake.log"] = b"boom"
+            f"{self.workflow.remote_exec_path}/yuki-wrapper.log"] = b"boom"
         self.mock_client.exec_command.side_effect = [
             (MagicMock(), _MockStdout(""), _MockStderr("")),           # chmod +x
             (MagicMock(), _MockStdout("", exit_code=1), _MockStderr("")),  # wrapper
@@ -324,14 +325,16 @@ class TestSshWorkflow(unittest.TestCase):
             MagicMock(), _MockStdout("started"), _MockStderr("")
         )
 
-        self.workflow._start_remote_snakemake()
+        with patch.object(self.workflow, "_confirm_remote_start"):
+            self.workflow._start_remote_snakemake()
 
         commands = [call[0][0]
                     for call in self.mock_client.exec_command.call_args_list]
-        start_cmd = commands[-1]
+        start_cmd = next(command for command in commands if "setsid" in command)
         self.assertNotIn("nohup", start_cmd)
-        self.assertIn("bash yuki_run.sh", start_cmd)
-        self.assertIn("& echo started", start_cmd)
+        self.assertIn("bash ./yuki_run.sh", start_cmd)
+        self.assertNotIn("echo started", start_cmd)
+        self.assertIn("test -r yuki_run.sh", start_cmd)
         # All three fds must leave the channel, or sshd keeps the channel
         # open and recv_exit_status blocks forever (submit stuck running).
         self.assertIn("< /dev/null", start_cmd)
@@ -341,9 +344,8 @@ class TestSshWorkflow(unittest.TestCase):
         self.assertIn("setsid", start_cmd)
 
     @patch("paramiko.SSHClient")
-    def test_start_remote_snakemake_tolerates_silent_remote(self, mock_ssh_cls):
-        """A remote that never confirms is logged as an error but does not
-        fail the submit: the wrapper is detached and polling tracks it."""
+    def test_start_remote_snakemake_verifies_silent_remote(self, mock_ssh_cls):
+        """A silent SSH channel succeeds only after marker verification."""
         mock_ssh_cls.return_value = self.mock_client
         self.mock_client.exec_command.return_value = (
             MagicMock(), _MockStdout("started"), _MockStderr("")
@@ -351,8 +353,49 @@ class TestSshWorkflow(unittest.TestCase):
         from Yuki.kernel.ssh_workflow import SSHStartNotConfirmed
 
         with patch("Yuki.kernel.ssh_workflow._SshConnection.exec_start_detached",
-                   side_effect=SSHStartNotConfirmed("no confirmation")):
-            self.workflow._start_remote_snakemake()  # must not raise
+                   side_effect=SSHStartNotConfirmed("no confirmation")), \
+                patch.object(self.workflow, "_confirm_remote_start") as confirm:
+            self.workflow._start_remote_snakemake()
+
+        confirm.assert_called_once()
+
+    def test_confirm_remote_start_requires_marker(self):
+        """Channel completion alone cannot prove that the wrapper started."""
+        ssh = MagicMock()
+        ssh.exists.return_value = False
+
+        with patch("Yuki.kernel.ssh_workflow.time.monotonic",
+                   side_effect=[0.0, 1.0]), \
+                patch("Yuki.kernel.ssh_workflow.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "yuki.started"):
+                self.workflow._confirm_remote_start(ssh, timeout=0.5)
+
+    def test_confirm_remote_start_accepts_live_wrapper(self):
+        """A valid startup marker and live supervisor confirm the launch."""
+        ssh = MagicMock()
+        started_path = f"{self.workflow.remote_exec_path}/yuki.started"
+        ssh.exists.side_effect = lambda path: path == started_path
+
+        def exec_side_effect(command, timeout=300):  # pylint: disable=unused-argument
+            if command.startswith("cat"):
+                return "1234 1235", "", 0
+            if command.startswith("kill -0"):
+                return "", "", 0
+            return "", "", 1
+
+        ssh.exec.side_effect = exec_side_effect
+
+        self.workflow._confirm_remote_start(ssh, timeout=0)
+
+    def test_confirm_remote_start_rejects_immediate_failure(self):
+        """A nonzero atomic exit marker fails submission immediately."""
+        ssh = MagicMock()
+        exit_path = f"{self.workflow.remote_exec_path}/yuki.exit"
+        ssh.exists.side_effect = lambda path: path == exit_path
+        ssh.exec.return_value = "127", "", 0
+
+        with self.assertRaisesRegex(RuntimeError, "code 127"):
+            self.workflow._confirm_remote_start(ssh, timeout=0)
 
     def test_exec_start_detached_raises_on_silent_remote(self):
         """A silent remote raises SSHStartNotConfirmed.
@@ -442,12 +485,69 @@ class TestSshWorkflow(unittest.TestCase):
             MagicMock(), _MockStdout("started"), _MockStderr("")
         )
 
-        self.workflow._start_remote_snakemake()
+        with patch.object(self.workflow, "_confirm_remote_start"):
+            self.workflow._start_remote_snakemake()
 
         wrapper = self.mock_sftp.files[
             f"{self.workflow.remote_exec_path}/yuki_run.sh"].decode("utf-8")
-        self.assertIn("wait $! || rc=$?", wrapper)
-        self.assertIn("echo ${rc:-0} > yuki.exit", wrapper)
+        self.assertIn("trap record_exit EXIT", wrapper)
+        self.assertIn('atomic_write "$rc" yuki.exit', wrapper)
+        self.assertIn('atomic_write "$$ $snakemake_pid" yuki.started', wrapper)
+        self.assertIn('wait "$snakemake_pid"', wrapper)
+
+    def test_generated_wrapper_has_valid_bash_syntax(self):
+        """The generated supervision script must parse as Bash."""
+        wrapper = self.workflow._build_remote_wrapper()
+
+        result = subprocess.run(
+            ["bash", "-n"], input=wrapper, text=True,
+            capture_output=True, check=False)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_generated_wrapper_writes_atomic_runtime_markers(self):
+        """The supervisor records startup PIDs and the final exit code."""
+        self.workflow.ssh_config["snakemake_path"] = "/usr/bin/true"
+        wrapper_path = os.path.join(self.tmpdir, "yuki_run.sh")
+        with open(wrapper_path, "w", encoding="utf-8") as wrapper_file:
+            wrapper_file.write(self.workflow._build_remote_wrapper())
+
+        result = subprocess.run(
+            ["bash", wrapper_path], text=True,
+            capture_output=True, check=False)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(os.path.join(self.tmpdir, "yuki.started"),
+                  encoding="utf-8") as started_file:
+            self.assertEqual(len(started_file.read().split()), 2)
+        with open(os.path.join(self.tmpdir, "yuki.exit"),
+                  encoding="utf-8") as exit_file:
+            self.assertEqual(exit_file.read().strip(), "0")
+        self.assertFalse(any(".tmp." in name for name in os.listdir(self.tmpdir)))
+
+    def test_generated_wrapper_quotes_configured_command(self):
+        """Runner command paths and core values are shell-quoted."""
+        self.workflow.ssh_config.update({
+            "snakemake_path": "/opt/yuki tools/snakemake",
+            "cores": "8; false",
+        })
+
+        wrapper = self.workflow._build_remote_wrapper()
+
+        self.assertIn("'/opt/yuki tools/snakemake'", wrapper)
+        self.assertIn("--cores '8; false'", wrapper)
+
+    def test_launch_command_does_not_mask_cd_failure(self):
+        """Preflight failure must be visible before anything is backgrounded."""
+        self.workflow.remote_exec_path = "/definitely/not/a/yuki path"
+        command = self.workflow._build_remote_launch_command()
+
+        result = subprocess.run(
+            ["bash", "-c", command], text=True,
+            capture_output=True, check=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cd '/definitely/not/a/yuki path'", command)
 
     @patch("paramiko.SSHClient")
     def test_wrapper_conda_binary_dir_on_path(self, mock_ssh_cls):
@@ -459,11 +559,12 @@ class TestSshWorkflow(unittest.TestCase):
         self.workflow.ssh_config["conda_path"] = \
             "/home/zhaomr/workdir/miniconda3/bin/conda"
 
-        self.workflow._start_remote_snakemake()
+        with patch.object(self.workflow, "_confirm_remote_start"):
+            self.workflow._start_remote_snakemake()
 
         wrapper = self.mock_sftp.files[
             f"{self.workflow.remote_exec_path}/yuki_run.sh"].decode("utf-8")
-        self.assertIn('CONDA_BIN="/home/zhaomr/workdir/miniconda3/bin"',
+        self.assertIn('CONDA_BIN=/home/zhaomr/workdir/miniconda3/bin',
                       wrapper)
         self.assertIn('export PATH="${CONDA_BIN:+$CONDA_BIN:}'
                       '$HOME/.local/bin', wrapper)
@@ -477,7 +578,8 @@ class TestSshWorkflow(unittest.TestCase):
             MagicMock(), _MockStdout("started"), _MockStderr("")
         )
 
-        self.workflow._start_remote_snakemake()
+        with patch.object(self.workflow, "_confirm_remote_start"):
+            self.workflow._start_remote_snakemake()
 
         wrapper = self.mock_sftp.files[
             f"{self.workflow.remote_exec_path}/yuki_run.sh"].decode("utf-8")
@@ -499,7 +601,8 @@ class TestSshWorkflow(unittest.TestCase):
             f.write("rule test: shell: 'echo ok'")
         self.workflow.snakefile_path = snakefile_path
 
-        self.workflow._execute_backend()
+        with patch.object(self.workflow, "_confirm_remote_start"):
+            self.workflow._execute_backend()
 
         remote_snakefile = f"{self.workflow.remote_exec_path}/Snakefile"
         self.assertIn(remote_snakefile, self.mock_sftp.files)
@@ -644,6 +747,56 @@ class TestSshWorkflow(unittest.TestCase):
         self.assertIn("EnvironmentNameNotFound", results["results"]["failure_detail"])
         job.set_status.assert_called_with(
             FAILED, "Skipped: upstream dependency failed before this job ran")
+
+    @patch("paramiko.SSHClient")
+    def test_update_workflow_status_rejects_incomplete_success(self, mock_ssh_cls):
+        """Exit zero is a failure when expected completion markers are absent."""
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+        self.mock_sftp.files[
+            f"{self.workflow.remote_exec_path}/yuki.exit"] = b"0"
+        self.mock_client.exec_command.return_value = (
+            MagicMock(), _MockStdout("0"), _MockStderr(""))
+
+        job = self._make_job("a" * 32)
+        self.workflow.jobs = [job]
+        os.makedirs(self.workflow.path, exist_ok=True)
+
+        self.workflow.update_workflow_status()
+
+        results_path = os.path.join(self.workflow.path, "results.json")
+        with open(results_path, encoding="utf-8") as f:
+            results = json.load(f)["results"]
+        self.assertEqual(results["status"], "failed")
+        self.assertIn(job.short_uuid(), results["failure_detail"])
+
+    @patch("paramiko.SSHClient")
+    def test_update_workflow_status_detects_dead_supervisor(self, mock_ssh_cls):
+        """A dead wrapper without an exit marker cannot remain running."""
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+        self.mock_sftp.files[
+            f"{self.workflow.remote_exec_path}/yuki.started"] = b"1234 1235"
+
+        def exec_side_effect(command, timeout=300):  # pylint: disable=unused-argument
+            if "yuki.started" in command:
+                return (MagicMock(), _MockStdout("1234 1235"),
+                        _MockStderr(""))
+            if command.startswith("kill -0"):
+                return MagicMock(), _MockStdout("", exit_code=1), _MockStderr("")
+            return MagicMock(), _MockStdout(""), _MockStderr("")
+
+        self.mock_client.exec_command.side_effect = exec_side_effect
+        self.workflow.jobs = [self._make_job("a" * 32)]
+        os.makedirs(self.workflow.path, exist_ok=True)
+
+        self.workflow.update_workflow_status()
+
+        results_path = os.path.join(self.workflow.path, "results.json")
+        with open(results_path, encoding="utf-8") as f:
+            results = json.load(f)["results"]
+        self.assertEqual(results["status"], "failed")
+        self.assertIn("without writing yuki.exit", results["failure_detail"])
 
     @patch("paramiko.SSHClient")
     def test_propagate_done_jobs_become_finished(self, mock_ssh_cls):
@@ -817,7 +970,28 @@ class TestSshWorkflow(unittest.TestCase):
         self.workflow.kill()
 
         cmds = [call[0][0] for call in self.mock_client.exec_command.call_args_list]
-        self.assertTrue(any("kill 12345" in cmd for cmd in cmds))
+        self.assertTrue(any("kill -TERM -- 12345" in cmd for cmd in cmds))
+
+    @patch("paramiko.SSHClient")
+    def test_kill_sends_signal_to_remote_process_group(self, mock_ssh_cls):
+        """New workflows terminate the complete supervised process group."""
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.files[
+            f"{self.workflow.remote_exec_path}/yuki.started"] = b"1234 1235"
+
+        def exec_side_effect(command, timeout=300):  # pylint: disable=unused-argument
+            if command.startswith("cat"):
+                return (MagicMock(), _MockStdout("1234 1235"),
+                        _MockStderr(""))
+            return MagicMock(), _MockStdout(""), _MockStderr("")
+
+        self.mock_client.exec_command.side_effect = exec_side_effect
+
+        self.workflow.kill()
+
+        commands = [call[0][0]
+                    for call in self.mock_client.exec_command.call_args_list]
+        self.assertIn("kill -TERM -- -1234", commands)
 
     @patch("paramiko.SSHClient")
     def test_ping_returns_true_when_remote_echo_succeeds(self, mock_ssh_cls):

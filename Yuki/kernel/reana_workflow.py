@@ -10,7 +10,7 @@ import time
 import json
 from CelebiChrono.utils import metadata
 from Yuki.kernel.status_constants import ORCHESTRATING
-from .vworkflow import VWorkflow
+from .vworkflow import VWorkflow, _yuki_dir
 from . import file_types  # pylint: disable=unused-import  # re-exported for tests
 from .file_staging import walk_files
 
@@ -129,7 +129,7 @@ class ReanaWorkflow(VWorkflow):
     def set_environment(self, machine_id):
         """Set the environment variable for REANA server URL."""
         # Set the environment variable
-        path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
+        path = os.path.join(_yuki_dir(), "config.json")
         config_file = metadata.ConfigFile(path)
         urls = config_file.read_variable("urls", {})
         url = urls.get(machine_id, "")
@@ -143,7 +143,7 @@ class ReanaWorkflow(VWorkflow):
 
     def get_access_token(self, machine_id):
         """Get access token for the specified machine."""
-        path = os.path.join(os.environ["HOME"], ".Yuki", "config.json")
+        path = os.path.join(_yuki_dir(), "config.json")
         config_file = metadata.ConfigFile(path)
         tokens = config_file.read_variable("tokens", {})
         token = tokens.get(machine_id, "")
@@ -252,7 +252,7 @@ class ReanaWorkflow(VWorkflow):
                 if job.cache_on_runner() and job.machine_id == self.machine_id:
                     continue
                 impression = job.path.split("/")[-1]
-                path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+                path = os.path.join(_yuki_dir(), "Storage",
                                     self.project_uuid, impression, job.machine_id)
                 if not os.path.exists(os.path.join(path, "stageout")):
                     workflow = ReanaWorkflow(self.project_uuid, [], job.workflow_id())
@@ -350,7 +350,7 @@ class ReanaWorkflow(VWorkflow):
             raise ImportError("reana_client is not available")
         self.set_environment(self.machine_id)
         if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+            path = os.path.join(_yuki_dir(), "Storage",
                                 self.project_uuid, impression, self.machine_id)
             try: # try to download the files
                 if not os.path.exists(os.path.join(path, "stageout.downloaded")):
@@ -420,7 +420,7 @@ class ReanaWorkflow(VWorkflow):
         self.set_environment(self.machine_id)
         report = {"collected": [], "skipped": [], "failed": []}
         if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+            path = os.path.join(_yuki_dir(), "Storage",
                                 self.project_uuid, impression, self.machine_id)
             try:
                 if os.path.exists(os.path.join(path, "stageout.downloaded")):
@@ -473,7 +473,7 @@ class ReanaWorkflow(VWorkflow):
         self.set_environment(self.machine_id)
         report = {"collected": [], "skipped": [], "failed": []}
         if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+            path = os.path.join(_yuki_dir(), "Storage",
                                 self.project_uuid, impression, self.machine_id)
             try:
                 if not refresh and os.path.exists(os.path.join(path, "logs.downloaded")):
@@ -578,7 +578,7 @@ class ReanaWorkflow(VWorkflow):
             raise ImportError("reana_client is not available")
         self.set_environment(self.machine_id)
         report = {"collected": [], "skipped": [], "failed": []}
-        path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+        path = os.path.join(_yuki_dir(), "Storage",
                             self.project_uuid, impression, self.machine_id)
         prefix = "imp" + impression[0:7] + "/" + kind + "/"
         try:

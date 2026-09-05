@@ -30,6 +30,12 @@ from .file_staging import walk_files
 
 CHERN_CACHE = ChernCache.instance()
 
+
+def _yuki_dir():
+    """Return the configured Yuki data root."""
+    return os.path.expanduser(os.environ.get("YUKIDIR") or "~/.Yuki")
+
+
 class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
     """Abstract base class representing a workflow.
 
@@ -43,7 +49,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         self.project_uuid = project_uuid
         self.uuid = uuid or csys.generate_uuid()
         self.path = os.path.join(
-            os.environ["HOME"], ".Yuki", "Workflows", self.project_uuid, self.uuid)
+            _yuki_dir(), "Workflows", self.project_uuid, self.uuid)
         os.makedirs(self.path, exist_ok=True)
 
         self.config_file = metadata.ConfigFile(os.path.join(self.path, "config.json"))
@@ -59,7 +65,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             # load the jobs from the config file
             jobs_info = self.config_file.read_variable("jobs_info", {})
             for job_uuid, info in jobs_info.items():
-                job_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+                job_path = os.path.join(_yuki_dir(), "Storage",
                                          self.project_uuid, job_uuid)
                 job = VJob(job_path, self.machine_id)
                 job.is_input = info.get("is_input", False)
@@ -91,7 +97,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
           global mapping is missing or uses a different key.
         """
         if not mode and uuid:
-            workflow_path = os.path.join(os.environ["HOME"], ".Yuki",
+            workflow_path = os.path.join(_yuki_dir(),
                                           "Workflows", project_uuid, uuid)
             workflow_config = metadata.ConfigFile(
                 os.path.join(workflow_path, "config.json"))
@@ -100,8 +106,8 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 mode = stored_mode
             else:
                 runner_id = workflow_config.read_variable("machine_id", "")
-                config = metadata.ConfigFile(os.path.join(os.environ["HOME"],
-                                                       ".Yuki", "config.json"))
+                config = metadata.ConfigFile(os.path.join(
+                    _yuki_dir(), "config.json"))
                 backend_types = config.read_variable("backend_types", {})
                 mode = backend_types.get(runner_id, "reana")
         if not mode:
@@ -348,8 +354,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 if workflow in workflow_list:
                     job.update_status_from_workflow(
                         os.path.join(
-                            os.environ["HOME"],
-                            ".Yuki",
+                            _yuki_dir(),
                             "Workflows",
                             self.project_uuid,
                             job.workflow_id()
@@ -385,8 +390,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         - References a container image and resources.
         - Provides a shell command combining the job's commands.
         """
-        config = metadata.ConfigFile(os.path.join(os.environ["HOME"],
-                                                   ".Yuki", "config.json"))
+        config = metadata.ConfigFile(os.path.join(_yuki_dir(), "config.json"))
         use_kerberos = config.read_variable("use_kerberos", {}).get(self.machine_id, False)
         for job in self.jobs:
             self.logger(f"Job in the workflow: {job}, is input: {job.is_input}, "
@@ -510,8 +514,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             for dep in job.dependencies():
                 dep_job = VJob(
                     os.path.join(
-                        os.environ["HOME"],
-                        ".Yuki",
+                        _yuki_dir(),
                         "Storage",
                         self.project_uuid,
                         dep
@@ -605,7 +608,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             # Otherwise, expand dependencies first
             stack.append((job, True))  # mark job to add after deps
             for dep in job.dependencies():
-                dep_path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+                dep_path = os.path.join(_yuki_dir(), "Storage",
                                          self.project_uuid, dep)
                 dep_job = VJob(dep_path, None)
                 if dep_job.path not in visited:
@@ -701,7 +704,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         """
         self.logger(f"Watermarking impression: {impression}")
         if impression:
-            path = os.path.join(os.environ["HOME"], ".Yuki", "Storage",
+            path = os.path.join(_yuki_dir(), "Storage",
                                  self.project_uuid, impression, self.machine_id)
             if not os.path.exists(os.path.join(path, "stageout.downloaded")):
                 self.logger(f"Stageout not downloaded for impression {impression}, "

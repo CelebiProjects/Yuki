@@ -61,6 +61,9 @@ def test_wrapper_uses_cores_and_paths(tmp_path, monkeypatch):
             """Record the written wrapper file."""
             written[path] = text
 
+        def remove(self, _path):
+            """Ignore stale runtime-marker cleanup."""
+
         def exec(self, _cmd, timeout=None):  # pylint: disable=unused-argument
             """Report a successful remote command."""
             return "", "", 0
@@ -69,7 +72,8 @@ def test_wrapper_uses_cores_and_paths(tmp_path, monkeypatch):
             """Report a successful detached start."""
             return "", "", 0
 
-    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()):
+    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()), \
+            mock.patch.object(SshWorkflow, "_confirm_remote_start"):
         wf._start_remote_snakemake()
 
     wrapper = written["/remote/wf-uuid/yuki_run.sh"]
@@ -487,6 +491,9 @@ def test_wrapper_sanitizes_environment_without_conda_path(tmp_path, monkeypatch)
             """Record the written wrapper file."""
             written[path] = text
 
+        def remove(self, _path):
+            """Ignore stale runtime-marker cleanup."""
+
         def exec(self, _cmd, timeout=None):  # pylint: disable=unused-argument
             """Report a successful remote command."""
             return "", "", 0
@@ -495,7 +502,8 @@ def test_wrapper_sanitizes_environment_without_conda_path(tmp_path, monkeypatch)
             """Report a successful detached start."""
             return "", "", 0
 
-    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()):
+    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()), \
+            mock.patch.object(SshWorkflow, "_confirm_remote_start"):
         wf._start_remote_snakemake()
 
     wrapper = written["/remote/wf-uuid/yuki_run.sh"]
@@ -534,6 +542,9 @@ def test_wrapper_conda_path_curates_path(tmp_path, monkeypatch):
             """Record the written wrapper file."""
             written[path] = text
 
+        def remove(self, _path):
+            """Ignore stale runtime-marker cleanup."""
+
         def exec(self, _cmd, timeout=None):  # pylint: disable=unused-argument
             """Report a successful remote command."""
             return "", "", 0
@@ -542,7 +553,8 @@ def test_wrapper_conda_path_curates_path(tmp_path, monkeypatch):
             """Report a successful detached start."""
             return "", "", 0
 
-    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()):
+    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()), \
+            mock.patch.object(SshWorkflow, "_confirm_remote_start"):
         wf._start_remote_snakemake()
 
     wrapper = written["/remote/wf-uuid/yuki_run.sh"]

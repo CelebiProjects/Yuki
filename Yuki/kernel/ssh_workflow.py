@@ -24,6 +24,8 @@ logger = getLogger("YukiLogger")
 
 DEFAULT_ENVIRONMENT = "docker.io/reanahub/reana-env-root6:6.18.04"
 DEFAULT_SSH_PORT = 22
+SSH_START_CONFIRM_TIMEOUT = 5
+SSH_START_CONFIRM_INTERVAL = 0.1
 
 # Environments that need no conda activation on ssh runners
 PURE_COPY_ENVIRONMENTS = ("rawdata", "datalist", "lhcb_ap_datalist", "script")
@@ -513,8 +515,8 @@ class SshWorkflow(VWorkflow):
             ssh.put(self.snakefile_path, f"{self.remote_exec_path}/Snakefile")
             self.logger("[SSH] Uploaded: Snakefile")
 
-    def _start_remote_snakemake(self):
-        """Upload a wrapper script and start Snakemake remotely in the background."""
+    def _build_remote_wrapper(self):
+        """Build the supervised Snakemake wrapper uploaded to the runner."""
         snakemake_bin = self.ssh_config.get("snakemake_path") or "snakemake"
         cores = self.ssh_config.get("cores", "all")
         conda_path = self.ssh_config.get("conda_path") or ""
@@ -522,31 +524,56 @@ class SshWorkflow(VWorkflow):
             # conda_path is the conda binary (as the runner probe expects);
             # its directory is what must land on PATH.
             conda_bin_dir = os.path.dirname(conda_path)
-            conda_setup = f'CONDA_BIN="{conda_bin_dir}"\n'
+            conda_setup = f"CONDA_BIN={shlex.quote(conda_bin_dir)}\n"
         else:
             conda_setup = (
                 'CONDA_BIN="$(conda info --base 2>/dev/null || true)"\n'
                 'CONDA_BIN="${CONDA_BIN:+$CONDA_BIN/bin}"\n')
-        wrapper = f'''#!/bin/bash
-set -e
+        snakemake_command = (
+            f"{shlex.quote(str(snakemake_bin))} --use-conda --cores "
+            f"{shlex.quote(str(cores))} --snakefile Snakefile")
+        return f'''#!/bin/bash
+set -Eeuo pipefail
 # Deterministic run environment: drop user-shell leakage (.bashrc etc.) so
 # workflow behaviour never depends on the submitter's shell configuration.
 {conda_setup}unset PYTHONPATH LD_LIBRARY_PATH
 export PATH="${{CONDA_BIN:+$CONDA_BIN:}}$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 cd "$(dirname "$0")"
-nohup {snakemake_bin} --use-conda --cores {cores} --snakefile Snakefile > snakemake.log 2>&1 &
-echo $! > yuki.pid
-wait $! || rc=$?
-echo ${{rc:-0}} > yuki.exit
-exit ${{rc:-0}}
+
+atomic_write() {{
+    local value="$1"
+    local destination="$2"
+    local temporary="${{destination}}.tmp.$$"
+    printf '%s\n' "$value" > "$temporary"
+    mv -f "$temporary" "$destination"
+}}
+
+record_exit() {{
+    local rc=$?
+    trap - EXIT
+    atomic_write "$rc" yuki.exit
+    exit "$rc"
+}}
+trap record_exit EXIT
+
+nohup {snakemake_command} > snakemake.log 2>&1 &
+snakemake_pid=$!
+atomic_write "$snakemake_pid" yuki.pid
+atomic_write "$$ $snakemake_pid" yuki.started
+wait "$snakemake_pid"
 '''
+
+    def _start_remote_snakemake(self):
+        """Upload a wrapper script and start Snakemake remotely in the background."""
+        wrapper = self._build_remote_wrapper()
         self.logger(f"[SSH] Uploading remote wrapper script to {self.remote_exec_path}/yuki_run.sh")
         remote_wrapper = f"{self.remote_exec_path}/yuki_run.sh"
         with self._ssh() as ssh:
             self.logger(f"[SSH] Uploading wrapper script to {remote_wrapper}")
             ssh.put_text(wrapper, remote_wrapper)
             self.logger(f"[SSH] Making wrapper script executable: {remote_wrapper}")
-            out, err, code = ssh.exec(f"chmod +x {remote_wrapper}")
+            out, err, code = ssh.exec(
+                f"chmod +x {shlex.quote(remote_wrapper)}")
             self.logger(f"[SSH] chmod output: {out}, error: {err}, exit code: {code}")
             if code != 0:
                 raise RuntimeError(
@@ -558,34 +585,110 @@ exit ${{rc:-0}}
             # or sshd keeps the channel open and recv_exit_status blocks.
             # The polling path reads yuki.pid/yuki.exit.
             self.logger("[SSH] Starting remote Snakemake in background")
+            for name in ("yuki.started", "yuki.pid", "yuki.exit"):
+                ssh.remove(f"{self.remote_exec_path}/{name}")
             try:
                 result = ssh.exec_start_detached(
-                    f"cd {self.remote_exec_path} && setsid bash yuki_run.sh "
-                    f"> /dev/null 2>&1 < /dev/null & echo started",
+                    self._build_remote_launch_command(),
                     timeout=30, grace=2)
             except SSHStartNotConfirmed:
-                # The remote never reported (its sshd keeps the exec
-                # session alive while background jobs exist). This is an
-                # error and is logged as one, but the workflow itself may
-                # still be running remotely — the wrapper is detached and
-                # polling tracks it via yuki.pid/yuki.exit.
-                getLogger("Yuki.workflow").error(
+                # Some sshd implementations retain the exec channel for
+                # detached descendants. Marker verification below is the
+                # authoritative handshake in that case.
+                getLogger("Yuki.workflow").warning(
                     "[SSH] remote did not confirm the start within 2s; "
-                    "treating the workflow as started — "
-                    "polling will track it")
-                return
-            out, err, code = result
-            self.logger(f"[SSH] start output: {out}, error: {err}, exit code: {code}")
-            self.logger(f"[SSH] type(code)={type(code)}, code={code}")
-            if code != 0:
-                detail = err.strip() if err.strip() else out.strip()
-                log_tail = self._read_remote_snakemake_tail(ssh)
-                if log_tail:
-                    detail = (detail + f" (snakemake.log: {log_tail})").strip()
-                raise RuntimeError(
-                    f"Remote Snakemake failed: {detail} (exit {code})"
-                )
+                    "verifying remote markers")
+            else:
+                out, err, code = result
+                self.logger(
+                    f"[SSH] start output: {out}, error: {err}, exit code: {code}")
+                if code != 0:
+                    detail = err.strip() if err.strip() else out.strip()
+                    wrapper_tail = self._read_remote_wrapper_tail(ssh)
+                    if wrapper_tail:
+                        detail = (detail +
+                                  f" (yuki-wrapper.log: {wrapper_tail})").strip()
+                    raise RuntimeError(
+                        f"Remote Snakemake failed to launch: {detail} (exit {code})"
+                    )
+
+            self._confirm_remote_start(ssh)
             self.logger("[SSH] Remote Snakemake started")
+
+    def _build_remote_launch_command(self):
+        """Build a detached launch with synchronous preflight checks."""
+        return (
+            f"cd {shlex.quote(self.remote_exec_path)} || exit 1; "
+            "test -r yuki_run.sh || exit 2; "
+            "command -v setsid > /dev/null 2>&1 || exit 3; "
+            "setsid bash ./yuki_run.sh > yuki-wrapper.log 2>&1 "
+            "< /dev/null &")
+
+    def _read_remote_int(self, ssh, name):
+        """Read an integer runtime marker, returning None if unavailable."""
+        path = f"{self.remote_exec_path}/{name}"
+        if not ssh.exists(path):
+            return None
+        out, _err, code = ssh.exec(f"cat {shlex.quote(path)}")
+        if code != 0:
+            return None
+        try:
+            return int(out.strip())
+        except (TypeError, ValueError):
+            return None
+
+    def _read_remote_started(self, ssh):
+        """Return (wrapper_pid, snakemake_pid) from the startup marker."""
+        path = f"{self.remote_exec_path}/yuki.started"
+        if not ssh.exists(path):
+            return None
+        out, _err, code = ssh.exec(f"cat {shlex.quote(path)}")
+        if code != 0:
+            return None
+        try:
+            wrapper_pid, snakemake_pid = (int(value) for value in out.split())
+        except (TypeError, ValueError):
+            return None
+        if wrapper_pid <= 0 or snakemake_pid <= 0:
+            return None
+        return wrapper_pid, snakemake_pid
+
+    @staticmethod
+    def _remote_pid_alive(ssh, pid):
+        """Return whether a numeric PID currently exists on the runner."""
+        if not isinstance(pid, int) or pid <= 0:
+            return False
+        _out, _err, code = ssh.exec(f"kill -0 {pid} 2>/dev/null")
+        return code == 0
+
+    def _confirm_remote_start(self, ssh, timeout=SSH_START_CONFIRM_TIMEOUT):
+        """Require wrapper markers instead of trusting SSH channel completion."""
+        deadline = time.monotonic() + timeout
+        while True:
+            exit_code = self._read_remote_exit(ssh)
+            if exit_code is not None:
+                if exit_code == 0:
+                    self.logger("[SSH] Remote workflow completed during startup")
+                    return
+                detail = self._read_remote_snakemake_tail(ssh)
+                if not detail:
+                    detail = self._read_remote_wrapper_tail(ssh)
+                suffix = f": {detail}" if detail else ""
+                raise RuntimeError(
+                    f"Remote Snakemake exited during startup with code "
+                    f"{exit_code}{suffix}")
+
+            started = self._read_remote_started(ssh)
+            if started and self._remote_pid_alive(ssh, started[0]):
+                return
+
+            if time.monotonic() >= deadline:
+                detail = self._read_remote_wrapper_tail(ssh)
+                suffix = f": {detail}" if detail else ""
+                raise RuntimeError(
+                    "Remote Snakemake start was not confirmed by yuki.started"
+                    f"{suffix}")
+            time.sleep(SSH_START_CONFIRM_INTERVAL)
 
     def _sync_external_job_status(self, job):
         """Poll remote status for an external dependency."""
@@ -669,27 +772,72 @@ exit ${{rc:-0}}
 
     def _read_remote_exit(self, ssh):
         """Return the remote wrapper's exit code, or None while still running."""
-        exit_file = f"{self.remote_exec_path}/yuki.exit"
-        if not ssh.exists(exit_file):
-            return None
-        try:
-            out, _err, _code = ssh.exec(f"cat {exit_file}")
-            return int(out.strip())
-        except (TypeError, ValueError):
-            return None
+        return self._read_remote_int(ssh, "yuki.exit")
 
     def _read_remote_snakemake_tail(self, ssh, max_chars=2000):
         """Return the tail of the remote snakemake log for failure detail."""
         log_file = f"{self.remote_exec_path}/snakemake.log"
         if not ssh.exists(log_file):
             return ""
-        out, _err, _code = ssh.exec(f"tail -c {max_chars} {log_file}")
+        out, _err, _code = ssh.exec(
+            f"tail -c {int(max_chars)} {shlex.quote(log_file)}")
         return out
+
+    def _read_remote_wrapper_tail(self, ssh, max_chars=2000):
+        """Return launch diagnostics emitted before Snakemake owns its log."""
+        log_file = f"{self.remote_exec_path}/yuki-wrapper.log"
+        if not ssh.exists(log_file):
+            return ""
+        out, _err, _code = ssh.exec(
+            f"tail -c {int(max_chars)} {shlex.quote(log_file)}")
+        return out
+
+    def _remote_execution_state(self, ssh, jobs):
+        """Return status, detail, exit code, and completed remote jobs."""
+        completed = [
+            job_uuid for job_uuid in jobs
+            if ssh.exists(f"{self.remote_exec_path}/{job_uuid}.done")
+        ]
+        missing = [job_uuid for job_uuid in jobs if job_uuid not in completed]
+        exit_code = self._read_remote_exit(ssh)
+        status = "running"
+        detail = ""
+
+        if exit_code not in (None, 0):
+            status = "failed"
+            detail = self._read_remote_snakemake_tail(ssh)
+            if not detail:
+                detail = self._read_remote_wrapper_tail(ssh)
+        elif exit_code == 0:
+            if not missing:
+                status = "finished"
+            else:
+                status = "failed"
+                detail = (
+                    "Remote Snakemake exited successfully but did not create "
+                    f"completion markers for: {', '.join(missing)}")
+        elif not missing:
+            status = "finished"
+        else:
+            started = self._read_remote_started(ssh)
+            if started and not self._remote_pid_alive(ssh, started[0]):
+                # record_exit writes atomically before the wrapper exits. Check
+                # once more for the process-exit/marker-observation race.
+                exit_code = self._read_remote_exit(ssh)
+                if exit_code is not None:
+                    return self._remote_execution_state(ssh, jobs)
+                status = "failed"
+                detail = (
+                    "Remote workflow supervisor exited without writing "
+                    "yuki.exit")
+            # No startup marker identifies workflows launched by older Yuki
+            # versions. They retain legacy marker-only monitoring as running.
+
+        return status, detail, exit_code, completed
 
     def update_workflow_status(self):
         """Update workflow status from remote execution."""
         try:
-            all_done = True
             self.logger(
                 f"[SSH] update_workflow_status workflow={self.uuid} "
                 f"path={self.path} machine_id={self.machine_id} "
@@ -708,42 +856,21 @@ exit ${{rc:-0}}
             ]
 
             with self._ssh() as ssh:
-                for job_uuid in jobs:
-                    done_file = f"{self.remote_exec_path}/{job_uuid}.done"
-                    if not ssh.exists(done_file):
-                        all_done = False
-                        break
-                exit_code = self._read_remote_exit(ssh)
-                failure_detail = (
-                    self._read_remote_snakemake_tail(ssh)
-                    if exit_code not in (None, 0) else ""
-                )
-
-            status = "finished" if all_done else "running"
-            if exit_code is not None and exit_code != 0:
-                # The remote wrapper finished but snakemake exited nonzero:
-                # the backend run is dead, so the workflow has failed.
-                status = "failed"
+                status, failure_detail, exit_code, completed_jobs = \
+                    self._remote_execution_state(ssh, jobs)
 
             results = {
                 "status": status,
                 "progress": {
                     "total": len(jobs),
-                    "completed": 0,
+                    "completed": len(completed_jobs),
                 }
             }
 
-            if status == "finished":
-                results["progress"]["completed"] = len(jobs)
-            else:
-                with self._ssh() as ssh:
-                    results["progress"]["completed"] = sum(
-                        1 for job_uuid in jobs
-                        if ssh.exists(f"{self.remote_exec_path}/{job_uuid}.done")
-                    )
-
             if status == "failed":
-                results["failure_detail"] = failure_detail
+                results["failure_detail"] = (
+                    failure_detail or
+                    f"Remote Snakemake exited with code {exit_code}")
 
             self.logger(
                 f"[SSH] Workflow status: {status}, "
@@ -783,6 +910,7 @@ exit ${{rc:-0}}
 
         except Exception as e:
             self.logger(f"[SSH] Failed to update workflow status: {e}")
+            raise
 
     def check_status(self):
         """Check the status of remote workflow execution."""
@@ -802,21 +930,27 @@ exit ${{rc:-0}}
                     f"{self.remote_exec_path}")
         try:
             with self._ssh() as ssh:
-                pid_file = f"{self.remote_exec_path}/yuki.pid"
-                out, _err, code = ssh.exec(f"cat {shlex.quote(pid_file)}")
-                pid = out.strip() if code == 0 else ""
+                started = self._read_remote_started(ssh)
+                wrapper_pid = started[0] if started else None
+                snakemake_pid = (started[1] if started else
+                                 self._read_remote_int(ssh, "yuki.pid"))
+                pid = wrapper_pid or snakemake_pid
                 if pid:
-                    ssh.exec(f"kill -TERM {pid}")
+                    target = f"-{pid}" if wrapper_pid else str(pid)
+                    ssh.exec(f"kill -TERM -- {target}")
                     time.sleep(3)
                     _out, _err, alive = ssh.exec(
                         f"kill -0 {pid} 2>/dev/null")
                     if alive == 0:
-                        ssh.exec(f"kill -9 {pid}")
+                        ssh.exec(f"kill -KILL -- {target}")
                 # Catch orphaned snakemake children regardless of the pid.
                 ssh.exec(f"pkill -f {shlex.quote(self.remote_exec_path)} "
                          "|| true")
-                ssh.exec(f"echo 137 > "
-                         f"{shlex.quote(self.remote_exec_path + '/yuki.exit')}")
+                exit_path = f"{self.remote_exec_path}/yuki.exit"
+                exit_tmp = f"{exit_path}.tmp.kill"
+                ssh.exec(
+                    f"printf '137\\n' > {shlex.quote(exit_tmp)} && "
+                    f"mv -f {shlex.quote(exit_tmp)} {shlex.quote(exit_path)}")
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.logger(f"[SSH] Remote force-kill failed "
                         f"(marking killed anyway): {exc}")
@@ -833,15 +967,20 @@ exit ${{rc:-0}}
         """Kill remote workflow execution."""
         try:
             with self._ssh() as ssh:
-                pid_file = f"{self.remote_exec_path}/yuki.pid"
-                if ssh.exists(pid_file):
-                    out, _err, _code = ssh.exec(f"cat {pid_file}")
-                    pid = out.strip()
-                    if pid:
-                        ssh.exec(f"kill {pid}")
-                        self.logger(f"[SSH] Sent SIGTERM to remote PID {pid}")
+                started = self._read_remote_started(ssh)
+                if started:
+                    wrapper_pid = started[0]
+                    ssh.exec(f"kill -TERM -- -{wrapper_pid}")
+                    self.logger(
+                        f"[SSH] Sent SIGTERM to remote process group {wrapper_pid}")
                 else:
-                    self.logger("[SSH] No PID file found; cannot kill remote process")
+                    pid = self._read_remote_int(ssh, "yuki.pid")
+                    if pid:
+                        ssh.exec(f"kill -TERM -- {pid}")
+                        self.logger(f"[SSH] Sent SIGTERM to remote PID {pid}")
+                    else:
+                        self.logger(
+                            "[SSH] No PID marker found; cannot kill remote process")
         except Exception as e:
             self.logger(f"[SSH] Error killing remote workflow: {e}")
 

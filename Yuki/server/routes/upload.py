@@ -4,6 +4,7 @@ File upload and download routes.
 import os
 import uuid
 import tarfile
+from contextlib import ExitStack
 from logging import getLogger
 
 from flask import Blueprint, request, send_from_directory, jsonify, Response
@@ -127,13 +128,57 @@ def remote_export(project_uuid, impression, filename):
             continue
         src_path = f"{workflow.remote_exec_path}/imp{impression[0:7]}/stageout/{filename}"
         try:
-            with workflow._ssh() as ssh:  # pylint: disable=protected-access
+            with ExitStack() as resources:
+                ssh = resources.enter_context(workflow._ssh())  # pylint: disable=protected-access
                 if not ssh.isfile(src_path):
                     continue
-                return Response(
-                    ssh.stream(src_path),
-                    headers={"Content-Disposition": f"inline; filename={filename}"},
-                )
+                size = ssh._sftp.stat(src_path).st_size  # pylint: disable=protected-access
+                range_header = request.headers.get("Range", "")
+                start, end = 0, size - 1
+                status = 200
+                if range_header.startswith("bytes="):
+                    requested = range_header[6:].split(",", 1)[0].strip()
+                    first, _, last = requested.partition("-")
+                    if first:
+                        start = int(first)
+                        end = int(last) if last else end
+                    elif last:
+                        start = max(0, size - int(last))
+                    if start >= size or start > end:
+                        return Response(status=416, headers={"Content-Range": f"bytes */{size}"})
+                    end = min(end, size - 1)
+                    status = 206
+                # Transfer ownership of the existing connection to the response.
+                # Flask consumes the body after the route has returned.
+                remote_file = resources.enter_context(ssh._sftp.file(src_path, "rb"))  # pylint: disable=protected-access
+                remote_file.seek(start)
+                owned = None
+
+                def stream_remote():
+                    try:
+                        remaining = end - start + 1
+                        while remaining:
+                            chunk = remote_file.read(min(65536, remaining))
+                            if not chunk:
+                                raise OSError("Remote file ended before the requested range was read")
+                            remaining -= len(chunk)
+                            yield chunk
+                    finally:
+                        owned.close()
+
+                headers = {
+                    "Content-Disposition": f"inline; filename={filename}",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(end - start + 1),
+                }
+                if status == 206:
+                    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+                response = Response(stream_remote(), headers=headers, status=status)
+                # Also release resources if the response closes before iteration
+                # starts (HEAD requests and disconnected clients).
+                owned = resources.pop_all()
+                response.call_on_close(owned.close)
+                return response
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("remote-export failed for %s on %s: %s", filename, name, exc)
             continue

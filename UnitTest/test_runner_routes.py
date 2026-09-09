@@ -602,3 +602,54 @@ def test_runner_data_inventory_failure_500(monkeypatch):
             "/runner-data/pkufarm")
     assert r.status_code == 500
     assert "down" in r.get_json()["error"]
+
+
+def test_yuki_overview_returns_runner_inventory(monkeypatch, tmp_path):
+    """/yuki-overview summarizes the current project's distribution data."""
+    _temp_config(monkeypatch)
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    impression = "a" * 32
+    yuki_dir = tmp_path / "Storage" / "proj"
+    imp_dir = yuki_dir / impression
+    imp_dir.mkdir(parents=True)
+    with open(imp_dir / "distribution.json", "w", encoding="utf-8") as f:
+        json.dump({
+            "locations": {
+                "runner:pkufarm": {
+                    "cache": {"files": 1, "bytes": 10},
+                    "workflow": {"files": 2, "bytes": 30},
+                },
+                "yuki": {"origin": "collected", "files": 3, "bytes": 40},
+            }
+    }, f)
+    from Yuki.kernel import liveness
+    liveness.save_live_set("proj", [impression], [], yuki_dir=str(tmp_path))
+    r = _app(runner_routes.bp).test_client().get(
+        "/yuki-overview?project_uuid=proj")
+
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["project_uuid"] == "proj"
+    assert body["distribution"]["live_bytes"] == 80
+    assert body["distribution"]["stale_bytes"] == 0
+    assert body["distribution"]["runners"]["pkufarm"]["bytes"] == 40
+
+
+def test_refresh_distribution_route(monkeypatch, tmp_path):
+    """/refresh-distribution refreshes the current impression registry."""
+    _temp_config(monkeypatch)
+    imp_dir = tmp_path / "Storage" / "proj" / "imp-1"
+    imp_dir.mkdir(parents=True)
+    fake = mock.MagicMock()
+    fake.update_distribution.return_value = {"live": 1, "superseded": 0,
+                                             "live_workflows": 1}
+    from Yuki.server.routes import status as status_routes
+    with mock.patch("Yuki.kernel.impression_storage.ImpressionStorage",
+                    return_value=fake) as storage:
+        app = _app(status_routes.bp)
+        r = app.test_client().post("/refresh-distribution/proj/imp-1")
+
+    assert r.status_code == 200
+    assert r.get_json()["live"] == 1
+    storage.assert_called_once_with("proj", "imp-1")
+    fake.update_distribution.assert_called_once_with()

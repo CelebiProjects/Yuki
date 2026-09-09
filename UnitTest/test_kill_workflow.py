@@ -117,6 +117,46 @@ def test_native_force_kill_marks_killed(tmp_path):
     assert workflow.jobs[0].set_status.call_args[0][0] == "failed"
 
 
+def test_strict_ssh_kill_preserves_state_on_connection_failure(tmp_path):
+    workflow = _ssh_workflow(tmp_path)
+    workflow.set_workflow_status = mock.Mock()
+    with mock.patch.object(workflow, "_ssh", side_effect=OSError("offline")):
+        with pytest.raises(OSError, match="offline"):
+            workflow.force_kill(strict=True)
+    workflow.set_workflow_status.assert_not_called()
+    workflow.jobs[0].set_status.assert_not_called()
+
+
+def test_strict_ssh_kill_rejects_reused_pid(tmp_path):
+    workflow = _ssh_workflow(tmp_path)
+    workflow.set_workflow_status = mock.Mock()
+    ssh = mock.MagicMock()
+    ssh.__enter__.return_value = ssh
+    ssh.exec.return_value = ("/unrelated/workflow", "", 0)
+    with mock.patch.object(workflow, "_ssh", return_value=ssh), \
+            mock.patch.object(workflow, "_read_remote_started", return_value=(123, 124)), \
+            mock.patch.object(workflow, "_remote_pid_alive", return_value=True):
+        with pytest.raises(RuntimeError, match="cannot be verified"):
+            workflow.force_kill(strict=True)
+    assert ssh.exec.call_args_list == [mock.call("readlink -f /proc/123/cwd")]
+    workflow.set_workflow_status.assert_not_called()
+
+
+def test_strict_ssh_kill_clears_missing_pid_without_matching_own_shell(tmp_path):
+    workflow = _ssh_workflow(tmp_path)
+    ssh = mock.MagicMock()
+    ssh.__enter__.return_value = ssh
+    ssh.exec.return_value = ("", "", 0)
+    with mock.patch.object(workflow, "_ssh", return_value=ssh), \
+            mock.patch.object(workflow, "_read_remote_started", return_value=None), \
+            mock.patch.object(workflow, "_read_remote_int", return_value=None):
+        workflow.force_kill(strict=True)
+    commands = [call.args[0] for call in ssh.exec.call_args_list]
+    assert commands[0] == "pkill -KILL -f '[/]remote/workflows/proj/wf1'"
+    results = json.loads((tmp_path / "mirror" / "results.json").read_text())
+    assert results["results"]["status"] == "killed"
+
+
 def test_reana_force_kill_stops_with_force():
     """stop_workflow gets force=True and the status is marked killed."""
     from Yuki.kernel import reana_workflow

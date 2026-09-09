@@ -7,7 +7,7 @@ import time
 from logging import getLogger
 from flask import Blueprint, render_template, request, jsonify, url_for, send_from_directory
 from werkzeug.utils import secure_filename
-from CelebiChrono.utils.metadata import ConfigFile
+from CelebiChrono.utils.metadata import ConfigFile, YamlFile
 from CelebiChrono.kernel.chern_cache import ChernCache
 from Yuki.kernel import file_types
 from ...kernel.vjob import VJob
@@ -215,9 +215,24 @@ def ditestatus():
 
 @bp.route("/sample-status/<project_uuid>/<impression_name>", methods=['GET'])
 def samplestatus(project_uuid, impression_name):
-    """Get sample status for an impression."""
+    """Return the data UUID for a ready rawdata impression.
+
+    Older uploads store sample_uuid in config.json. Canonical registrations
+    keep it in contents/celebi.yaml and record copy completion in status.json.
+    """
     job_config_file = ConfigFile(config.get_job_config_path(project_uuid, impression_name))
-    return job_config_file.read_variable("sample_uuid", "")
+    sample_uuid = job_config_file.read_variable("sample_uuid", "")
+    if sample_uuid:
+        return sample_uuid
+
+    job_path = config.get_job_path(project_uuid, impression_name)
+    job_status = ConfigFile(os.path.join(job_path, "status.json")).read_variable("status", "")
+    if translate_to_legacy(job_status) not in ("finished", "success", "archived"):
+        return ""
+    task_config = YamlFile(os.path.join(job_path, "contents", "celebi.yaml"))
+    if task_config.read_variable("environment", "") != "rawdata":
+        return ""
+    return task_config.read_variable("uuid", "")
 
 
 @bp.route("/impression/<project_uuid>/<impression_name>", methods=['GET'])
@@ -290,6 +305,17 @@ def whereabouts(project_uuid, impression_name):
                     "yuki": locations.get("yuki"),
                     "runners": runners, "registered": registered,
                     "note": note})
+
+
+@bp.route("/refresh-distribution/<project_uuid>/<impression_name>", methods=['POST'])
+def refresh_distribution(project_uuid, impression_name):
+    """Refresh the impression's distribution.json registry."""
+    try:
+        from ...kernel.impression_storage import ImpressionStorage
+        summary = ImpressionStorage(project_uuid, impression_name).update_distribution()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(summary)
 
 def _walk_files(full_path, base_dir):
     """Relative paths of every file under full_path, sorted for display.

@@ -374,8 +374,8 @@ def purge_runner_cache(runner_id, project=None, impression=None,  # pylint: disa
                 echo(f"{'Would purge' if dry_run else 'Purging'} "
                      f"{remote_dir} ({kind})")
                 if not dry_run:
-                    cmd = (f"find {shlex.quote(remote_dir)} -mindepth 1 "
-                           f"-maxdepth 1 -exec chmod -R u+w -- {{}} + && "
+                    cmd = (f"chmod -R u+w -- {shlex.quote(remote_dir)} "
+                           f"2>/dev/null || true && "
                            f"rm -rf {shlex.quote(remote_dir)}")
                     _out, _err, code = ssh.exec(cmd, timeout=3600)
                     if code != 0:

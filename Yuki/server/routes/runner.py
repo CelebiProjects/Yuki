@@ -2,9 +2,11 @@
 Runner management routes.
 """
 import os
+import json
 from logging import getLogger
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
+from ...kernel import liveness
 from ...kernel import runner_config
 from ...kernel import runner_inventory
 from ...kernel.ssh_workflow import (
@@ -49,6 +51,106 @@ def _ssh_ping(host, user, key_path, port=22):
         return {"status": "Failed", "message": str(e)}
     finally:
         client.close()
+
+
+def _walk_local_files(root):
+    """Return (files, bytes) for a local directory tree."""
+    total_files = 0
+    total_bytes = 0
+    if not os.path.isdir(root):
+        return total_files, total_bytes
+    for dirpath, _dirs, filenames in os.walk(root):
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                total_bytes += os.path.getsize(path)
+            except OSError:
+                continue
+            total_files += 1
+    return total_files, total_bytes
+
+
+def _project_distribution_summary(yuki_dir, project_uuid):
+    """Summarize current-project knowledge from distribution.json files."""
+    storage_root = os.path.join(yuki_dir, "Storage", project_uuid)
+    summary = {
+        "path": storage_root,
+        "files": 0,
+        "bytes": 0,
+        "impressions": 0,
+        "live_files": 0,
+        "live_bytes": 0,
+        "stale_files": 0,
+        "stale_bytes": 0,
+        "unknown_files": 0,
+        "unknown_bytes": 0,
+        "runners": {},
+    }
+    live_set = liveness.load_live_set(project_uuid, yuki_dir)
+    if not os.path.isdir(storage_root):
+        return summary
+    for impression in os.listdir(storage_root):
+        dist_path = os.path.join(storage_root, impression, "distribution.json")
+        if not os.path.isfile(dist_path):
+            continue
+        impression_state = liveness.impression_live(project_uuid, impression,
+                                                    yuki_dir)
+        try:
+            with open(dist_path, encoding="utf-8") as fh:
+                dist = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        locations = dist.get("locations", {}) or {}
+        imp_seen = False
+        yuki_entry = locations.get("yuki")
+        if isinstance(yuki_entry, dict):
+            imp_seen = True
+            files = int(yuki_entry.get("files", 0) or 0)
+            bytes_ = int(yuki_entry.get("bytes", 0) or 0)
+            summary["files"] += files
+            summary["bytes"] += bytes_
+            if impression_state is False:
+                summary["stale_files"] += files
+                summary["stale_bytes"] += bytes_
+            elif impression_state is True:
+                summary["live_files"] += files
+                summary["live_bytes"] += bytes_
+            else:
+                summary["unknown_files"] += files
+                summary["unknown_bytes"] += bytes_
+        for loc, block in locations.items():
+            if not loc.startswith("runner:"):
+                continue
+            runner_name = loc[len("runner:"):]
+            block = block if isinstance(block, dict) else {}
+            for kind in ("cache", "workflow"):
+                entry = block.get(kind)
+                if not isinstance(entry, dict):
+                    continue
+                imp_seen = True
+                summary["files"] += int(entry.get("files", 0) or 0)
+                summary["bytes"] += int(entry.get("bytes", 0) or 0)
+                if impression_state is False:
+                    summary["stale_files"] += int(entry.get("files", 0) or 0)
+                    summary["stale_bytes"] += int(entry.get("bytes", 0) or 0)
+                elif impression_state is True:
+                    summary["live_files"] += int(entry.get("files", 0) or 0)
+                    summary["live_bytes"] += int(entry.get("bytes", 0) or 0)
+                else:
+                    summary["unknown_files"] += int(entry.get("files", 0) or 0)
+                    summary["unknown_bytes"] += int(entry.get("bytes", 0) or 0)
+                runner_entry = summary["runners"].setdefault(
+                    runner_name, {"files": 0, "bytes": 0, "kinds": {}})
+                runner_entry["files"] += int(entry.get("files", 0) or 0)
+                runner_entry["bytes"] += int(entry.get("bytes", 0) or 0)
+                kind_entry = runner_entry["kinds"].setdefault(
+                    kind, {"files": 0, "bytes": 0})
+                kind_entry["files"] += int(entry.get("files", 0) or 0)
+                kind_entry["bytes"] += int(entry.get("bytes", 0) or 0)
+        if imp_seen:
+            summary["impressions"] += 1
+    summary["has_live_set"] = live_set is not None
+    return summary
 
 
 @bp.route("/runners", methods=['GET'])
@@ -524,3 +626,36 @@ def runner_data(runner):
         return jsonify({"error": str(e)}), 500
     return jsonify({"runner": runner,
                     "backend_type": backend_type, **inventory})
+
+
+@bp.route("/yuki-overview", methods=['GET'])
+def yuki_overview():
+    """Return an aggregate overview from distribution.json and local mirrors."""
+    config_file = config.get_config_file()
+    project_uuid = request.args.get("project_uuid", "").strip()
+    yuki_dir = os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki"))
+    storage_root = os.path.join(yuki_dir, "Storage", project_uuid) \
+        if project_uuid else os.path.join(yuki_dir, "Storage")
+    workflows_root = os.path.join(yuki_dir, "Workflows", project_uuid) \
+        if project_uuid else os.path.join(yuki_dir, "Workflows")
+    dist_summary = (_project_distribution_summary(yuki_dir, project_uuid)
+                    if project_uuid else {
+                        "path": storage_root, "files": 0, "bytes": 0,
+                        "impressions": 0, "runners": {},
+                    })
+    storage_files, storage_bytes = _walk_local_files(storage_root)
+    workflow_files, workflow_bytes = _walk_local_files(workflows_root)
+    return jsonify({
+        "project_uuid": project_uuid,
+        "distribution": dist_summary,
+        "storage": {
+            "path": storage_root,
+            "files": storage_files,
+            "bytes": storage_bytes,
+        },
+        "workflows": {
+            "path": workflows_root,
+            "files": workflow_files,
+            "bytes": workflow_bytes,
+        },
+    })

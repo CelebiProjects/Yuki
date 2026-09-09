@@ -6,6 +6,7 @@ by copying files to a remote host over SFTP and running Snakemake there over SSH
 # pylint: disable=cyclic-import,too-many-lines
 import json
 import os
+import re
 import shlex
 import socket
 import stat
@@ -918,13 +919,14 @@ wait "$snakemake_pid"
         self.update_workflow_status()
         return self.status()
 
-    def force_kill(self):
+    def force_kill(self, strict=False):
         """Force-stop the remote workflow: TERM, then KILL, then pkill.
 
         Works even when the pid file is missing or the process ignores
         SIGTERM (zombie runs): the workspace status is marked killed
         either way, so a stale 'running' clears and the workflow
-        becomes purgeable.
+        becomes purgeable. Bulk cancellation uses strict mode to require a
+        reachable runner and verify PID ownership before sending signals.
         """
         self.logger(f"[SSH] Force-killing remote workflow: "
                     f"{self.remote_exec_path}")
@@ -935,6 +937,16 @@ wait "$snakemake_pid"
                 snakemake_pid = (started[1] if started else
                                  self._read_remote_int(ssh, "yuki.pid"))
                 pid = wrapper_pid or snakemake_pid
+                if strict and pid:
+                    if not self._remote_pid_alive(ssh, pid):
+                        pid = None
+                    else:
+                        cwd, _err, code = ssh.exec(f"readlink -f /proc/{pid}/cwd")
+                        cwd = cwd.strip()
+                        if code or not (cwd == self.remote_exec_path or
+                                        cwd.startswith(self.remote_exec_path + "/")):
+                            raise RuntimeError(
+                                f"PID {pid} cannot be verified as belonging to this workflow")
                 if pid:
                     target = f"-{pid}" if wrapper_pid else str(pid)
                     ssh.exec(f"kill -TERM -- {target}")
@@ -943,15 +955,32 @@ wait "$snakemake_pid"
                         f"kill -0 {pid} 2>/dev/null")
                     if alive == 0:
                         ssh.exec(f"kill -KILL -- {target}")
+                    if strict and self._remote_pid_alive(ssh, pid):
+                        raise RuntimeError(f"PID {pid} is still present after force-stop")
                 # Catch orphaned snakemake children regardless of the pid.
-                ssh.exec(f"pkill -f {shlex.quote(self.remote_exec_path)} "
-                         "|| true")
+                if strict:
+                    # Escape regexp characters and avoid matching the SSH shell
+                    # command itself by spelling the initial slash as '[/]'.
+                    if not self.remote_exec_path.startswith("/"):
+                        raise RuntimeError("Force-stop requires an absolute remote workspace path")
+                    pattern = "[/]" + re.escape(self.remote_exec_path[1:])
+                    _out, err, code = ssh.exec(f"pkill -KILL -f {shlex.quote(pattern)}")
+                    if code not in (0, 1):  # 1 means no process matched.
+                        raise RuntimeError(f"Remote force-stop failed: {err}")
+                else:
+                    ssh.exec(f"pkill -f {shlex.quote(self.remote_exec_path)} "
+                             "|| true")
                 exit_path = f"{self.remote_exec_path}/yuki.exit"
                 exit_tmp = f"{exit_path}.tmp.kill"
-                ssh.exec(
+                _out, err, code = ssh.exec(
                     f"printf '137\\n' > {shlex.quote(exit_tmp)} && "
                     f"mv -f {shlex.quote(exit_tmp)} {shlex.quote(exit_path)}")
+                if strict and code and ssh.exists(self.remote_exec_path):
+                    raise RuntimeError(f"Could not record remote cancellation: {err}")
         except Exception as exc:  # pylint: disable=broad-exception-caught
+            if strict:
+                self.logger(f"[SSH] Remote force-kill failed: {exc}")
+                raise
             self.logger(f"[SSH] Remote force-kill failed "
                         f"(marking killed anyway): {exc}")
 

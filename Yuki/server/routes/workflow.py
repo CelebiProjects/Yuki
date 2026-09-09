@@ -6,7 +6,7 @@ from flask import Blueprint, request, jsonify
 from Yuki.kernel.impression_storage import ImpressionStorage
 from Yuki.kernel.vworkflow import VWorkflow
 from Yuki.kernel.status_constants import IN_MOVEMENT, translate_to_musical
-from ...kernel import workflow_purge
+from ...kernel import workflow_purge, workflow_kill
 from ..config import config
 
 bp = Blueprint('workflow', __name__)
@@ -126,6 +126,41 @@ def kill_workflow(project_uuid, workflow_uuid):
                     "project_uuid": project_uuid,
                     "workflow": workflow_uuid,
                     "backend_type": backend_type})
+
+
+@bp.route("/kill-running-workflows", methods=['POST'])
+def kill_running_workflows():
+    """Preview or stop a bounded list of recorded-running workflows."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    runner = data.get("runner")
+    project = data.get("project")
+    dry_run = data.get("dry_run", True)
+    workflows = data.get("workflows")
+
+    def valid_name(value):
+        return (isinstance(value, str) and value not in ("", ".", "..")
+                and "/" not in value and "\\" not in value)
+
+    if not valid_name(project) or not isinstance(runner, str):
+        return jsonify({"error": "runner and project are required"}), 400
+    if not isinstance(dry_run, bool):
+        return jsonify({"error": "dry_run must be a boolean"}), 400
+    if (workflows is not None and
+            (not isinstance(workflows, list) or not all(map(valid_name, workflows)))):
+        return jsonify({"error": "workflows must be a list of workflow IDs"}), 400
+    if not dry_run and workflows is None:
+        return jsonify({"error": "Execution requires workflow IDs from a preview"}), 400
+    runners = config.get_config_file().read_variable("runners_id", {})
+    if runner not in runners:
+        return jsonify({"error": f"runner '{runner}' not found"}), 400
+    try:
+        result = workflow_kill.kill_running_workflows(
+            runners[runner], project, dry_run=dry_run, workflows=workflows)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(result)
 
 
 @bp.route("/purge-runner-workflows", methods=['POST'])

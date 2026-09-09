@@ -255,8 +255,14 @@ class ImpressionStorage:
         except (OSError, ValueError):
             return [], {"level": "info", "message": f"no {kind} listing yet"}
 
-        stamp = cached.get("stamp") or datetime.datetime.fromtimestamp(
-            os.path.getmtime(cache_path)).strftime("%Y-%m-%d %H:%M")
+        try:
+            listed_at = datetime.datetime.fromisoformat(cached.get("stamp", ""))
+        except (TypeError, ValueError):
+            listed_at = datetime.datetime.fromtimestamp(
+                os.path.getmtime(cache_path), datetime.timezone.utc)
+        # Legacy naive stamps were written in the server's local timezone.
+        # Include an offset on the wire so each client can render its own time.
+        stamp = listed_at.astimezone(datetime.timezone.utc).isoformat(timespec="minutes")
         if cached.get("error"):
             note = {"level": "warning",
                     "message": (f"listing from {stamp}, "
@@ -267,6 +273,7 @@ class ImpressionStorage:
             note = {"level": "info",
                     "message": f"no {kind} files on the runner "
                               f"(listing from {stamp})"}
+        note["listing_time"] = stamp
         return files, note
 
     @staticmethod
@@ -278,7 +285,7 @@ class ImpressionStorage:
         payload = {
             "workflow_id": workflow_id,
             "files": files,
-            "stamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "stamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         if error:
             payload["error"] = error

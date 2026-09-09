@@ -90,7 +90,8 @@ def test_purge_deletes_matching_remote_dirs(tmp_path):
     rm_calls = [c for c in fake.exec_calls if "rm -rf" in c]
     assert len(rm_calls) == 2
     for call in rm_calls:
-        assert "chmod -R u+w" in call
+        assert "chmod -R u+w --" in call
+        assert "|| true && rm -rf" in call
         assert "impressions/proj1/" in call
 
 

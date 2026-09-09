@@ -185,6 +185,30 @@ def test_file_status_annotates_listing_with_stamp(tmp_path):
     assert {r["name"] for r in detail["files"]} == {"mass.png"}
 
 
+def test_listing_timestamp_has_explicit_offset(tmp_path):
+    """Clients receive an unambiguous instant, independent of server timezone."""
+    s, _ims = _storage(tmp_path)
+    machine_dir = tmp_path / "job" / "runner-1"
+    _write_cache(machine_dir, "wf-1", [])
+    path = machine_dir / "stageout.filelist.json"
+    payload = json.loads(path.read_text())
+    payload["stamp"] = "2026-09-07T22:00:00+08:00"
+    path.write_text(json.dumps(payload))
+    _files, note = s._runner_files(_finished_job("wf-1"), "stageout", str(machine_dir))
+    assert note["listing_time"] == "2026-09-07T14:00+00:00"
+    assert note["listing_time"] in note["message"]
+
+
+def test_new_listing_stamp_is_utc(tmp_path):
+    """New caches preserve timezone information instead of naive wall time."""
+    from datetime import datetime, timedelta
+    s, _ims = _storage(tmp_path)
+    machine_dir = tmp_path / "job" / "runner-1"
+    s._write_filelist(str(machine_dir), "stageout", "wf-1", [])
+    payload = json.loads((machine_dir / "stageout.filelist.json").read_text())
+    assert datetime.fromisoformat(payload["stamp"]).utcoffset() == timedelta(0)
+
+
 def test_file_status_empty_listing_notes_absence(tmp_path):
     """An empty saved listing says there are no files (with the stamp)."""
     s, _ims = _storage(tmp_path)

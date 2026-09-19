@@ -332,6 +332,7 @@ class ImpressionStorage:
         """Atomically write a saved runner listing (tmp + rename).
 
         /file-status reads the file concurrently, so writes must be atomic.
+        Return False if the listing cannot be saved.
         """
         payload = {
             "workflow_id": workflow_id,
@@ -348,7 +349,8 @@ class ImpressionStorage:
                 json.dump(payload, fh)
             os.replace(tmp_path, cache_path)
         except OSError:
-            pass   # best-effort; status still works without it
+            return False
+        return True
 
     @staticmethod
     def _previous_files(machine_dir, kind, workflow_id):
@@ -372,6 +374,7 @@ class ImpressionStorage:
         Otherwise the runner is listed live (stageout and logs); a failed
         listing keeps the previous files and records the error in the
         listing file so /file-status can report it.
+        Return True only when both listings were refreshed and saved.
         """
         machine_dir = None
         workflow_id = None
@@ -381,7 +384,8 @@ class ImpressionStorage:
                 workflow_id = job.workflow_id()
                 break
         if machine_dir is None:
-            return
+            return False
+        refreshed = True
         for kind in ("stageout", "logs"):
             files, error = [], None
             if not pre_execution:
@@ -392,7 +396,9 @@ class ImpressionStorage:
                     previous = self._previous_files(machine_dir, kind,
                                                     workflow_id)
                     files = previous if previous is not None else []
-            self._write_filelist(machine_dir, kind, workflow_id, files, error)
+            saved = self._write_filelist(machine_dir, kind, workflow_id, files, error)
+            refreshed = saved and error is None and refreshed
+        return refreshed
 
     def force_refresh_filelists(self):
         """Re-list the runner live and rewrite the saved file listings.
@@ -886,11 +892,12 @@ def refresh_job_filelists(project_uuid, workflow, workflow_status,
     this function — called from the status-update path, which runs in
     Celery — is the only place that lists the runner. Pre-execution
     statuses write empty listings locally; in-movement and terminal
-    statuses fetch live listings. Strictly best-effort: a failing refresh
-    must never fail the status update.
+    statuses fetch live listings. Return the IDs of jobs whose refresh failed
+    so callers can defer completion without aborting other jobs' updates.
     """
     pre_execution = translate_to_musical(workflow_status) \
         in PRE_EXECUTION_STATUSES
+    failed = set()
     for job in workflow.jobs:
         if job.job_type() == "algorithm":
             continue
@@ -900,7 +907,10 @@ def refresh_job_filelists(project_uuid, workflow, workflow_status,
                 translate_to_musical(job.status()) in (CODA, FAILED):
             continue
         try:
-            ImpressionStorage(project_uuid, job.uuid).refresh_filelists(
-                workflow, pre_execution)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+            if not ImpressionStorage(project_uuid, job.uuid).refresh_filelists(
+                    workflow, pre_execution):
+                failed.add(job.uuid)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            failed.add(job.uuid)
+            workflow.logger(f"Failed to refresh file listings for {job.uuid}: {exc}")
+    return failed

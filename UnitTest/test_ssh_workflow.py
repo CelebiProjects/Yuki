@@ -637,7 +637,8 @@ class TestSshWorkflow(unittest.TestCase):
         self.mock_sftp.files[done_path] = b""
         self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
 
-        self.workflow.update_workflow_status()
+        with patch.object(self.workflow, "_refresh_job_filelists", return_value=set()):
+            self.workflow.update_workflow_status()
 
         results_path = os.path.join(self.workflow.path, "results.json")
         self.assertTrue(os.path.exists(results_path))
@@ -658,7 +659,8 @@ class TestSshWorkflow(unittest.TestCase):
         self.workflow.jobs = [job]
         os.makedirs(self.workflow.path, exist_ok=True)
 
-        self.workflow.update_workflow_status()
+        with patch.object(self.workflow, "_refresh_job_filelists", return_value=set()):
+            self.workflow.update_workflow_status()
 
         results_path = os.path.join(self.workflow.path, "results.json")
         with open(results_path, encoding="utf-8") as f:
@@ -679,7 +681,8 @@ class TestSshWorkflow(unittest.TestCase):
         self.workflow.jobs = [job]
         os.makedirs(self.workflow.path, exist_ok=True)
 
-        self.workflow.update_workflow_status()
+        with patch.object(self.workflow, "_refresh_job_filelists", return_value=set()):
+            self.workflow.update_workflow_status()
 
         self.mock_refresh.assert_called_once_with(
             self.project_uuid, self.workflow, "finished")
@@ -700,7 +703,8 @@ class TestSshWorkflow(unittest.TestCase):
         with open(results_path, "w", encoding="utf-8") as f:
             json.dump({"results": {"status": "finished"}}, f)
 
-        self.workflow.update_workflow_status()
+        with patch.object(self.workflow, "_refresh_job_filelists", return_value=set()):
+            self.workflow.update_workflow_status()
 
         self.mock_refresh.assert_not_called()
 
@@ -816,9 +820,92 @@ class TestSshWorkflow(unittest.TestCase):
         self.workflow.jobs = [job]
         self.mock_sftp.files[f"{self.workflow.remote_exec_path}/{job.short_uuid()}.done"] = b""
 
-        self.workflow.propagate_job_statuses(workflow_terminal=False)
+        self.workflow.propagate_job_statuses(
+                workflow_terminal=False, listing_failures=set())
 
         job.set_status.assert_called_once_with("finished", "Remote execution completed")
+
+    @patch("paramiko.SSHClient")
+    def test_finished_waits_for_saved_listings_and_retries(self, mock_ssh_cls):
+        """Both remote scans and local saves must succeed before completion."""
+        from Yuki.kernel.impression_storage import ImpressionStorage
+        from Yuki.kernel.vjob import VJob
+
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+        self.mock_sftp.files[f"{self.workflow.remote_exec_path}/aaaaaaa.done"] = b""
+        job_dir, _ = self._prepare_real_storage_jobs()
+        self._write_workflow_backend_config()
+        self._add_runner_to_runners_list()
+        self.workflow.jobs = [VJob(job_dir, "runner-uuid")]
+        job = self.workflow.jobs[0]
+
+        def read_results():
+            with open(os.path.join(self.workflow.path, "results.json"),
+                      encoding="utf-8") as stream:
+                return json.load(stream)["results"]
+
+        with patch("Yuki.server.config.config", _fake_server_config(self.tmpdir)):
+            for failed_kind in ("stageout", "logs"):
+                def list_files(_impression, kind):
+                    if kind == failed_kind:
+                        raise ConnectionError("runner unavailable")
+                    return []
+
+                with patch.object(self.workflow, "list_runner_files", side_effect=list_files):
+                    self.workflow.update_workflow_status()
+                self.assertEqual(job.status(), "running")
+                self.assertIn("will retry", job.detailed_status())
+                self.assertEqual(read_results()["status"], "running")
+                self.mock_refresh.assert_not_called()
+
+            real_write = ImpressionStorage._write_filelist
+
+            def fail_listing_save(source, target):
+                if str(target).endswith(".filelist.json"):
+                    raise OSError("disk full")
+                return real_replace(source, target)
+
+            real_replace = os.replace
+            with patch("Yuki.kernel.impression_storage.os.replace",
+                       side_effect=fail_listing_save):
+                self.workflow.update_workflow_status()
+            self.assertEqual(job.status(), "running")
+            self.assertEqual(read_results()["status"], "running")
+            self.mock_refresh.assert_not_called()
+
+            def save_before_finished(*args):
+                self.assertNotEqual(job.status(), "finished")
+                self.assertNotEqual(read_results()["status"], "finished")
+                return real_write(*args)
+
+            with patch.object(ImpressionStorage, "_write_filelist",
+                              side_effect=save_before_finished):
+                self.workflow.update_workflow_status()
+            self.assertEqual(job.status(), "finished")
+            self.assertEqual(read_results()["status"], "finished")
+            self.mock_refresh.assert_called_once_with(
+                self.project_uuid, self.workflow, "finished")
+            for kind in ("stageout", "logs"):
+                with open(os.path.join(job_dir, "runner-uuid", kind + ".filelist.json"),
+                          encoding="utf-8") as stream:
+                    listing = json.load(stream)
+                self.assertEqual(listing["workflow_id"], self.workflow_uuid)
+                self.assertEqual(listing["files"], [])
+                self.assertNotIn("error", listing)
+
+    @patch("paramiko.SSHClient")
+    def test_direct_propagation_does_not_finish_without_listings(self, mock_ssh_cls):
+        """Calling per-job propagation directly cannot bypass the refresh gate."""
+        mock_ssh_cls.return_value = self.mock_client
+        job = self._make_job("a" * 32)
+        self.workflow.jobs = [job]
+        self.mock_sftp.files[f"{self.workflow.remote_exec_path}/aaaaaaa.done"] = b""
+        with patch.object(self.workflow, "_refresh_job_filelists",
+                          return_value={job.uuid}) as refresh:
+            self.assertTrue(self.workflow.propagate_job_statuses())
+        refresh.assert_called_once_with("running")
+        self.assertEqual(job.set_status.call_args.args[0], "running")
 
     @patch("paramiko.SSHClient")
     def test_running_poll_records_distribution_for_finished_job(
@@ -889,7 +976,8 @@ class TestSshWorkflow(unittest.TestCase):
             f"{self.workflow.remote_exec_path}/{job.short_uuid()}.done"] = b""
 
         with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
-            self.workflow.propagate_job_statuses(workflow_terminal=False)
+            self.workflow.propagate_job_statuses(
+                workflow_terminal=False, listing_failures=set())
 
         job.set_status.assert_called_once_with("finished",
                                                "Remote execution completed")
@@ -915,7 +1003,8 @@ class TestSshWorkflow(unittest.TestCase):
             MagicMock(), _MockStdout("RuntimeError: segfault"), _MockStderr(""))
 
         with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
-            self.workflow.propagate_job_statuses(workflow_terminal=True)
+            self.workflow.propagate_job_statuses(
+                workflow_terminal=True, listing_failures=set())
 
         args, _kwargs = job.set_status.call_args
         self.assertEqual(args[0], FAILED)
@@ -936,7 +1025,8 @@ class TestSshWorkflow(unittest.TestCase):
 
         with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
             mock_storage.return_value.update_distribution.side_effect = OSError("boom")
-            self.workflow.propagate_job_statuses(workflow_terminal=False)  # no raise
+            self.workflow.propagate_job_statuses(
+                workflow_terminal=False, listing_failures=set())  # no raise
 
         job.set_status.assert_called_once_with("finished",
                                                "Remote execution completed")

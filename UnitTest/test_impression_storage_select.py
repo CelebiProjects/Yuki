@@ -252,8 +252,8 @@ def test_refresh_filelists_lists_live_when_running(tmp_path):
     wf.list_runner_files.return_value = [{"name": "partial.root", "size": 1}]
     s._get_runner_contexts = lambda: [("runner", _finished_job("wf-1"), wf)]
 
-    s.refresh_filelists(wf, pre_execution=False)
-    s.refresh_filelists(wf, pre_execution=False)
+    assert s.refresh_filelists(wf, pre_execution=False) is True
+    assert s.refresh_filelists(wf, pre_execution=False) is True
 
     assert wf.list_runner_files.call_count == 4      # stageout + logs, twice
     payload = _read_cache(tmp_path / "job" / "runner-1")
@@ -271,7 +271,7 @@ def test_refresh_filelists_records_failure(tmp_path):
     wf.list_runner_files.side_effect = ConnectionError("boom")
     s._get_runner_contexts = lambda: [("runner", _finished_job("wf-1"), wf)]
 
-    s.refresh_filelists(wf, pre_execution=False)
+    assert s.refresh_filelists(wf, pre_execution=False) is False
 
     payload = _read_cache(machine_dir)
     assert payload["files"][0]["name"] == "old.png"  # previous listing kept
@@ -288,7 +288,7 @@ def test_refresh_filelists_skips_unknown_workflow(tmp_path):
     s._get_runner_contexts = lambda: [("runner", _finished_job("wf-1"),
                                        context)]
 
-    s.refresh_filelists(wf, pre_execution=False)
+    assert s.refresh_filelists(wf, pre_execution=False) is False
 
     wf.list_runner_files.assert_not_called()
     assert not os.path.exists(tmp_path / "job" / "runner-1")
@@ -320,7 +320,19 @@ def test_refresh_job_filelists_swallows_job_errors(tmp_path):
     wf.jobs = [mock.Mock(job_type=lambda: "task", uuid="imp-a", is_input=False)]
 
     with mock.patch.object(_ims, "ImpressionStorage", return_value=s):
-        _ims.refresh_job_filelists("proj-1", wf, "running")   # must not raise
+        assert _ims.refresh_job_filelists("proj-1", wf, "running") == {"imp-a"}
+
+
+def test_refresh_filelists_reports_write_failure(tmp_path):
+    """A successful remote scan does not count until its listing is saved."""
+    s, _ims = _storage(tmp_path)
+    wf = mock.Mock(uuid="wf-1")
+    wf.list_runner_files.return_value = []
+    s._get_runner_contexts = lambda: [("runner", _finished_job("wf-1"), wf)]
+    with mock.patch.object(_ims.os, "replace", side_effect=OSError("disk full")):
+        assert s.refresh_filelists(wf, pre_execution=False) is False
+    assert s.refresh_filelists(wf, pre_execution=False) is True
+    assert _read_cache(tmp_path / "job" / "runner-1")["files"] == []
 
 
 def test_force_refresh_filelists_lists_live_for_each_kind(tmp_path):

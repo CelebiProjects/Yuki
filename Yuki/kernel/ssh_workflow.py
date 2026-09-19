@@ -765,8 +765,14 @@ wait "$snakemake_pid"
             self.logger(f"[SSH] Failed to record distribution for "
                         f"{job.short_uuid()}: {exc}")
 
-    def propagate_job_statuses(self, workflow_terminal=False):
-        """Reconcile each VJob's status.json with remote markers."""
+    def propagate_job_statuses(self, workflow_terminal=False, listing_failures=None):
+        """Reconcile remote markers, deferring completion until listings are saved.
+
+        Return whether any completed job is waiting for a listing refresh.
+        """
+        if listing_failures is None:
+            listing_failures = self._refresh_job_filelists("running")
+        pending = False
         with self._ssh() as ssh:
             for job in self.jobs:
                 if job.is_input:
@@ -779,6 +785,12 @@ wait "$snakemake_pid"
                 short = job.short_uuid()
                 done_path = f"{self.remote_exec_path}/{short}.done"
                 if ssh.exists(done_path):
+                    if job.uuid in listing_failures:
+                        job.set_status(
+                            "running", "Remote execution completed; waiting for "
+                            "stageout/log listings to refresh (will retry)")
+                        pending = True
+                        continue
                     job.set_status("finished", "Remote execution completed")
                     self._record_job_distribution(job)
                     continue
@@ -799,6 +811,7 @@ wait "$snakemake_pid"
                         FAILED,
                         "Skipped: upstream dependency failed before this job ran",
                     )
+        return pending
 
     def _read_remote_exit(self, ssh):
         """Return the remote wrapper's exit code, or None while still running."""
@@ -911,10 +924,6 @@ wait "$snakemake_pid"
             # already terminal and the transition would be invisible.
             entered_terminal = self._entered_terminal_state(status)
 
-            path = os.path.join(self.path, "results.json")
-            results_file = metadata.ConfigFile(path)
-            results_file.write_variable("results", results)
-
             workflow_terminal = status in ("finished", "failed")
 
             # Refresh listings before propagating per-job statuses: a job
@@ -922,8 +931,21 @@ wait "$snakemake_pid"
             # still non-terminal (the refresh skips terminal jobs while the
             # workflow is running), and the per-job distribution recording
             # inside propagate_job_statuses reads that fresh listing.
-            self._refresh_job_filelists(status, entered_terminal)
-            self.propagate_job_statuses(workflow_terminal=workflow_terminal)
+            listing_failures = self._refresh_job_filelists(status, entered_terminal)
+            pending = self.propagate_job_statuses(
+                workflow_terminal=workflow_terminal, listing_failures=listing_failures)
+            if pending or (status == "finished" and listing_failures):
+                status = "running"
+                results["status"] = status
+                results["detail"] = (
+                    "Remote execution completed; waiting for stageout/log "
+                    "listings to refresh (will retry)")
+                entered_terminal = False
+
+            # Keep the workflow pollable until completion metadata is saved.
+            path = os.path.join(self.path, "results.json")
+            results_file = metadata.ConfigFile(path)
+            results_file.write_variable("results", results)
             self.logger(
                 f"[SSH] propagate_job_statuses finished "
                 f"workflow_terminal={workflow_terminal}"

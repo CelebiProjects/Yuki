@@ -89,3 +89,17 @@ Nightly images are also published to `ghcr.io` by CI.
 ```bash
 python -m pytest UnitTest/ -v
 ```
+
+### SSH submission timeouts
+
+`submit --runner my_runner --timeout 3000` in the Celebi shell sends a
+`timeout` field (positive integer seconds) to Yuki's `/execute` endpoint.
+Yuki passes it to the background worker and saves it as `submission_timeout`
+in the workflow configuration. SSH commands, connection handshakes, and
+startup-marker confirmation use at least this limit, including after the
+workflow is reloaded. Existing longer operation limits remain in effect.
+Omitting the option preserves the existing server defaults.
+
+The detached SSH session still gets a quick 2-second check before Yuki
+switches to remote startup-marker verification. This is not a workflow
+runtime limit. Both the Celebi client and Yuki server/worker need the update.

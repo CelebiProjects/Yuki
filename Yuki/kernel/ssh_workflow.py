@@ -17,6 +17,7 @@ from CelebiChrono.utils import metadata
 from Yuki.kernel import runner_config
 from Yuki.utils.env_interpreter import EnvInterpreter
 from .vworkflow import VWorkflow
+from .ssh_pool import ssh_pool
 from .status_constants import (FAILED, DISSONANCE, STOPPED,
                                translate_to_musical, is_terminal_status)
 from .file_staging import walk_files
@@ -74,46 +75,67 @@ def environment_needs_conda(environment):
 class _SshConnection:
     """Thin wrapper around Paramiko for remote SSH/SFTP operations."""
 
-    def __init__(self, host, user, key_path=None, port=DEFAULT_SSH_PORT):
+    def __init__(self, host, user, key_path=None, port=DEFAULT_SSH_PORT, timeout=None):
+        self.minimum_timeout = timeout
         self.host = host
         self.user = user
         self.key_path = os.path.expanduser(key_path) if key_path else None
         self.port = port
         self._client = None
         self._sftp = None
+        self._pool_key = None
+        self._discard = False
 
     def connect(self):
-        """Open SSH connection."""
+        """Borrow a persistent SSH/SFTP connection for this operation."""
+        if self._client is not None:
+            return
+        key_stamp = None
+        if self.key_path and os.path.exists(self.key_path):
+            info = os.stat(self.key_path)
+            key_stamp = (info.st_ino, info.st_mtime_ns, info.st_size)
+        self._pool_key = (self.host, self.port, self.user,
+                          self.key_path, key_stamp)
+        self._client, self._sftp = ssh_pool.acquire(
+            self._pool_key, self._open_connection)
+        self._discard = False
+
+    def _open_connection(self):
         import paramiko
 
-        self._client = paramiko.SSHClient()
-        self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         connect_kwargs = {
             "hostname": self.host,
             "port": self.port,
             "username": self.user,
-            "timeout": 30,
-            "banner_timeout": 30,
+            "timeout": self._operation_timeout(30),
+            "banner_timeout": self._operation_timeout(30),
+            "auth_timeout": self._operation_timeout(30),
         }
         if self.key_path and os.path.exists(self.key_path):
             connect_kwargs["key_filename"] = self.key_path
-        self._client.connect(**connect_kwargs)
-        self._sftp = self._client.open_sftp()
+        try:
+            client.connect(**connect_kwargs)
+            client.get_transport().set_keepalive(30)
+            return client, client.open_sftp()
+        except BaseException:
+            client.close()
+            raise
 
     def close(self):
-        """Close SFTP and SSH connection."""
-        if self._sftp:
-            self._sftp.close()
-            self._sftp = None
-        if self._client:
-            self._client.close()
-            self._client = None
+        """Return a healthy connection to the pool, or discard a failed lease."""
+        if self._client is not None:
+            entry = self._client, self._sftp
+            self._client = self._sftp = None
+            ssh_pool.release(self._pool_key, entry, discard=self._discard)
 
     def __enter__(self):
         self.connect()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._discard = self._discard or exc_type is not None
         self.close()
         return False
 
@@ -213,6 +235,10 @@ class _SshConnection:
             elif stat.S_ISREG(st.st_mode):
                 yield entry, remote_path, st.st_size
 
+    def _operation_timeout(self, default):
+        """Extend operation limits for this lease without shortening existing limits."""
+        return max(default, self.minimum_timeout or default)
+
     def exec(self, command, timeout=300):
         """Execute a command on the remote host.
 
@@ -221,8 +247,9 @@ class _SshConnection:
         hanging on sshd setups that keep exec sessions alive while a
         background job still exists.
         """
-        logger.debug("[SSH] Executing command: %s with timeout %s",
-                     command, timeout)
+        timeout = self._operation_timeout(timeout)
+        logger.debug("[SSH] Executing command (%s characters): %s, timeout=%s",
+                     len(command), command.replace("\n", " ")[:160], timeout)
         stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
         logger.debug("[SSH] Command executed, waiting for exit status...")
         channel = stdout.channel
@@ -238,6 +265,7 @@ class _SshConnection:
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
         stdin.close()
+        channel.close()
         return out, err, exit_code
 
     def exec_start_detached(self, command, timeout=30, grace=2):
@@ -252,17 +280,16 @@ class _SshConnection:
         directly blocks on such hosts). Returns (out, err, code) when
         the remote reports within the grace period.
         """
-        logger.debug("[SSH] Starting detached command: %s with timeout %s",
-                     command, timeout)
+        self._discard = True
+        timeout = self._operation_timeout(timeout)
+        logger.debug("[SSH] Starting detached command (%s characters), timeout=%s, grace=%s",
+                     len(command), timeout, grace)
         stdin, stdout, _stderr = self._client.exec_command(command, timeout=timeout)
         logger.debug("[SSH] Detached command started, waiting for confirmation...")
         channel = stdout.channel
         channel.settimeout(timeout)
         deadline = time.monotonic() + grace
         while not channel.exit_status_ready():
-            logger.debug("[SSH] Waiting for remote confirmation, "
-                         "time left: %.2fs",
-                         deadline - time.monotonic())
             if time.monotonic() >= deadline:
                 # Do NOT channel.close() here: on a hung session the
                 # remote never confirms the close either, so close()
@@ -286,7 +313,6 @@ class _SshConnection:
                if channel.recv_stderr_ready() else "")
         logger.debug("[SSH] Remote command error: %s", err)
         stdin.close()
-        logger.debug("[SSH] Remote command output: %s, error: %s", out, err)
         return out, err, exit_code
 
 
@@ -325,6 +351,7 @@ class SshWorkflow(VWorkflow):
             user=cfg.get("user", ""),
             key_path=cfg.get("key_path"),
             port=cfg.get("port", DEFAULT_SSH_PORT),
+            timeout=self.config_file.read_variable("submission_timeout", None),
         )
 
     def _rawdata_cache_dir(self, impression):
@@ -613,7 +640,9 @@ wait "$snakemake_pid"
                         f"Remote Snakemake failed to launch: {detail} (exit {code})"
                     )
 
-            self._confirm_remote_start(ssh)
+            confirmation_timeout = self.config_file.read_variable("submission_timeout", None)
+            self._confirm_remote_start(
+                ssh, timeout=max(SSH_START_CONFIRM_TIMEOUT, confirmation_timeout or 0))
             self.logger("[SSH] Remote Snakemake started")
 
     def _build_remote_launch_command(self):

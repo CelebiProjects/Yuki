@@ -16,6 +16,8 @@ def _workflow(tmp_path, monkeypatch, config_data):
     monkeypatch.setenv("HOME", str(tmp_path))
     with mock.patch.object(SshWorkflow, "__init__", lambda self, *a, **k: None):
         wf = SshWorkflow.__new__(SshWorkflow)
+    wf.config_file = mock.Mock()
+    wf.config_file.read_variable.side_effect = lambda _key, default=None: default
     wf.machine_id = "m1"
     return wf
 

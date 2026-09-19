@@ -14,8 +14,12 @@ class _MockSftp:
     """Minimal in-memory SFTP double for SshWorkflow tests."""
 
     def __init__(self):
+        self.channel = MagicMock(closed=False)
         self.files = {}
         self.dirs = set()
+
+    def get_channel(self):
+        return self.channel
 
     def mkdir(self, path):
         """Record the created remote directory."""
@@ -189,6 +193,9 @@ class TestSshWorkflow(unittest.TestCase):
     # pylint: disable=too-many-instance-attributes,too-many-public-methods
 
     def setUp(self):
+        from Yuki.kernel.ssh_pool import ssh_pool
+        ssh_pool.close()
+        self.addCleanup(ssh_pool.close)
         self.tmpdir = tempfile.mkdtemp()
         self._home_patcher = patch.dict(os.environ, {"HOME": self.tmpdir})
         self._home_patcher.start()

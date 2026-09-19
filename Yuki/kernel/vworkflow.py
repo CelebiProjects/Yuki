@@ -224,15 +224,15 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         try:
             self.logger("Constructing the snakefile")
             self.construct_snake_file()
-        except Exception:
-            self.logger("Failed to construct the snakefile")
+        except Exception as exc:
+            self.logger(f"Failed to construct the snakefile: {exc}")
             self.set_workflow_status("failed")
             for job in self.jobs:
                 if job.is_input:
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(DISSONANCE, "Workflow construction failed: snakefile creation error")
+                job.set_status(DISSONANCE, f"Workflow construction failed: {exc}")
             raise
 
         try:
@@ -390,6 +390,17 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         - References a container image and resources.
         - Provides a shell command combining the job's commands.
         """
+        # Validate before writing any rules: every finalize input must have a
+        # producer. Missing impression metadata must not silently drop a job.
+        for job in self.jobs:
+            object_type = job.object_type()
+            if object_type not in ("task", "algorithm"):
+                raise ValueError(
+                    f"Invalid object_type {object_type!r} for job {job.path}. "
+                    f"Restore the impression metadata in "
+                    f"{os.path.join(job.path, 'config.json')} before resubmitting."
+                )
+
         config = metadata.ConfigFile(os.path.join(_yuki_dir(), "config.json"))
         use_kerberos = config.read_variable("use_kerberos", {}).get(self.machine_id, False)
         for job in self.jobs:
@@ -497,10 +508,6 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 container.is_input = job.is_input
                 snakemake_rule = container.snakemake_rule(self.machine_id, backend_type)
                 step = container.step(self.machine_id, backend_type)
-            else:
-                # Unknown job type, skip or handle
-                self.logger(f"Unknown job type {job.object_type()} for job {job}, skipping")
-                continue
             self.logger(f"[{i+1}/{total_jobs}] Get the step at time "
                          f"{time.time() - start_time:.4f}s")
 

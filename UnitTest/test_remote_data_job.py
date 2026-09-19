@@ -2,6 +2,7 @@
 import importlib
 import json
 import os
+import shlex
 from unittest import mock
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from CelebiChrono.utils.file_utils import dir_md5
 from CelebiChrono.utils.metadata import ConfigFile
 from Yuki.kernel import remote_data_ops
+from Yuki.kernel.detached_copy import LAUNCH_SCRIPT, READ_STATE_SCRIPT
 
 config_module = importlib.import_module("Yuki.server.config")
 
@@ -19,6 +21,8 @@ class FakeSsh:
         self.md5_out = md5_out
         self.commands = []
         self.made_dirs = []
+        self.copy_state = {"status": "done"}
+        self.copy_started = False
 
     def __enter__(self):
         return self
@@ -34,7 +38,15 @@ class FakeSsh:
         """Record the command and answer md5 queries from the fixture."""
         self.commands.append(command)
         if command.startswith("python3 -c"):
+            if shlex.split(command)[2] == READ_STATE_SCRIPT:
+                return json.dumps(self.copy_state if self.copy_started else None), "", 0
             return self.md5_out, "", 0
+        return "", "", 0
+
+    def exec_start_detached(self, command):
+        """Record the launcher without running a copy in the worker."""
+        self.commands.append(command)
+        self.copy_started = True
         return "", "", 0
 
 
@@ -206,7 +218,8 @@ def test_copy_remote_data_job_archives_impression(monkeypatch, tmp_path):
         result = remote_data_ops.copy_remote_data_job(
             "job-1", "imp-1", "proj", "r1", "/src/data")
 
-    copy_cmds = [c for c in fake.commands if c.startswith("mkdir -p")]
+    copy_cmds = [shlex.split(c)[-1] for c in fake.commands
+                 if c.startswith("python3 -c") and shlex.split(c)[2] == LAUNCH_SCRIPT]
     assert copy_cmds, "expected a copy command"
     assert "/impressions/proj/imp-1" in copy_cmds[0]
     assert "cp -a --reflink=auto" in copy_cmds[0]
@@ -215,29 +228,24 @@ def test_copy_remote_data_job_archives_impression(monkeypatch, tmp_path):
     status = json.loads(
         (tmp_path / "Storage" / "proj" / "imp-1" / "status.json").read_text())
     assert status["status"] == "archived"
-    assert result == {"uuid": "abc123", "impression_uuid": "imp-1",
-                      "descriptor": "mydata"}
+    assert result["status"] == "done"
+    assert result["result"] == {"uuid": "abc123", "impression_uuid": "imp-1",
+                                "descriptor": "mydata"}
 
 
 def test_copy_remote_data_job_failure_marks_failed(monkeypatch, tmp_path):
-    """A failed copy marks the impression failed and raises."""
+    """A remote failure marks both the impression and registration failed."""
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
     _impression_fixture(tmp_path, md5="abc123", descriptor="mydata")
     fake = FakeSsh("")
 
-    def failing_exec(command, timeout=None):  # pylint: disable=unused-argument
-        fake.commands.append(command)
-        if command.startswith("mkdir -p"):
-            return "", "disk full", 1
-        return "", "", 0
-
-    fake.exec = failing_exec
+    fake.copy_state = {"status": "failed", "error": "remote copy failed: disk full"}
     with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
                     return_value=fake):
-        with pytest.raises(RuntimeError) as exc:
-            remote_data_ops.copy_remote_data_job(
-                "job-1", "imp-1", "proj", "r1", "/src/data")
-    assert "copy failed" in str(exc.value)
+        state = remote_data_ops.copy_remote_data_job(
+            "job-1", "imp-1", "proj", "r1", "/src/data")
+    assert state["status"] == "failed"
+    assert "disk full" in state["error"]
     status = json.loads(
         (tmp_path / "Storage" / "proj" / "imp-1" / "status.json").read_text())
     assert status["status"] == "failed"
@@ -367,6 +375,157 @@ def test_register_remote_data_job_emits_progress_paths(monkeypatch, tmp_path):
     assert any(progress_path in c for c in md5_cmds), fake.commands
 
 
+def test_copy_task_releases_worker_while_remote_copy_is_pending(monkeypatch, tmp_path):
+    """A pending remote copy schedules another check instead of waiting."""
+    from celery.exceptions import Retry
+    from Yuki.server import tasks
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    imp_dir = _impression_fixture(tmp_path)
+    fake = FakeSsh("")
+    fake.copy_state = {"status": "copying"}
+    with mock.patch.object(remote_data_ops, "_ssh_connection", return_value=fake), \
+            mock.patch.object(tasks.task_copy_remote_data, "retry",
+                              side_effect=Retry()) as retry:
+        with pytest.raises(Retry):
+            tasks.task_copy_remote_data.run("job-1", "imp-1", "proj", "r1", "/src")
+    retry.assert_called_once_with(countdown=2)
+    state = remote_data_ops.read_job_state(str(tmp_path), "job-1")
+    assert state["status"] == "copying"
+    assert state["result"]["impression_uuid"] == "imp-1"
+    assert ConfigFile(str(imp_dir / "status.json")).read_variable("status") == "running"
+    assert not any(command.startswith("rm ") for command in fake.commands)
+    assert tasks.task_copy_remote_data.acks_late
+    assert tasks.task_copy_remote_data.reject_on_worker_lost
+
+
+def test_copy_disconnect_is_retried_without_marking_failed(monkeypatch, tmp_path):
+    """A disconnected launch may have succeeded on the runner."""
+    from celery.exceptions import Retry
+    from Yuki.server import tasks
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    imp_dir = _impression_fixture(tmp_path)
+    with mock.patch.object(remote_data_ops, "_ssh_connection",
+                           side_effect=ConnectionError("SSH lost")), \
+            mock.patch.object(tasks.task_copy_remote_data, "retry",
+                              side_effect=Retry()) as retry:
+        with pytest.raises(Retry):
+            tasks.task_copy_remote_data.run("job-1", "imp-1", "proj", "r1", "/src")
+    assert isinstance(retry.call_args.kwargs["exc"], ConnectionError)
+    assert remote_data_ops.read_job_state(str(tmp_path), "job-1")["status"] == "copying"
+    assert ConfigFile(str(imp_dir / "status.json")).read_variable("status") == "running"
+
+
+@pytest.mark.parametrize("outcome, impression_status", [
+    ("done", "archived"), ("failed", "failed"),
+])
+def test_progress_poll_recovers_detached_result_without_worker(
+        monkeypatch, tmp_path, outcome, impression_status):
+    """A fresh observer recovers persisted remote state without relaunching."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    imp_dir = _impression_fixture(tmp_path)
+    remote_data_ops.write_job_state(str(tmp_path), "job-1", {
+        "status": "copying", "copy_detached": True, "project_uuid": "proj",
+        "runner_id": "r1", "result": {"impression_uuid": "imp-1", "uuid": "abc123"},
+    })
+    fake = FakeSsh("")
+    fake.copy_state = {"status": outcome, "error": "disk full" if outcome == "failed" else None}
+    fake.copy_started = True
+    with mock.patch.object(remote_data_ops, "_ssh_connection", return_value=fake), \
+            mock.patch.object(fake, "exec_start_detached") as launch:
+        remote_data_ops.read_remote_progress("r1", "job-1")
+    launch.assert_not_called()
+    state = remote_data_ops.read_job_state(str(tmp_path), "job-1")
+    assert state["status"] == outcome
+    assert state["error"] == fake.copy_state["error"]
+    assert state["result"]["impression_uuid"] == "imp-1"
+    assert ConfigFile(str(imp_dir / "status.json")).read_variable("status") == impression_status
+
+
+def test_unconfirmed_launch_can_still_recover_completion(monkeypatch, tmp_path):
+    """Lack of an SSH start acknowledgement must not hide remote success."""
+    from Yuki.kernel.ssh_workflow import SSHStartNotConfirmed
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _impression_fixture(tmp_path)
+    fake = FakeSsh("")
+
+    def unconfirmed_start(_command):
+        fake.copy_started = True
+        raise SSHStartNotConfirmed("no acknowledgement")
+
+    with mock.patch.object(remote_data_ops, "_ssh_connection", return_value=fake), \
+            mock.patch.object(fake, "exec_start_detached",
+                              side_effect=unconfirmed_start):
+        state = remote_data_ops.copy_remote_data_job(
+            "job-1", "imp-1", "proj", "r1", "/src")
+    assert state["status"] == "done"
+
+
+def test_copy_checks_do_not_relaunch_live_process(monkeypatch, tmp_path):
+    """Repeated checks, including a fresh worker, only observe a live copy."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _impression_fixture(tmp_path)
+    fake = FakeSsh("")
+    fake.copy_state = {"status": "copying", "active": True}
+    with mock.patch.object(remote_data_ops, "_ssh_connection", return_value=fake), \
+            mock.patch.object(fake, "exec_start_detached",
+                              wraps=fake.exec_start_detached) as launch:
+        for _ in range(3):
+            assert remote_data_ops.copy_remote_data_job(
+                "job-1", "imp-1", "proj", "r1", "/src") is None
+        launch.assert_called_once()
+        fake.copy_state = {"status": "done", "active": False}
+        assert remote_data_ops.copy_remote_data_job(
+            "job-1", "imp-1", "proj", "r1", "/src")["status"] == "done"
+        launch.assert_called_once()
+
+
+def test_copy_relaunches_only_when_process_lock_is_free(monkeypatch, tmp_path):
+    """A stale copying record alone must not prevent recovery."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _impression_fixture(tmp_path)
+    fake = FakeSsh("")
+    fake.copy_started = True
+    fake.copy_state = {"status": "copying", "active": False}
+    with mock.patch.object(remote_data_ops, "_ssh_connection", return_value=fake), \
+            mock.patch.object(fake, "exec_start_detached",
+                              wraps=fake.exec_start_detached) as launch:
+        assert remote_data_ops.copy_remote_data_job(
+            "job-1", "imp-1", "proj", "r1", "/src") is None
+        launch.assert_called_once()
+
+
+def test_failed_copy_probe_does_not_launch(monkeypatch, tmp_path):
+    """An unavailable status read is not evidence that no copy is running."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _impression_fixture(tmp_path)
+    fake = FakeSsh("")
+    with mock.patch.object(remote_data_ops, "_ssh_connection", return_value=fake), \
+            mock.patch.object(fake, "exec", return_value=("", "permission denied", 1)), \
+            mock.patch.object(fake, "exec_start_detached") as launch:
+        with pytest.raises(RuntimeError, match="Cannot read remote copy state"):
+            remote_data_ops.copy_remote_data_job("job-1", "imp-1", "proj", "r1", "/src")
+    launch.assert_not_called()
+
+
+def test_old_copy_completion_cannot_archive_new_registration(monkeypatch, tmp_path):
+    """Only the newest registration may change the shared impression status."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    imp_dir = _impression_fixture(tmp_path)
+    state = {"status": "copying", "copy_detached": True,
+             "project_uuid": "proj", "runner_id": "r1",
+             "result": {"impression_uuid": "imp-1"}}
+    remote_data_ops.write_job_state(str(tmp_path), "e827", dict(state, created_at_ns=100))
+    remote_data_ops.write_job_state(str(tmp_path), "af177", dict(state, created_at_ns=200))
+    fake = FakeSsh("")
+    fake.copy_started = True
+    with mock.patch.object(remote_data_ops, "_ssh_connection", return_value=fake):
+        assert remote_data_ops.reconcile_remote_copy("e827", "r1")["status"] == "done"
+        assert ConfigFile(str(imp_dir / "status.json")).read_variable("status") == "running"
+        assert remote_data_ops.find_job_by_impression(str(tmp_path), "imp-1")[0] == "af177"
+        assert remote_data_ops.reconcile_remote_copy("af177", "r1")["status"] == "done"
+    assert ConfigFile(str(imp_dir / "status.json")).read_variable("status") == "archived"
+
+
 def test_register_remote_data_job_without_project_context(monkeypatch, tmp_path):
     """The job must work when no Celebi project context exists (celery worker).
 
@@ -478,3 +637,38 @@ def test_file_status_no_remote_marker_returns_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(config_module, "config", _StubConfig(tmp_path))
     rows = ImpressionStorage("proj", "imp-1").file_status("stageout")
     assert not rows
+
+
+@pytest.mark.parametrize("project, descriptor", [
+    ("other-project", "mydata"), ("proj", "old-descriptor"),
+])
+def test_registration_does_not_reuse_other_identity(monkeypatch, tmp_path, project, descriptor):
+    """Equal data on the same runner/path does not imply equal impressions."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    data = _fixture_data(tmp_path)
+    md5 = dir_md5(str(data))
+    old = _impression_fixture(tmp_path, project=project, imp="old-identity",
+                              md5=md5, descriptor=descriptor, status="archived",
+                              source=str(data))
+    old_yaml = (old / "contents" / "celebi.yaml").read_bytes()
+    updates = []
+    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection", return_value=FakeSsh(md5)):
+        result = remote_data_ops.register_remote_data_job(
+            "job-1", "r1", str(data), "proj", "mydata", updates.append)
+    assert result["impression_uuid"] != "old-identity"
+    assert result["descriptor"] == "mydata"
+    assert updates[-1]["status"] == "copying"
+    assert (old / "contents" / "celebi.yaml").read_bytes() == old_yaml
+
+
+@pytest.mark.parametrize("suffix", ["", "/", "/."])
+def test_register_managed_directory_does_not_copy_onto_itself(monkeypatch, tmp_path, suffix):
+    """An already managed source is archived without launching a copy."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    imp_dir = _impression_fixture(tmp_path)
+    source = "/tmp/yuki-workflows/impressions/proj/imp-1" + suffix
+    with mock.patch.object(remote_data_ops, "_ssh_connection") as connect:
+        result = remote_data_ops.copy_remote_data_job("job-1", "imp-1", "proj", "r1", source)
+    connect.assert_not_called()
+    assert result["result"]["impression_uuid"] == "imp-1"
+    assert ConfigFile(str(imp_dir / "status.json")).read_variable("status") == "archived"

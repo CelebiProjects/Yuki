@@ -231,7 +231,8 @@ def test_register_remote_data_inflight(monkeypatch, tmp_path):
     remote_data_ops.write_job_state(
         str(tmp_path), "job-7",
         {"status": "hashing", "result": None, "error": None,
-         "runner_id": runner_id, "remote_path": "/src/data"})
+         "runner_id": runner_id, "remote_path": "/src/data",
+         "project_uuid": "proj", "descriptor": "data"})
     with mock.patch.object(remote_data_routes, "task_register_remote_data") as task:
         r = _app(remote_data_routes.bp).test_client().post(
             "/register-remote-data",
@@ -355,6 +356,41 @@ def test_register_remote_data_impression_status_unknown_404(monkeypatch, tmp_pat
     r = _app(remote_data_routes.bp).test_client().get(
         "/register-remote-data/impression/ghost")
     assert r.status_code == 404
+
+
+def test_impression_status_uses_latest_registration_not_largest_uuid(monkeypatch, tmp_path):
+    """An old e827 job must not hide the current af177 copying registration."""
+    _temp_config(monkeypatch, tmp_path)
+    result = {"uuid": "same-md5", "impression_uuid": "imp-1", "descriptor": "d"}
+    old = {"status": "done", "result": result, "runner_id": "r1", "created_at_ns": 100}
+    new = dict(old, status="copying", created_at_ns=200)
+    remote_data_ops.write_job_state(str(tmp_path), "e827", old)
+    remote_data_ops.write_job_state(str(tmp_path), "af177", new)
+    # A late write of the old job must not make it the newest registration.
+    remote_data_ops.write_job_state(str(tmp_path), "e827", dict(old, created_at_ns=999))
+    progress = {"stage": "copying", "bytes_done": 25, "bytes_total": 84}
+    with mock.patch.object(remote_data_ops, "read_remote_progress", return_value=progress) as read:
+        response = _app(remote_data_routes.bp).test_client().get(
+            "/register-remote-data/impression/imp-1")
+    assert response.json["status"] == "copying"
+    assert response.json["progress"] == progress
+    read.assert_called_once_with("r1", "af177")
+    assert remote_data_ops.read_job_state(str(tmp_path), "e827")["created_at_ns"] == 100
+
+
+def test_legacy_registration_order_is_preserved_on_update(tmp_path):
+    """Existing records migrate without a later old-job write changing order."""
+    jobs = tmp_path / "register-jobs"
+    jobs.mkdir()
+    state = {"status": "copying", "result": {"impression_uuid": "imp-1"}}
+    for job_id, stamp in (("e827", 1000), ("af177", 2000)):
+        path = jobs / (job_id + ".json")
+        path.write_text(json.dumps(state))
+        os.utime(path, ns=(stamp, stamp))
+    assert remote_data_ops.find_job_by_impression(str(tmp_path), "imp-1")[0] == "af177"
+    remote_data_ops.write_job_state(str(tmp_path), "e827", dict(state, status="done"))
+    assert remote_data_ops.read_job_state(str(tmp_path), "e827")["created_at_ns"] == 1000
+    assert remote_data_ops.find_job_by_impression(str(tmp_path), "imp-1")[0] == "af177"
 
 
 def _impression_fixture(tmp_path, project="proj", imp="imp-1", md5="abc123",
@@ -666,3 +702,16 @@ def test_verify_data_ssh_failure_returns_error(monkeypatch, tmp_path):
     assert body["match"] is False
     assert "Error reading SSH" in body["error"]
     assert body["expected"] == "abc123"
+
+
+def test_inflight_registration_requires_same_identity(tmp_path):
+    remote_data_ops.write_job_state(str(tmp_path), "job-1", {
+        "status": "hashing", "runner_id": "r1", "remote_path": "/data",
+        "project_uuid": "proj", "descriptor": "original",
+    })
+    assert remote_data_ops.find_inflight_job(
+        str(tmp_path), "r1", "/data", "proj", "original") == "job-1"
+    assert remote_data_ops.find_inflight_job(
+        str(tmp_path), "r1", "/data", "other", "original") is None
+    assert remote_data_ops.find_inflight_job(
+        str(tmp_path), "r1", "/data", "proj", "renamed") is None

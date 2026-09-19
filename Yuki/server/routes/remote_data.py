@@ -8,10 +8,34 @@ import os
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
 from ...kernel import remote_data_ops
+from ...kernel.registration_progress import progress_cache
 from ..config import config
 from ..tasks import task_cache_results, task_register_remote_data
 
 bp = Blueprint('remote_data', __name__)
+
+
+def _progress(state, job_id):
+    runner_id = state.get("runner_id", "")
+    # Include the data root and phase so snapshots cannot cross jobs or stages.
+    yuki_dir = remote_data_ops._yuki_dir()  # pylint: disable=protected-access
+    key = (yuki_dir, runner_id, job_id, state.get("status"))
+    return progress_cache.get(
+        key, lambda: remote_data_ops.read_remote_progress(runner_id, job_id))
+
+
+def _state_with_progress(state, job_id):
+    """Return completion discovered by this refresh in the same response."""
+    if state.get("status") not in ("hashing", "copying"):
+        return state
+    progress = _progress(state, job_id)
+    latest = remote_data_ops.read_job_state(
+        remote_data_ops._yuki_dir(), job_id) or state  # pylint: disable=protected-access
+    if latest.get("status") not in ("hashing", "copying"):
+        return latest
+    if isinstance(progress, dict) and progress.get("stage") != latest.get("status"):
+        progress = None
+    return dict(latest, progress=progress)
 
 
 @bp.route("/register-remote-data", methods=['POST'])
@@ -41,7 +65,8 @@ def register_remote_data():  # pylint: disable=too-many-return-statements
     # No fast path for existing registrations: the data may have changed,
     # so every run re-hashes. The hash job reuses an archived record
     # when the fresh md5 matches (see register_remote_data_job).
-    inflight = remote_data_ops.find_inflight_job(yuki_dir, runner_id, remote_path)
+    inflight = remote_data_ops.find_inflight_job(
+        yuki_dir, runner_id, remote_path, project_uuid, descriptor)
     if inflight:
         return jsonify({"job_id": inflight})
 
@@ -49,6 +74,7 @@ def register_remote_data():  # pylint: disable=too-many-return-statements
     remote_data_ops.write_job_state(yuki_dir, job_id, {
         "status": "hashing", "result": None, "error": None,
         "runner_id": runner_id, "remote_path": remote_path,
+        "project_uuid": project_uuid, "descriptor": descriptor,
     })
     try:
         task_register_remote_data.apply_async(
@@ -70,11 +96,7 @@ def register_remote_data_status(job_id):
         remote_data_ops._yuki_dir(), job_id)  # pylint: disable=protected-access
     if state is None:
         return jsonify({"error": "job not found"}), 404
-    if state.get("status") in ("hashing", "copying"):
-        state = dict(state)
-        state["progress"] = remote_data_ops.read_remote_progress(
-            state.get("runner_id", ""), job_id)
-    return jsonify(state)
+    return jsonify(_state_with_progress(state, job_id))
 
 
 @bp.route("/register-remote-data/impression/<impression_uuid>", methods=['GET'])
@@ -85,11 +107,7 @@ def register_remote_data_impression_status(impression_uuid):
     if found is None:
         return jsonify({"error": "no registration job for impression"}), 404
     job_id, state = found
-    if state.get("status") in ("hashing", "copying"):
-        state = dict(state)
-        state["progress"] = remote_data_ops.read_remote_progress(
-            state.get("runner_id", ""), job_id)
-    return jsonify(state)
+    return jsonify(_state_with_progress(state, job_id))
 
 
 @bp.route("/purge-runner-cache", methods=['POST'])

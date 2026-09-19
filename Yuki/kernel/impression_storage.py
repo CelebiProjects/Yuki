@@ -7,9 +7,12 @@ import datetime
 import os
 import json
 import shutil
+import tempfile
 from CelebiChrono.utils.metadata import ConfigFile
 from . import file_types
 from . import remote_data_ops
+from .registration_progress import remote_listing_cache
+from .rawdata_collection import collect_rawdata, local_rawdata_files
 from .vjob import VJob
 from .vworkflow import VWorkflow
 from .status_constants import (
@@ -68,7 +71,7 @@ class ImpressionStorage:
 
     def collect(self):
         """Light default: plots + logs on success, logs on failure."""
-        report = {}
+        report = collect_rawdata(self.job_path, self.runners_id, file_types.is_plot)
         for name, job, workflow in self._get_runner_contexts():
             job_status = job.status(musical=True)
             runner_report = {}
@@ -87,7 +90,8 @@ class ImpressionStorage:
     def collect_files(self, kind, spec):
         """Download a subset of <kind> files matching a selection spec."""
         predicate = file_types.make_predicate(spec)
-        report = {}
+        report = (collect_rawdata(self.job_path, self.runners_id, predicate)
+                  if kind == "stageout" else {})
         for name, job, workflow in self._get_runner_contexts():
             if job.status(musical=True) == CODA:
                 print(f"[{name}] Collecting {kind} matching {spec!r}...")
@@ -96,30 +100,41 @@ class ImpressionStorage:
                 report[name] = {"collected": [], "skipped": [], "failed": []}
         return report
 
-    def file_status(self, kind="stageout", detailed=False):  # pylint: disable=too-many-locals
+    # pylint: disable=too-many-locals
+    def file_status(self, kind="stageout", detailed=False, machine=None):
         """Merge the saved runner listing with downloaded Storage state.
 
-        The runner is never contacted here: the listing is read from
+        Workflow listings are read locally from
         <machine>/<kind>.filelist.json, which the status-update path
         (refresh_job_filelists, running in Celery) refreshes. See
         _runner_files for the read policy.
 
+        A machine name or ID scopes both rows and notes to that runner.
+        None (or the legacy "none") retains the aggregate listing.
+
         Remote-hosted data (registered via register-ssh-data) is listed from
-        the host runner's managed impressions dir; see _remote_hosted_files.
+        the host runner's managed impressions dir in the background; see
+        _remote_hosted_files. Requests never wait for a remote directory walk.
 
         With detailed=True returns {"files": [...], "notes": [...]} where each
         note is {"runner": <name or None>, "level": info|warning|error,
         "message": str} explaining e.g. a missing listing or a persisted
         refresh failure; otherwise returns the bare files list.
         """
-        result = []
+        # "none" is the legacy unscoped request used for registered raw data.
+        machine = None if machine == "none" else machine
+        result = (local_rawdata_files(self.job_path)
+                  if kind == "stageout" and machine is None else [])
         notes = []
-        hosted, hosted_note = self._remote_hosted_files(kind)
+        hosted, hosted_note = (self._remote_hosted_files(kind) if machine is None
+                               else self._remote_hosted_files(kind, machine=machine))
         result.extend(hosted)
         if hosted_note:
             notes.append(hosted_note)
         for name, job, _workflow in self._get_runner_contexts():
             machine_id = self.runners_id.get(name)
+            if machine is not None and machine not in (name, machine_id):
+                continue
             machine_dir = os.path.join(self.job_path, machine_id)
             storage_dir = os.path.join(machine_dir, kind)
             downloaded = set()
@@ -155,7 +170,8 @@ class ImpressionStorage:
             return {"files": result, "notes": notes}
         return result
 
-    def _remote_hosted_files(self, kind):  # pylint: disable=too-many-locals,too-many-branches
+    # pylint: disable=too-many-locals,too-many-branches
+    def _remote_hosted_files(self, kind, machine=None):
         """Return (rows, note) for a remote-hosted data impression
         (register-ssh-data).
 
@@ -166,7 +182,7 @@ class ImpressionStorage:
         {"level", "message"} for a cached listing or an unreachable host.
         """
         marker_path = os.path.join(self.job_path, "remote.json")
-        if not os.path.exists(marker_path):
+        if kind != "stageout" or not os.path.exists(marker_path):
             return [], None
         marker = ConfigFile(marker_path)
         host_runner = marker.read_variable("host_runner_id", "")
@@ -174,39 +190,33 @@ class ImpressionStorage:
         if not host_runner or not managed_path:
             return [], None
 
+        if machine is not None and self.runners_id.get(machine, machine) != host_runner:
+            return [], None
+
         machine_dir = os.path.join(self.job_path, host_runner)
         cache_path = os.path.join(machine_dir, kind + ".filelist.json")
+        registration_status = ConfigFile(
+            os.path.join(self.job_path, "status.json")).read_variable("status", "")
 
         runner_files = None
-        if os.path.isfile(cache_path):
+        if os.path.isfile(cache_path) and registration_status not in ("running", "failed"):
             try:
                 with open(cache_path, encoding="utf-8") as fh:
                     cached = json.load(fh)
-                if cached.get("workflow_id") == "remote-data":
+                if (cached.get("workflow_id") == "remote-data" and
+                        cached.get("registration_status", "") == registration_status):
                     runner_files = cached.get("files", [])
             except (OSError, ValueError):
                 pass
 
         note = None
         if runner_files is None:
-            try:
-                runner_files = remote_data_ops.list_managed_files(
-                    host_runner, managed_path)
-            except Exception as exc:
-                runner_files = []
-                note = {
-                    "level": "error",
-                    "message": (f"remote host unreachable "
-                                f"[{type(exc).__name__}]: {exc}"),
-                }
-            if runner_files:
-                try:
-                    os.makedirs(machine_dir, exist_ok=True)
-                    with open(cache_path, "w", encoding="utf-8") as fh:
-                        json.dump({"workflow_id": "remote-data",
-                                   "files": runner_files}, fh)
-                except OSError:
-                    pass
+            snapshot = remote_listing_cache.get(
+                (self.job_path, host_runner, managed_path, registration_status),
+                lambda: self._refresh_remote_listing(
+                    host_runner, managed_path, cache_path, registration_status))
+            runner_files, note = snapshot if snapshot is not None else (
+                [], {"level": "info", "message": "Remote file listing is refreshing"})
         else:
             note = {"level": "info", "message": "cached remote listing"}
 
@@ -227,7 +237,48 @@ class ImpressionStorage:
                 "in_runner": True,
                 "in_yuki": rf["name"] in downloaded,
             })
+        remote_names = {row["name"] for row in runner_files}
+        for name in sorted(downloaded - remote_names):
+            result.append({
+                "name": name,
+                "size": os.path.getsize(os.path.join(storage_dir, name)),
+                "type": file_types.classify(name),
+                "in_runner": False,
+                "in_yuki": True,
+            })
         return result, note
+
+    def _refresh_remote_listing(self, host_runner, managed_path, cache_path, status):
+        """Fetch a live snapshot off-thread; only persist a final listing."""
+        try:
+            files = remote_data_ops.list_managed_files(host_runner, managed_path)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return [], {"level": "error", "message":
+                        f"remote host unreachable [{type(exc).__name__}]: {exc}"}
+        current = ConfigFile(os.path.join(self.job_path, "status.json"))
+        if current.read_variable("status", "") != status:
+            return [], {"level": "info", "message": "Data registration state changed"}
+        if status in ("running", "failed"):
+            return files, {
+                "level": "info" if status == "running" else "error",
+                "message": "Partial remote listing; files may still be incomplete"
+                           if status == "running" else
+                           "Registration failed; these remote files may be incomplete",
+            }
+        temporary = None
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            fd, temporary = tempfile.mkstemp(dir=os.path.dirname(cache_path))
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump({"workflow_id": "remote-data", "registration_status": status,
+                           "files": files}, stream)
+            os.replace(temporary, cache_path)
+        except OSError:
+            pass
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+        return files, None
 
     def _runner_files(self, job, kind, machine_dir):
         """Return (files, note) for the saved runner listing of <kind>.
@@ -384,7 +435,8 @@ class ImpressionStorage:
 
     def collect_outputs(self):
         """Retrieves only output files from runners."""
-        report = {}
+        report = collect_rawdata(self.job_path, self.runners_id,
+                                 file_types.make_predicate("all"))
         for name, job, workflow in self._get_runner_contexts():
             if job.status(musical=True) == CODA:
                 print(f"[{name}] Collecting outputs...")
@@ -458,6 +510,22 @@ class ImpressionStorage:
                 return {"refused": refusal, "running": False}
             planned.append((name, machine_dir, kinds))
 
+        marker_path = os.path.join(self.job_path, "remote.json")
+        if os.path.isfile(marker_path):
+            marker = ConfigFile(marker_path)
+            runner_id = marker.read_variable("host_runner_id", "")
+            machine_dir = os.path.join(self.job_path, runner_id)
+            if runner_id and all(path != machine_dir for _, path, _ in planned):
+                kinds = self._collected_kinds(machine_dir)
+                if kinds:
+                    name = next((name for name, rid in self.runners_id.items()
+                                 if rid == runner_id), runner_id)
+                    if not force:
+                        refusal = self._rawdata_purge_refusal(name, marker, kinds)
+                        if refusal:
+                            return {"refused": refusal, "running": False}
+                    planned.append((name, machine_dir, kinds))
+
         for name, machine_dir, kinds in planned:
             entry = {}
             for kind, files in kinds.items():
@@ -476,6 +544,26 @@ class ImpressionStorage:
         if planned:
             self.update_distribution()
         return report
+
+    def _rawdata_purge_refusal(self, name, marker, kinds):
+        """Verify collected raw data against the live managed copy before purge."""
+        source = marker.read_variable("remote_path", "")
+        if not source or kinds.get("logs"):
+            return (f"cannot verify a runner copy for '{name}'; "
+                    "pass force to purge anyway")
+        try:
+            remote = {row["name"]: row.get("size") for row in
+                      remote_data_ops.list_managed_files(
+                          marker.read_variable("host_runner_id", ""), source)}
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return (f"runner '{name}' unreachable "
+                    f"({type(exc).__name__}: {exc}); pass force to purge anyway")
+        missing = [rel for rel, path in kinds.get("stageout", [])
+                   if remote.get(rel) != os.path.getsize(path)]
+        if missing:
+            return (f"runner '{name}' no longer holds matching copies of "
+                    f"{len(missing)} stageout file(s); pass force to purge anyway")
+        return None
 
     def _collected_kinds(self, machine_dir):
         """Map kind -> [(relative_name, absolute_path)] for collected files."""

@@ -54,7 +54,7 @@ def test_file_status_route_detailed_mode():
         assert r.status_code == 200
         assert r.get_json() == {"files": [], "notes": []}
         storage_cls.return_value.file_status.assert_called_once_with(
-            "stageout", detailed=True)
+            "stageout", detailed=True, machine="runner")
 
 
 def _app(bp):

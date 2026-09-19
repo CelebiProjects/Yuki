@@ -4,6 +4,8 @@ import os
 import subprocess
 from unittest import mock
 
+import pytest
+
 from CelebiChrono.utils.file_utils import dir_md5
 from Yuki.kernel.remote_data_ops import (
     REMOTE_MD5_SCRIPT, remote_md5_command, build_remote_fast_copy_command,
@@ -38,6 +40,53 @@ def test_remote_md5_matches_dir_md5_semantics(tmp_path):
         capture_output=True, text=True, timeout=60, check=False)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == expected
+
+
+@pytest.mark.parametrize("source_kind", ["missing", "file", "broken_symlink"])
+@pytest.mark.parametrize("with_progress", [False, True])
+def test_remote_md5_rejects_invalid_source(tmp_path, source_kind, with_progress):
+    """Invalid sources fail without emitting an empty-tree hash or progress."""
+    source = tmp_path / "source"
+    if source_kind == "file":
+        source.write_text("not a directory", encoding="utf-8")
+    elif source_kind == "broken_symlink":
+        source.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    progress = tmp_path / "progress.json"
+    args = ["python3", "-c", REMOTE_MD5_SCRIPT, str(source)]
+    if with_progress:
+        args.append(str(progress))
+    result = subprocess.run(args, capture_output=True, text=True,
+                            timeout=60, check=False)
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert str(source) in result.stderr
+    assert ("NotADirectoryError" if source_kind == "file" else
+            "FileNotFoundError") in result.stderr
+    assert not progress.exists()
+
+
+def test_remote_md5_does_not_ignore_directory_scan_errors(tmp_path):
+    """A failed subtree scan must not produce a hash of partial contents."""
+    source = tmp_path / "data"
+    _fixture_tree(str(source))
+    # Inject a scan failure so the test also works as root and on all platforms.
+    prefix = (
+        "import os\n"
+        "original_scandir = os.scandir\n"
+        "def failing_scandir(path):\n"
+        f"    if path == {str(source / 'sub')!r}:\n"
+        "        raise PermissionError('Cannot scan source subtree')\n"
+        "    return original_scandir(path)\n"
+        "os.scandir = failing_scandir\n"
+    )
+    progress = tmp_path / "progress.json"
+    result = subprocess.run(
+        ["python3", "-c", prefix + REMOTE_MD5_SCRIPT, str(source), str(progress)],
+        capture_output=True, text=True, timeout=60, check=False)
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "Cannot scan source subtree" in result.stderr
+    assert not progress.exists()
 
 
 def test_remote_md5_command_quotes_args():

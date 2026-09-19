@@ -26,6 +26,14 @@ def execute():
     _debug.debug("# >>> execute")
     if request.method == 'POST':
         _debug.debug("%s", request)
+        timeout = request.form.get("timeout")
+        if timeout is not None:
+            try:
+                timeout = int(timeout)
+                if timeout <= 0:
+                    raise ValueError
+            except ValueError:
+                return jsonify({"error": "timeout must be a positive integer in seconds"}), 400
         machine = request.form["machine"]
         project_uuid = request.form['project_uuid']
         cache_dict = request.form["cache_on_runner"]
@@ -68,7 +76,9 @@ def execute():
 
         _debug.debug("Asynchronous execution")
         _debug.debug("contents %s", contents)
-        task = task_exec_impression.apply_async(args=[project_uuid, contents, machine])
+        task_options = {"kwargs": {"timeout": timeout}} if timeout is not None else {}
+        task = task_exec_impression.apply_async(
+            args=[project_uuid, contents, machine], **task_options)
 
         _debug.debug("Contents is: %s", contents)
         for impression in contents.split(" "):
@@ -132,7 +142,7 @@ def outputs(project_uuid, impression, machine):
 
 
 @bp.route("/file-status/<project_uuid>/<impression>/<machine>", methods=['GET'])
-def file_status(project_uuid, impression, machine):  # pylint: disable=unused-argument
+def file_status(project_uuid, impression, machine):
     """Return merged runner + Storage file listing for an impression.
 
     With ?detailed=1 the payload is {"files": [...], "notes": [...]} where
@@ -141,7 +151,7 @@ def file_status(project_uuid, impression, machine):  # pylint: disable=unused-ar
     kind = request.args.get("kind", "stageout")
     detailed = request.args.get("detailed") == "1"
     storage = ImpressionStorage(project_uuid, impression)
-    return jsonify(storage.file_status(kind, detailed=detailed))
+    return jsonify(storage.file_status(kind, detailed=detailed, machine=machine))
 
 
 @bp.route("/refresh-filelists/<project_uuid>/<impression>", methods=['GET'])

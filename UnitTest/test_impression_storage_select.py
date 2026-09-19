@@ -2,7 +2,11 @@
 # pylint: disable=protected-access
 import json
 import os
+import threading
+import time
 from unittest import mock
+
+import pytest
 
 from Yuki.kernel.status_constants import CODA
 
@@ -388,3 +392,153 @@ def test_force_refresh_filelists_writes_empty_for_new_workflow(tmp_path):
     payload = _read_cache(machine_dir)
     assert payload["files"] == [] and payload["workflow_id"] == "wf-1"
     assert "error" not in payload
+
+
+def test_file_status_scopes_notes_and_files_to_requested_runner(tmp_path):
+    """A runner-specific status must not include another runner's saved listing."""
+    s, _ims = _storage(tmp_path)
+    s.runners_id = {"cern": "cern-id", "other": "other-id"}
+    s._get_runner_contexts = lambda: [
+        ("cern", _finished_job("wf-cern"), mock.Mock()),
+        ("other", _finished_job("wf-other"), mock.Mock()),
+    ]
+    _write_cache(tmp_path / "job" / "cern-id", "wf-cern", [])
+    _write_cache(tmp_path / "job" / "other-id", "wf-other", [])
+    other_download = tmp_path / "job" / "other-id" / "stageout"
+    other_download.mkdir()
+    (other_download / "other.root").write_bytes(b"other")
+
+    for machine in ("cern", "cern-id"):
+        detail = s.file_status(detailed=True, machine=machine)
+        assert detail["files"] == []
+        assert len(detail["notes"]) == 1
+        assert detail["notes"][0]["runner"] == "cern"
+    for machine in (None, "none"):
+        detail = s.file_status(detailed=True, machine=machine)
+        assert len(detail["notes"]) == 2
+        assert detail["files"][0]["name"] == "other.root"
+    assert s.file_status(detailed=True, machine="unknown") == {"files": [], "notes": []}
+    assert s.file_status(machine="cern") == []
+    _write_cache(tmp_path / "job" / "other-id", "wf-other",
+                 [{"name": "remote-other.root", "size": 15}])
+    assert s.file_status(machine="cern") == []
+    assert {row["name"] for row in s.file_status(machine="other")} == {
+        "other.root", "remote-other.root"}
+
+
+def test_remote_listing_respects_requested_runner(tmp_path):
+    """Remote-hosted files are returned only for their host or an unscoped request."""
+    s, _ims = _storage(tmp_path)
+    s._get_runner_contexts = lambda: []
+    machine_dir = tmp_path / "job" / "runner-1"
+    _write_cache(machine_dir, "remote-data", [{"name": "data.root", "size": 10}])
+    (tmp_path / "job" / "remote.json").write_text(json.dumps({
+        "host_runner_id": "runner-1", "remote_path": "/managed/imp7",
+    }))
+    for machine in ("runner", "runner-1", None, "none"):
+        detail = s.file_status(detailed=True, machine=machine)
+        assert detail["files"][0]["name"] == "data.root"
+    assert s.file_status(detailed=True, machine="other") == {"files": [], "notes": []}
+
+
+def _registered_storage(tmp_path, status):
+    storage, ims = _storage(tmp_path)
+    storage._get_runner_contexts = lambda: []
+    job = tmp_path / "job"
+    job.mkdir(exist_ok=True)
+    (job / "remote.json").write_text(json.dumps({
+        "host_runner_id": "runner-1", "remote_path": "/managed/imp7"}))
+    (job / "status.json").write_text(json.dumps({"status": status}))
+    return storage, ims
+
+
+def test_copying_status_shows_growing_files_without_freezing_partial_cache(tmp_path):
+    """Show live destination files and refresh sizes as copying proceeds."""
+    from Yuki.kernel.registration_progress import ProgressCache
+
+    storage, ims = _registered_storage(tmp_path, "running")
+    machine_dir = tmp_path / "job" / "runner-1"
+    _write_cache(machine_dir, "remote-data",
+                 [{"name": "partial.root", "size": 10}])
+    snapshots = [
+        [{"name": "first.root", "size": 100}],
+        [{"name": "first.root", "size": 200}, {"name": "second.root", "size": 10}],
+        [{"name": "first.root", "size": 200}, {"name": "second.root", "size": 300}],
+    ]
+    with mock.patch.object(ims, "remote_listing_cache", ProgressCache(ttl=0, wait=1)), \
+            mock.patch.object(ims.remote_data_ops, "list_managed_files",
+                              side_effect=snapshots) as scan:
+        first = storage.file_status(detailed=True)
+        assert first["files"][0]["name"] == "first.root"
+        assert first["files"][0]["size"] == 100
+        assert "incomplete" in first["notes"][0]["message"]
+        second = storage.file_status(detailed=True)
+        assert [row["size"] for row in second["files"]] == [200, 10]
+        # Intermediate observations never replace the on-disk final listing.
+        assert _read_cache(machine_dir)["files"] == [{"name": "partial.root", "size": 10}]
+        (tmp_path / "job" / "status.json").write_text(json.dumps({"status": "archived"}))
+        final = storage.file_status(detailed=True)
+        assert [row["size"] for row in final["files"]] == [200, 300]
+        assert _read_cache(machine_dir)["registration_status"] == "archived"
+        assert storage.file_status() == final["files"]
+    assert scan.call_count == 3
+
+
+@pytest.mark.parametrize("registration_status", ["running", "archived", "failed"])
+def test_file_status_endpoint_returns_while_remote_scan_is_blocked(  # pylint: disable=too-many-locals
+        tmp_path, monkeypatch, registration_status):
+    """Live and final file lists must not block the HTTP status request."""
+    from flask import Flask
+    from Yuki.kernel.registration_progress import ProgressCache
+    from Yuki.server.routes import execution
+
+    storage, ims = _registered_storage(tmp_path, registration_status)
+    cache = ProgressCache(wait=0.01)
+    monkeypatch.setattr(ims, "remote_listing_cache", cache)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def scan(*args):
+        calls.append(args)
+        entered.set()
+        release.wait(5)
+        return [{"name": "complete.root", "size": 100}]
+
+    monkeypatch.setattr(ims.remote_data_ops, "list_managed_files", scan)
+    monkeypatch.setattr(execution, "ImpressionStorage", lambda *_args: storage)
+    app = Flask(__name__)
+    app.register_blueprint(execution.bp)
+    client = app.test_client()
+    try:
+        start = time.monotonic()
+        for _ in range(2):
+            response = client.get("/file-status/proj/imp7/none?detailed=1")
+            assert response.status_code == 200
+            assert response.json["files"] == []
+            assert "refreshing" in response.json["notes"][0]["message"]
+        assert time.monotonic() - start < 1
+        assert entered.wait(1)
+        assert len(calls) == 1
+    finally:
+        release.set()
+        cache.wait = 1
+        cache.get((storage.job_path, "runner-1", "/managed/imp7", registration_status), scan)
+    response = client.get("/file-status/proj/imp7/none?detailed=1")
+    assert response.json["files"][0]["name"] == "complete.root"
+    assert len(calls) == 1
+
+
+def test_archived_listing_replaces_old_partial_cache_and_caches_empty(tmp_path):
+    """Legacy partial listings are refreshed; an empty final listing is cached."""
+    storage, ims = _registered_storage(tmp_path, "archived")
+    machine_dir = tmp_path / "job" / "runner-1"
+    _write_cache(machine_dir, "remote-data", [{"name": "partial.root", "size": 10}])
+    from Yuki.kernel.registration_progress import ProgressCache
+    with mock.patch.object(ims, "remote_listing_cache", ProgressCache(wait=1)), \
+            mock.patch.object(ims.remote_data_ops, "list_managed_files", return_value=[]) as scan:
+        assert storage.file_status() == []
+        assert storage.file_status() == []
+    scan.assert_called_once()
+    cached = _read_cache(machine_dir)
+    assert cached["registration_status"] == "archived"
+    assert cached["files"] == []

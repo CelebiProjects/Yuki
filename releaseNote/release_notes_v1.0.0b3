@@ -33,7 +33,8 @@
 + Remote data registration (`register-data`).
   - `POST /register-remote-data` starts a background job (returns a job id; `GET /register-remote-data/<job_id>` polls state). The Celery job hashes on the runner (remote MD5 matching `csys.dir_md5` semantics), fast-copies into `[remote-workdir]/impressions/<project>/<impression>/` (reflink → hardlink → rsync → copy), and synthesizes the impression (`contents/`, `config.json`, `status.json`, `remote.json`) replicating `yuki-create-data`.
   - Impression status lifecycle: `running` while the copy is in flight, `archived` when it settles, `failed` on copy errors; failed registrations do not count as existing, so they can be re-registered.
-  - Idempotent for the same `(runner, path)`, including in-flight jobs.
+  - Registration reuse requires the same runner, path, project, and descriptor; completed registrations also require an unchanged data MD5. In-flight jobs with different projects or descriptors are kept separate.
+  - Registering data already at its managed cache destination skips copying the directory onto itself.
   - `GET /verify-data/<project>/<impression>`: recomputes the MD5 (on the host runner for remote data, locally from `rawdata/` otherwise) and compares it with the registered UUID; SSH failures retry once and return a proper error instead of a 500.
   - `file_status` lists remote-hosted data from the host runner's managed dir (cached to `<host_runner_id>/<kind>.filelist.json`).
   - Submit validation: workflows referencing remote-hosted data on a different runner are marked failed with a clear message.

@@ -33,7 +33,7 @@ celeryapp = create_celery_app()
 
 
 @celeryapp.task
-def task_exec_impression(project_uuid, impressions, machine_uuid):
+def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None):
     """Execute impressions as a background task."""
     config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki/config.json"))
     backend_types = config.read_variable("backend_types", {})
@@ -49,6 +49,8 @@ def task_exec_impression(project_uuid, impressions, machine_uuid):
     ]
     _debug.debug("jobs %s", jobs)
     workflow = VWorkflow.create(project_uuid, jobs, None, mode=backend_type)
+    if timeout is not None:
+        workflow.config_file.write_variable("submission_timeout", timeout)
     _debug.debug("workflow %s", workflow)
 
     marks = _validate_remote_data_binding(workflow, project_uuid, machine_uuid)
@@ -164,26 +166,20 @@ def task_register_remote_data(job_id, runner_id, remote_path, project_uuid,
         remote_data_ops.remove_remote_progress_file(runner_id, job_id)
 
 
-@celeryapp.task
-def task_copy_remote_data(job_id, impression_uuid, project_uuid, runner_id,
+@celeryapp.task(bind=True, max_retries=None, acks_late=True,
+                reject_on_worker_lost=True)
+def task_copy_remote_data(self, job_id, impression_uuid, project_uuid, runner_id,  # pylint: disable=too-many-arguments,too-many-positional-arguments
                           remote_path):
-    """Copy registered data into the runner's managed area (background)."""
-    yuki_dir = remote_data_ops._yuki_dir()  # pylint: disable=protected-access
-
-    def update(state):
-        current = remote_data_ops.read_job_state(yuki_dir, job_id) or {}
-        current.update(state)
-        remote_data_ops.write_job_state(yuki_dir, job_id, current)
-
+    """Launch/observe a detached copy, releasing the worker between checks."""
     try:
-        result = remote_data_ops.copy_remote_data_job(
+        state = remote_data_ops.copy_remote_data_job(
             job_id, impression_uuid, project_uuid, runner_id, remote_path)
-        update({"status": "done", "result": result, "error": None})
     except Exception as e:  # pylint: disable=broad-exception-caught
-        update({"status": "failed", "result": None,
-                "error": str(e) or type(e).__name__})
-    finally:
-        remote_data_ops.remove_remote_progress_file(runner_id, job_id)
+        # Loss of contact says nothing about the independent remote process.
+        raise self.retry(exc=e, countdown=10)
+    if state is None:
+        raise self.retry(countdown=2)
+    remote_data_ops.remove_remote_progress_file(runner_id, job_id)
 
 
 @celeryapp.task

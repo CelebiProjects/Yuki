@@ -9,7 +9,7 @@ from ...kernel.vjob import VJob
 from ...kernel.container_job import ContainerJob
 from ...kernel.impression_storage import ImpressionStorage
 from ...kernel.status_constants import (
-    SILENCE, PRELUDE, TUNING, FAILED, DISSONANCE,
+    SILENCE, TUNING, FAILED, DISSONANCE,
 )
 from ..config import config
 from ..tasks import task_exec_impression
@@ -55,11 +55,7 @@ def execute():
                 if job.status() not in (SILENCE, FAILED, DISSONANCE):
                     _debug.debug("job status is not raw or failed")
                     continue
-                job.set_status(PRELUDE, "Job queued for execution")
-                # Redefine, only aim for write use_eos variable
-                start_job = VJob(job_path, machine)
-                use_eos = cache_dict.get(impression, False)
-                start_job.set_cache_on_runner(use_eos)
+                cache_dict.setdefault(impression, False)
                 start_jobs.append(job)
             elif job.job_type() == "algorithm":
                 job.set_status(TUNING, "Algorithm job ready for configuration")
@@ -76,9 +72,11 @@ def execute():
 
         _debug.debug("Asynchronous execution")
         _debug.debug("contents %s", contents)
-        task_options = {"kwargs": {"timeout": timeout}} if timeout is not None else {}
+        task_kwargs = {"cache_on_runner": cache_dict}
+        if timeout is not None:
+            task_kwargs["timeout"] = timeout
         task = task_exec_impression.apply_async(
-            args=[project_uuid, contents, machine], **task_options)
+            args=[project_uuid, contents, machine], kwargs=task_kwargs)
 
         _debug.debug("Contents is: %s", contents)
         for impression in contents.split(" "):

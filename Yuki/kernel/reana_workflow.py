@@ -39,7 +39,8 @@ class ReanaWorkflow(VWorkflow):
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(ORCHESTRATING, "Create the workflow at backend")
+            self._set_owned_job_status(
+                job, ORCHESTRATING, "Create the workflow at backend")
 
         try:
             self.logger("Creating the workflow")
@@ -52,7 +53,7 @@ class ReanaWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status("failed")
+                self._set_owned_job_status(job, "failed")
             raise
 
         for job in self.jobs:
@@ -60,7 +61,9 @@ class ReanaWorkflow(VWorkflow):
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(ORCHESTRATING, "Upload the dependencies and the Snakefile")
+            self._set_owned_job_status(
+                job, ORCHESTRATING,
+                "Upload the dependencies and the Snakefile")
 
         try:
             self.logger("Upload file")
@@ -73,10 +76,12 @@ class ReanaWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status("failed")
+                self._set_owned_job_status(job, "failed")
             raise
 
-        job.set_status(ORCHESTRATING, "Start the workflow")
+        for job in self.execution_jobs():
+            self._set_owned_job_status(
+                job, ORCHESTRATING, "Start the workflow")
         try:
             self.start_workflow()
         except:
@@ -86,7 +91,7 @@ class ReanaWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status("failed")
+                self._set_owned_job_status(job, "failed")
             raise
 
     def _sync_external_job_status(self, job):

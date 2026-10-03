@@ -47,7 +47,8 @@ class NativeWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(DISSONANCE, "Native workflow construction failed")
+                self._set_owned_job_status(
+                    job, DISSONANCE, "Native workflow construction failed")
             raise
 
         try:
@@ -61,7 +62,8 @@ class NativeWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(DISSONANCE, "Native workflow file copy failed")
+                self._set_owned_job_status(
+                    job, DISSONANCE, "Native workflow file copy failed")
             raise
 
         # Set status to ready for local execution
@@ -243,13 +245,16 @@ class NativeWorkflow(VWorkflow):
                 continue
             if job.job_type() == "algorithm":
                 continue
+            if not self._owns_job(job):
+                continue
             if is_terminal_status(translate_to_musical(job.status())):
                 continue
 
             short = job.short_uuid()
             done_path = os.path.join(self.local_exec_path, f"{short}.done")
             if os.path.exists(done_path):
-                job.set_status("finished", "Local execution completed")
+                self._set_owned_job_status(
+                    job, "finished", "Local execution completed")
                 continue
 
             if not workflow_terminal:
@@ -265,9 +270,10 @@ class NativeWorkflow(VWorkflow):
                     detail = f"Local execution failed: {tail}"
                 else:
                     detail = "Local execution failed"
-                job.set_status(FAILED, detail)
+                self._set_owned_job_status(job, FAILED, detail)
             else:
-                job.set_status(
+                self._set_owned_job_status(
+                    job,
                     FAILED,
                     "Skipped: upstream dependency failed before this job ran",
                 )
@@ -405,7 +411,8 @@ class NativeWorkflow(VWorkflow):
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(FAILED, "Native workflow force-killed by user")
+            self._set_owned_job_status(
+                job, FAILED, "Native workflow force-killed by user")
 
     def kill(self):
         """Kill local workflow execution."""
@@ -420,7 +427,8 @@ class NativeWorkflow(VWorkflow):
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(FAILED, "Native workflow killed by user")
+            self._set_owned_job_status(
+                job, FAILED, "Native workflow killed by user")
 
     def delete_workspace(self):
         """Delete the local execution workspace."""

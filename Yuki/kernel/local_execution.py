@@ -7,6 +7,7 @@ from CelebiChrono.utils.metadata import ConfigFile
 
 from Yuki.kernel import runner_config
 from Yuki.kernel import file_staging, snakemake_monitor
+from Yuki.kernel import execution_lease
 
 
 def workflow_location(yuki_dir, workflow_uuid):
@@ -29,6 +30,14 @@ def execute_workflow(workflow_uuid, cores=None, logger=None):  # pylint: disable
     if workflow_cfg.read_variable("backend_type", "native") not in ("native", "dry"):
         raise ValueError(f"Workflow {workflow_uuid} is not native")
     machine_id = workflow_cfg.read_variable("machine_id", "")
+    lease = workflow_cfg.read_variable("execution_lease", {})
+    lease_token = lease.get("token", "")
+    leased_jobs = lease.get("jobs", [])
+    if lease_token and not execution_lease.validate_many(
+            project_uuid, machine_id, workflow_uuid,
+            lease_token, leased_jobs, yuki_dir=yuki_dir):
+        raise RuntimeError(
+            f"Workflow {workflow_uuid} no longer owns its execution jobs")
     settings = runner_config.get_runner_settings(runner_config.open_config(), machine_id)
     cores = cores or settings.get("cores", "all")
     base_dir = settings.get("workdir") or os.path.join(yuki_dir, "LocalWorkflows")

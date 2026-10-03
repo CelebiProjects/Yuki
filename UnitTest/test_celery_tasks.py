@@ -40,6 +40,47 @@ def test_task_exec_impression_logs_submit_finished():
                for msg in records)
 
 
+def test_duplicate_submission_returns_existing_workflow():
+    """An identical active job set is idempotent instead of launching again."""
+    from Yuki.server import tasks
+    from Yuki.kernel.execution_lease import WorkflowAlreadyActive
+    workflow = mock.Mock()
+    workflow.uuid = "wf-new"
+    workflow.run.side_effect = WorkflowAlreadyActive(
+        "wf-existing", {"imp1": {"workflow_id": "wf-existing"}})
+    with mock.patch.object(tasks, "metadata") as meta, \
+         mock.patch.object(tasks, "VJob"), \
+         mock.patch.object(tasks, "VWorkflow") as factory, \
+         mock.patch.object(tasks, "_validate_remote_data_binding", return_value=[]):
+        meta.ConfigFile.return_value.read_variable.return_value = {}
+        factory.create.return_value = workflow
+        result = tasks.task_exec_impression("proj", "imp1", "runner-1")
+
+    assert result == {"workflow_id": "wf-existing", "deduplicated": True}
+    workflow.set_workflow_status.assert_called_once_with("stopped")
+
+
+def test_partial_overlap_returns_conflict_without_backend_retry():
+    """A partial overlap is reported and not retried as another workflow."""
+    from Yuki.server import tasks
+    from Yuki.kernel.execution_lease import WorkflowLeaseConflict
+    workflow = mock.Mock()
+    workflow.uuid = "wf-new"
+    workflow.run.side_effect = WorkflowLeaseConflict(
+        {"imp1": {"workflow_id": "wf-existing"}})
+    with mock.patch.object(tasks, "metadata") as meta, \
+         mock.patch.object(tasks, "VJob"), \
+         mock.patch.object(tasks, "VWorkflow") as factory, \
+         mock.patch.object(tasks, "_validate_remote_data_binding", return_value=[]):
+        meta.ConfigFile.return_value.read_variable.return_value = {}
+        factory.create.return_value = workflow
+        result = tasks.task_exec_impression("proj", "imp1 imp2", "runner-1")
+
+    assert result["conflicts"] == {"imp1": "wf-existing"}
+    assert result["deduplicated"] is False
+    workflow.set_workflow_status.assert_called_once_with("failed")
+
+
 def test_task_transfer_results_calls_run_transfer():
     """task_transfer_results delegates to result_transfer.run_transfer."""
     from Yuki.server.tasks import task_transfer_results

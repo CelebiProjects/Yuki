@@ -110,9 +110,24 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
         """Get the run ID for this job."""
         return self.run_config_file.read_variable("runid", "")
 
-    def set_workflow_id(self, workflow_uuid):
-        """Set the workflow ID for this job."""
+    def set_workflow_id(self, workflow_uuid, lease_token=None):
+        """Set the current workflow index and retain its assignment history.
+
+        Execution leases are authoritative; this field remains the convenient
+        current-workflow index used by routes and existing clients.
+        """
+        history = self.run_config_file.read_variable("workflow_history", [])
+        if not isinstance(history, list):
+            history = []
+        if not history or history[-1].get("workflow_id") != workflow_uuid:
+            history.append({"workflow_id": workflow_uuid,
+                            "lease_token": lease_token or ""})
+            self.run_config_file.write_variable("workflow_history", history)
         self.run_config_file.write_variable("workflow", workflow_uuid)
+        if lease_token is not None:
+            self.run_config_file.write_variable("execution_lease_token",
+                                                lease_token)
+        self._workflow = workflow_uuid
 
     def workflow_id(self):
         """Get the workflow ID for this job."""

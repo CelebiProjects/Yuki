@@ -8,6 +8,8 @@ from CelebiChrono.utils import metadata
 from ..kernel import remote_data_ops, result_transfer
 from ..kernel.vjob import VJob
 from ..kernel.vworkflow import VWorkflow, _yuki_dir
+from ..kernel.execution_lease import (
+    WorkflowAlreadyActive, WorkflowLeaseConflict)
 from .workflow_status_refresh import running_refresh
 from ..utils.logging_config import apply_channel_levels
 
@@ -34,7 +36,8 @@ celeryapp = create_celery_app()
 
 
 @celeryapp.task
-def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None):
+def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None,
+                         cache_on_runner=None):  # pylint: disable=too-many-locals
     """Execute impressions as a background task."""
     config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki/config.json"))
     backend_types = config.read_variable("backend_types", {})
@@ -48,6 +51,7 @@ def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None):
     ]
     _debug.debug("jobs %s", jobs)
     workflow = VWorkflow.create(project_uuid, jobs, None, mode=backend_type)
+    workflow.cache_on_runner_requests = dict(cache_on_runner or {})
     if timeout is not None:
         workflow.config_file.write_variable("submission_timeout", timeout)
     _debug.debug("workflow %s", workflow)
@@ -58,11 +62,29 @@ def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None):
         workflow.set_workflow_status("failed")
         for job, message in marks:
             job.set_status(DISSONANCE, message)
-        return
+        return {"workflow_id": workflow.uuid, "deduplicated": False,
+                "error": "remote data runner mismatch"}
 
-    workflow.run()
+    try:
+        workflow.run()
+    except WorkflowAlreadyActive as exc:
+        workflow.set_workflow_status("stopped")
+        _debug.info(
+            "[task_exec_impression] duplicate submission workflow=%s "
+            "existing_workflow=%s", workflow.uuid, exc.workflow_id)
+        return {"workflow_id": exc.workflow_id, "deduplicated": True}
+    except WorkflowLeaseConflict as exc:
+        workflow.set_workflow_status("failed")
+        _debug.warning(
+            "[task_exec_impression] overlapping submission rejected "
+            "workflow=%s conflicts=%s", workflow.uuid, exc.conflicts)
+        return {"workflow_id": workflow.uuid, "deduplicated": False,
+                "error": str(exc),
+                "conflicts": {job: entry.get("workflow_id", "")
+                              for job, entry in exc.conflicts.items()}}
     _debug.debug("[task_exec_impression] submit finished workflow=%s",
                  workflow.uuid)
+    return {"workflow_id": workflow.uuid, "deduplicated": False}
 
 
 def _validate_remote_data_binding(workflow, project_uuid, machine_uuid):

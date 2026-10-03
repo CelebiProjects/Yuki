@@ -26,6 +26,8 @@ from Yuki.kernel.status_constants import (
     translate_to_musical, is_terminal_status
 )
 from Yuki.utils import snakefile
+from . import execution_lease
+from .execution_lease import WorkflowAlreadyActive, WorkflowLeaseConflict
 from .file_staging import walk_files
 
 CHERN_CACHE = ChernCache.instance()
@@ -58,6 +60,8 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         self.steps = []
         self.snakefile_path = os.path.join(self.path, "Snakefile")
         self.log_path = os.path.join(self.path, "workflow.log")
+        self.lease_token = ""
+        self.leased_jobs = []
 
         if uuid:
             self.start_job = None
@@ -70,6 +74,9 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 job = VJob(job_path, self.machine_id)
                 job.is_input = info.get("is_input", False)
                 self.jobs.append(job)
+            lease = self.config_file.read_variable("execution_lease", {})
+            self.lease_token = lease.get("token", "")
+            self.leased_jobs = lease.get("jobs", [])
         else:
             self.start_job = jobs.copy() if isinstance(jobs, list) else [jobs]
             self.machine_id = self.start_job[0].machine_id if self.start_job else (machine_id or "")
@@ -135,6 +142,85 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
 
         return workflow
 
+    def execution_jobs(self):
+        """Jobs whose execution is owned by this workflow."""
+        return [job for job in self.jobs
+                if not job.is_input and job.job_type() != "algorithm"]
+
+    def _check_root_owners(self):
+        """Reject a resubmission whose requested roots are already active."""
+        roots = self.start_job or []
+        roots = roots if isinstance(roots, list) else [roots]
+        root_ids = [job.uuid for job in roots
+                    if job is not None and job.job_type() != "algorithm"]
+        owners = execution_lease.active_owners(
+            self.project_uuid, self.machine_id, root_ids)
+        # Upgrade compatibility: active workflows created before leases were
+        # introduced are still protected by their current-workflow index.
+        for job in roots:
+            if job is None or job.uuid in owners or job.job_type() == "algorithm":
+                continue
+            previous = job.workflow_id()
+            if (previous and previous != self.uuid and
+                    not is_terminal_status(job.status(musical=True)) and
+                    execution_lease.workflow_is_active(
+                        self.project_uuid, previous)):
+                owners[job.uuid] = {"workflow_id": previous,
+                                    "legacy": True}
+        if not owners:
+            return
+        workflow_ids = {entry.get("workflow_id") for entry in owners.values()}
+        if len(owners) == len(root_ids) and len(workflow_ids) == 1:
+            raise WorkflowAlreadyActive(next(iter(workflow_ids)), owners)
+        raise WorkflowLeaseConflict(owners)
+
+    def _claim_execution_lease(self):
+        jobs = self.execution_jobs()
+        claim = execution_lease.claim_many(
+            self.project_uuid, self.machine_id, self.uuid,
+            [job.uuid for job in jobs])
+        self.lease_token = claim.token
+        self.leased_jobs = list(claim.jobs)
+        self.config_file.write_variable(
+            "execution_lease",
+            {"token": claim.token, "jobs": list(claim.jobs)})
+        return jobs
+
+    def _validate_execution_lease(self):
+        if not execution_lease.validate_many(
+                self.project_uuid, self.machine_id, self.uuid,
+                self.lease_token, self.leased_jobs):
+            raise WorkflowLeaseConflict({
+                job: {"workflow_id": "ownership changed"}
+                for job in self.leased_jobs})
+
+    def _owns_job(self, job):
+        """Whether this workflow may mutate the job's shared status."""
+        if job.is_input or job.job_type() == "algorithm":
+            return False
+        lease_token = getattr(self, "lease_token", "")
+        if lease_token:
+            return execution_lease.owns(
+                self.project_uuid, self.machine_id, self.uuid,
+                lease_token, job.uuid)
+        # Compatibility for workflows created before execution leases existed.
+        # Their current-workflow index still prevents a late old workflow from
+        # overwriting a rerun. Synthetic test jobs without a string index keep
+        # their historical behavior.
+        current = job.workflow_id()
+        return not isinstance(current, str) or not current \
+            or current == self.uuid
+
+    def _set_owned_job_status(self, job, status, detail=None):
+        """Write status only while this workflow still owns the job."""
+        if not self._owns_job(job):
+            self.logger(
+                f"Skipping stale status update for job {job.uuid}: "
+                f"workflow {self.uuid} no longer owns it")
+            return False
+        job.set_status(status, detail)
+        return True
+
     def backend_type(self):
         """The workflow's backend type (persisted at creation)."""
         return self.config_file.read_variable("backend_type", "reana")
@@ -166,12 +252,31 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         """
         self.logger("Constructing the workflow")
         self.logger(f"Start job: {self.start_job}")
+        self._check_root_owners()
         if isinstance(self.start_job, list):
             self.construct_workflow_jobs(self.start_job)
         else:
             self.construct_workflow_jobs([self.start_job] if self.start_job else [])
 
         self.logger(f"Jobs after the construction: {self.jobs}")
+
+        active_jobs = self._claim_execution_lease()
+        self.set_workflow_status("constructing")
+
+        # Submission-scoped settings must not mutate shared job configuration
+        # until this workflow owns the complete execution set.
+        cache_requests = getattr(self, "cache_on_runner_requests", None)
+        if cache_requests is not None:
+            for job in active_jobs:
+                if job.uuid in cache_requests:
+                    job.set_cache_on_runner(bool(cache_requests[job.uuid]))
+
+        # Publish the current-workflow index only after the entire job set has
+        # been claimed atomically. A losing submission never overwrites it.
+        total_active = len(active_jobs)
+        for i, job in enumerate(active_jobs):
+            self.logger(f"[{i+1}/{total_active}] Set workflow id to job {job}")
+            job.set_workflow_id(self.uuid, self.lease_token)
 
         # Set all the jobs to be the waiting status
         total_jobs = len(self.jobs)
@@ -195,7 +300,8 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(
+            self._set_owned_job_status(
+                job,
                 PRELUDE,
                 "Constructing the workflow: 1/3. waiting for the unfinished dependencies"
             )
@@ -204,20 +310,19 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         if not self._wait_for_dependencies():
             return
 
-        # Set workflow IDs for jobs
-        active_jobs = [j for j in self.jobs if not j.is_input and j.job_type() != "algorithm"]
-        total_active = len(active_jobs)
-        for i, job in enumerate(active_jobs):
-            self.logger(f"[{i+1}/{total_active}] Set workflow id to job {job}")
-            job.set_workflow_id(self.uuid)
-            job.set_status(PRELUDE, "Constructing the workflow: 2/3. workflow created and assigned")
+        for job in active_jobs:
+            self._set_owned_job_status(
+                job, PRELUDE,
+                "Constructing the workflow: 2/3. workflow created and assigned")
 
         for job in self.jobs:
             if job.is_input:
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(PRELUDE, "Constructing the workflow: 3/3. Constructing the snakefile")
+            self._set_owned_job_status(
+                job, PRELUDE,
+                "Constructing the workflow: 3/3. Constructing the snakefile")
 
         # Prepare and Execute
         self.logger("Constructing")
@@ -232,10 +337,14 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(DISSONANCE, f"Workflow construction failed: {exc}")
+                self._set_owned_job_status(
+                    job, DISSONANCE, f"Workflow construction failed: {exc}")
             raise
 
         try:
+            # A worker may have paused for dependencies or construction. Never
+            # launch remotely after its ownership was superseded.
+            self._validate_execution_lease()
             self.logger("Executing backend")
             self._execute_backend()
         except Exception as e:
@@ -251,7 +360,8 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                     # ssh handler's dissonance on remote-start failure) and
                     # never clobber a previously completed status.
                     continue
-                job.set_status(FAILED, f"Backend execution failed: {e}")
+                self._set_owned_job_status(
+                    job, FAILED, f"Backend execution failed: {e}")
             raise
 
     @abstractmethod
@@ -262,7 +372,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
     def _sync_external_job_status(self, job):
         pass
 
-    def _wait_for_dependencies(self):  # pylint: disable=too-many-branches
+    def _wait_for_dependencies(self):  # pylint: disable=too-many-branches,too-many-locals,too-many-statements
         """Waits for all input-dependency workflows to reach a terminal 'finished' state.
 
         Notes:
@@ -301,7 +411,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(FAILED, message)
+                self._set_owned_job_status(job, FAILED, message)
             self.logger(message)
 
         all_finished = False

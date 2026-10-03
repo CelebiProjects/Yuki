@@ -387,7 +387,8 @@ class SshWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(DISSONANCE, "SSH workflow construction failed")
+                self._set_owned_job_status(
+                    job, DISSONANCE, "SSH workflow construction failed")
             raise
 
         try:
@@ -401,7 +402,8 @@ class SshWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(DISSONANCE, "SSH workflow file upload failed")
+                self._set_owned_job_status(
+                    job, DISSONANCE, "SSH workflow file upload failed")
             raise
 
         try:
@@ -417,7 +419,8 @@ class SshWorkflow(VWorkflow):
                     continue
                 if job.job_type() == "algorithm":
                     continue
-                job.set_status(DISSONANCE, "SSH workflow remote start failed")
+                self._set_owned_job_status(
+                    job, DISSONANCE, "SSH workflow remote start failed")
             raise
 
     def _create_remote_structure(self):
@@ -779,6 +782,8 @@ wait "$snakemake_pid"
                     continue
                 if job.job_type() == "algorithm":
                     continue
+                if not self._owns_job(job):
+                    continue
                 if is_terminal_status(translate_to_musical(job.status())):
                     continue
 
@@ -786,12 +791,14 @@ wait "$snakemake_pid"
                 done_path = f"{self.remote_exec_path}/{short}.done"
                 if ssh.exists(done_path):
                     if job.uuid in listing_failures:
-                        job.set_status(
+                        self._set_owned_job_status(
+                            job,
                             "running", "Remote execution completed; waiting for "
                             "stageout/log listings to refresh (will retry)")
                         pending = True
                         continue
-                    job.set_status("finished", "Remote execution completed")
+                    self._set_owned_job_status(
+                        job, "finished", "Remote execution completed")
                     self._record_job_distribution(job)
                     continue
 
@@ -804,10 +811,11 @@ wait "$snakemake_pid"
                     tail = self._read_remote_log_tail(ssh, short)
                     detail = (f"Remote execution failed: {tail}"
                               if tail else "Remote execution failed")
-                    job.set_status(FAILED, detail)
+                    self._set_owned_job_status(job, FAILED, detail)
                     self._record_job_distribution(job)
                 else:
-                    job.set_status(
+                    self._set_owned_job_status(
+                        job,
                         FAILED,
                         "Skipped: upstream dependency failed before this job ran",
                     )
@@ -1041,7 +1049,8 @@ wait "$snakemake_pid"
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(STOPPED, "Workflow force-killed by user")
+            self._set_owned_job_status(
+                job, STOPPED, "Workflow force-killed by user")
 
     def kill(self):
         """Kill remote workflow execution."""
@@ -1070,7 +1079,8 @@ wait "$snakemake_pid"
                 continue
             if job.job_type() == "algorithm":
                 continue
-            job.set_status(FAILED, "SSH workflow killed by user")
+            self._set_owned_job_status(
+                job, FAILED, "SSH workflow killed by user")
 
     def delete_workspace(self):
         """Delete the remote workflow workspace on the runner."""

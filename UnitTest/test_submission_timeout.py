@@ -27,8 +27,11 @@ def test_execute_dispatches_timeout(timeout):
         task.apply_async.return_value.id = 'task-id'
         response = app.test_client().post('/execute', data=data)
     assert response.status_code == 200
-    options = {'kwargs': {'timeout': 3000}} if timeout else {}
-    task.apply_async.assert_called_once_with(args=['proj', 'imp', 'runner'], **options)
+    task_kwargs = {'cache_on_runner': {'imp': False}}
+    if timeout:
+        task_kwargs['timeout'] = 3000
+    task.apply_async.assert_called_once_with(
+        args=['proj', 'imp', 'runner'], kwargs=task_kwargs)
 
 
 @pytest.mark.parametrize('timeout', ['0', '-1', 'nan', 'inf', '1.2', ''])

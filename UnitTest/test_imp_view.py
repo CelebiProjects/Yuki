@@ -23,6 +23,11 @@ def _app():
     return app
 
 
+def _job_on(runner_id):
+    """A minimal job object carrying the selected runner."""
+    return mock.MagicMock(machine_id=runner_id)
+
+
 def test_impview_lists_nested_files_recursively(tmp_path):
     """Files in subdirectories are listed by their relative paths."""
     stageout = tmp_path / "default_runner" / "stageout"
@@ -34,7 +39,7 @@ def test_impview_lists_nested_files_recursively(tmp_path):
 
     with mock.patch.object(status_routes, "config", _stub_config(tmp_path)), \
             mock.patch.object(status_routes, "VJob",
-                              side_effect=RuntimeError("no runner")):
+                              return_value=_job_on("default_runner")):
         r = _app().test_client().get("/imp-view/proj/imp-1")
     body = r.get_data(as_text=True)
     assert r.status_code == 200
@@ -54,8 +59,19 @@ def test_impview_renders_nested_image_inline(tmp_path):
 
     with mock.patch.object(status_routes, "config", _stub_config(tmp_path)), \
             mock.patch.object(status_routes, "VJob",
-                              side_effect=RuntimeError("no runner")):
+                              return_value=_job_on("default_runner")):
         r = _app().test_client().get("/imp-view/proj/imp-1")
     body = r.get_data(as_text=True)
     assert 'src="/file-view/proj/imp-1/default_runner/plots/overtrain_BDT.png"' \
         in body
+
+
+def test_impview_without_runner_shows_not_run_empty_state(tmp_path):
+    """An impression that has not been submitted renders a useful empty state."""
+    with mock.patch.object(status_routes, "config", _stub_config(tmp_path)), \
+            mock.patch.object(status_routes, "VJob",
+                              return_value=_job_on(None)):
+        r = _app().test_client().get("/imp-view/proj/imp-1")
+
+    assert r.status_code == 200
+    assert "尚未运行/暂无输出" in r.get_data(as_text=True)

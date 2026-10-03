@@ -55,13 +55,14 @@ def test_task_transfer_results_calls_run_transfer():
         assert result == {"transferred": ["a.txt"]}
 
 
-def test_task_update_workflow_status_delegates_to_workflow():
+def test_task_update_workflow_status_delegates_to_workflow(tmp_path, monkeypatch):
     """The task refreshes status via the workflow's own status write.
 
     Distribution refresh on the terminal transition happens inside
     update_workflow_status, not separately in the task.
     """
     from Yuki.server import tasks
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
     workflow = mock.Mock()
 
     with mock.patch.object(tasks, "VWorkflow") as vwf:

@@ -170,103 +170,26 @@ def run_workflow(workflow_uuid, cores):  # pylint: disable=too-many-locals,too-m
     Files are copied using hard links when on the same filesystem for
     performance, with automatic fallback to regular copy for cross-filesystem.
     """
-    from CelebiChrono.utils.metadata import ConfigFile
-    from Yuki.kernel import runner_config
-    from Yuki.kernel.snakemake_monitor import SnakemakeMonitor
-    from Yuki.kernel.file_staging import FileStager
-
-    yuki_home = os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki"))
-
-    # Find the workflow in the Workflows directory to get project_uuid
-    workflows_dir = os.path.join(yuki_home, "Workflows")
-    workflow_path = None
-    project_uuid = None
-
-    if os.path.isdir(workflows_dir):
-        for proj_dir in os.listdir(workflows_dir):
-            proj_path = os.path.join(workflows_dir, proj_dir)
-            if not os.path.isdir(proj_path):
-                continue
-            potential_workflow = os.path.join(proj_path, workflow_uuid)
-            if os.path.isdir(potential_workflow):
-                workflow_path = potential_workflow
-                project_uuid = proj_dir
-                break
-
-    if not workflow_path:
-        click.echo(f"Workflow {workflow_uuid} not found in $YUKIDIR/Workflows/")
-        raise click.ClickException("Workflow not found")
-
-    # Resolve per-runner settings from the workflow's machine_id
-    workflow_cfg = ConfigFile(os.path.join(workflow_path, "config.json"))
-    machine_id = workflow_cfg.read_variable("machine_id", "")
-    settings = runner_config.get_runner_settings(
-        runner_config.open_config(), machine_id)
-    cores = cores or settings.get("cores", "all")
-
-    # The execution dir lives under the runner's workdir when configured
-    base_dir = settings.get("workdir") or os.path.join(
-        yuki_home, "LocalWorkflows")
-    local_exec_dir = os.path.join(base_dir, workflow_uuid)
-    if not os.path.isdir(local_exec_dir):
-        click.echo(f"Workflow {workflow_uuid} not found.")
-        raise click.ClickException(f"Workflow {workflow_uuid} not found.")
-
-    snakefile_path = os.path.join(local_exec_dir, "Snakefile")
-    if not os.path.exists(snakefile_path):
-        click.echo(f"No Snakefile found in {local_exec_dir}")
-        raise click.ClickException(f"No Snakefile found in {local_exec_dir}")
-
-    # Create logger function
-    def logger(msg):
-        timestamp = os.popen('date +"%Y-%m-%d %H:%M:%S"').read().strip()
-        click.echo(f"[{timestamp}] {msg}")
-
-    logger(f"Workflow UUID: {workflow_uuid}")
-    logger(f"Project UUID: {project_uuid}")
-    logger(f"Workflow path: {workflow_path}")
-    logger(f"Execution path: {local_exec_dir}")
-
-    # Stage in files with hard links
-    logger("[STAGE_IN] Starting file staging...")
-    stager = FileStager(workflow_path, local_exec_dir, project_uuid, logger)
-    if not stager.stage_in():
-        click.echo("File staging failed")
-        raise click.ClickException("File staging failed")
-
-    # Initialize monitor and execute snakemake
-    monitor = SnakemakeMonitor(
-        workflow_path, local_exec_dir,
-        project_uuid=project_uuid,
-        workflow_uuid=workflow_uuid,
-    )
-    logger(f"[SNAKEMAKE] Running snakemake with {cores} cores")
-
-    exit_code = monitor.execute_snakemake(
-        cores, logger,
-        mem_mb=settings.get("mem_mb"),
-        snakemake_path=settings.get("snakemake_path") or None,
-        conda_path=settings.get("conda_path") or None,
-    )
-
-    # Stage out results
-    if exit_code == 0:
-        logger("[STAGE_OUT] Starting result collection...")
-        if not stager.stage_out():
-            logger("Result collection failed (but workflow succeeded)")
-        else:
-            logger("[STAGE_OUT] Results successfully collected")
-
-    # Final status
-    if exit_code == 0:
-        click.echo(f"\n✓ Workflow {workflow_uuid} completed successfully")
-        click.echo(f"  Results stored in: {workflow_path}/results.json")
-        click.echo(f"  Output files in: ~/.Yuki/Storage/{project_uuid}/*/stageout/")
-    else:
-        click.echo(f"\n✗ Workflow {workflow_uuid} failed with exit code {exit_code}")
-        click.echo(f"  Check logs at: {workflow_path}/log.json")
-
-    return exit_code
+    from Yuki.kernel.local_execution import (
+        execute_workflow, timestamp_logger, workflow_location)
+    from Yuki.native_runner import _lock, _set_state
+    try:
+        yuki_dir = os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki"))
+        _project_uuid, workflow_path = workflow_location(yuki_dir, workflow_uuid)
+        with _lock(os.path.join(workflow_path, "native-runner.lock")) as claimed:
+            if not claimed:
+                raise click.ClickException("Workflow is already running")
+            _set_state(workflow_path, "running")
+            try:
+                exit_code = execute_workflow(workflow_uuid, cores, timestamp_logger)
+            except Exception as exc:
+                _set_state(workflow_path, "failed", str(exc))
+                raise
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if exit_code:
+        raise click.ClickException(f"Workflow {workflow_uuid} failed with exit code {exit_code}")
+    click.echo(f"Workflow {workflow_uuid} completed successfully")
 
 
 # ------ Impression Import/Export ------ #

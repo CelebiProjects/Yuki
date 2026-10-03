@@ -9,6 +9,7 @@ import os
 import json
 import subprocess
 import time
+import signal
 from CelebiChrono.utils import metadata
 from .status_constants import IN_MOVEMENT, CODA, FAILED, translate_to_musical
 
@@ -35,6 +36,8 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
         self.log_file = os.path.join(workflow_path, "log.json")
         self.snakemake_log = os.path.join(local_exec_path, "snakemake.log")
         self.snakemake_report = os.path.join(local_exec_path, "report.json")
+        self.cancel_path = os.path.join(local_exec_path, "native-runner.cancel")
+        self.pid_path = os.path.join(local_exec_path, "native-runner.snakemake.pid")
 
         if workflow_uuid is None:
             workflow_uuid = os.path.basename(workflow_path.rstrip("/"))
@@ -45,8 +48,9 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
         self.project_uuid = project_uuid
         self.workflow_uuid = workflow_uuid
 
-    def execute_snakemake(self, cores, logger=None, mem_mb=None,  # pylint: disable=too-many-arguments,too-many-positional-arguments
-                          snakemake_path=None, conda_path=None):
+    def execute_snakemake(self, cores, logger=None, mem_mb=None,  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches
+                          snakemake_path=None, conda_path=None,
+                          defer_success=False):
         """
         Execute snakemake and monitor progress.
 
@@ -92,10 +96,23 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    env=env
+                    env=env,
+                    start_new_session=True,
                 ) as process:
+                    with open(self.pid_path, "w", encoding="utf-8") as pid_file:
+                        pid_file.write(str(process.pid))
                     # Monitor execution
                     while process.poll() is None:
+                        if os.path.exists(self.cancel_path):
+                            os.killpg(process.pid, signal.SIGTERM)
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                os.killpg(process.pid, signal.SIGKILL)
+                                process.wait()
+                            self._update_results("stopped", 0, 0,
+                                                 {"error": "Cancelled by user"})
+                            return 1
                         time.sleep(2)  # Check every 2 seconds
                         self._update_progress(logger)
 
@@ -106,10 +123,16 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
                 logger(f"[SNAKEMAKE] Execution error: {e}")
             self._update_results(FAILED, 0, 0, {"error": str(e)})
             return 1
+        finally:
+            if os.path.exists(self.pid_path):
+                os.unlink(self.pid_path)
 
         # Final status update
         if exit_code == 0:
-            self._finalize_results(logger)
+            if defer_success:
+                self._update_results("collecting", 0, 0, {})
+            else:
+                self._finalize_results(logger)
             return 0
         self._handle_failure(logger)
         return exit_code

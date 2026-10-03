@@ -378,10 +378,9 @@
       </ul>
       {% else %}
       <div class="empty-state">
-        <p>No files found in this impression.</p>
+        <p>{{ empty_message or "No files found in this impression." }}</p>
       </div>
       {% endif %}
     </div>
   </body>
 </html>
-

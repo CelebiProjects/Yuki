@@ -34,6 +34,7 @@ yuki server stop     # or Ctrl-C
 yuki server start|stop|status      # manage the web server
 yuki docker run|restart            # run Yuki in Docker (see below)
 yuki run-workflow <uuid>           # execute a workflow
+yuki-native-runner start            # execute queued native workflows on the host
 yuki impression-export <uuids...> --project-uuid <uuid> -o out.tar.gz
 yuki impression-import <tar_file> --project-uuid <uuid>
 yuki env-map add|list|remove       # manage environment mappings
@@ -58,6 +59,29 @@ CELEBI_DIR=../CelebiChrono docker compose up
 Storage persists in your host `~/.Yuki` (override with `YUKIDIR=... docker compose up`),
 shared with native runs and `yuki docker run`. The compose setup targets macOS;
 on Linux, prefer the CLI below.
+
+### Automatic native execution on the host
+
+Install Yuki on the host and start the agent there, using the same storage
+directory that is mounted into Docker:
+
+```bash
+yuki-native-runner start
+yuki-native-runner status
+yuki-native-runner logs
+yuki-native-runner stop
+```
+
+`start` runs in the background; use `start --foreground` when running under a
+service manager. Yuki prepares native workflows in the shared directory, and
+the agent claims them and runs Snakemake and Conda on the host. No API address
+or published Docker port is needed. Set `YUKIDIR` or `--yuki-dir` if the host
+storage directory is not `~/.Yuki`. A custom native runner workdir must be a
+path available with the same absolute name inside Docker and on the host;
+the default `LocalWorkflows` directory needs no extra setup.
+If the agent is interrupted during execution, a restart waits for the host
+process to exit and then marks the unfinished workflow failed for inspection;
+it does not launch that workflow a second time automatically.
 
 ### Building images
 

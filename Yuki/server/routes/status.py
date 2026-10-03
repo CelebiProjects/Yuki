@@ -3,14 +3,13 @@ Status and monitoring routes.
 """
 import json
 import os
-import time
 from logging import getLogger
 from flask import Blueprint, render_template, request, jsonify, url_for, send_from_directory
 from werkzeug.utils import secure_filename
 from CelebiChrono.utils.metadata import ConfigFile, YamlFile
-from CelebiChrono.kernel.chern_cache import ChernCache
 from Yuki.kernel import file_types
 from ...kernel.vjob import VJob
+from ...kernel.locked_metadata import read_variable as read_locked_variable
 from ...kernel.vworkflow import VWorkflow
 from ...kernel.status_constants import (
     translate_to_musical, translate_to_legacy, is_valid_status,
@@ -18,12 +17,10 @@ from ...kernel.status_constants import (
 )
 from ..config import config
 from ..tasks import task_update_workflow_status
+from ..workflow_status_refresh import enqueue_once
 
 bp = Blueprint('status', __name__)
 _debug = getLogger("Yuki.execution")
-
-CHERN_CACHE = ChernCache.instance()
-
 
 @bp.route('/set-job-status/<project_uuid>/<impression_name>/<job_status>', methods=['GET'])
 def setjobstatus(project_uuid, impression_name, job_status):
@@ -109,38 +106,34 @@ def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
             continue
         _debug.debug(f"[status] impression={impression_name} runner={machine} "
                      f"machine_id={machine_id} workflow_id={job.workflow_id()}")
-        workflow = VWorkflow.create(project_uuid, [], job.workflow_id())
-        _debug.debug(f"[status] workflow backend_type={workflow.backend_type()}")
-        workflow_status = workflow.status()
-        # print("Status from workflow", workflow_status)
         workflow_path = os.path.join(
-            os.environ["HOME"],
-            ".Yuki",
+            os.path.expanduser(os.environ.get("YUKIDIR") or "~/.Yuki"),
             "Workflows",
             project_uuid,
             job.workflow_id()
         )
+        # A workflow may contain hundreds of jobs.  Do not reconstruct its
+        # complete VJob graph for every impression queried by the client.
+        results = read_locked_variable(os.path.join(workflow_path, "results.json"),
+                                       "results", {})
+        workflow_status = results.get("status", "unknown")
 
         _debug.debug("Path: %s", workflow_path)
-        job.update_status_from_workflow( # workflow path
-                    workflow_path
-                )
+        job.update_status_from_workflow(workflow_path)
         # Update workflow status check to use musical names
         workflow_musical = translate_to_musical(workflow_status)
         _debug.debug("The status is: %s", workflow_musical)
         if workflow_musical not in (CODA, FAILED):
-            last_update_time = CHERN_CACHE.update_table.get(workflow.uuid, -1)
-            _debug.debug(f"Time difference: {time.time() - last_update_time}")
-            if (time.time() - last_update_time) > 5:
-                CHERN_CACHE.update_table[workflow.uuid] = time.time()
-                _debug.debug(f"[status] scheduling task_update_workflow_status for "
-                             f"workflow={workflow.uuid} backend={workflow.backend_type()}")
-                task_update_workflow_status.apply_async(args=[project_uuid, workflow.uuid])
+            if enqueue_once(workflow_path, project_uuid, job.workflow_id(),
+                            task_update_workflow_status):
+                _debug.debug("[status] scheduled workflow refresh for %s",
+                             job.workflow_id())
             else:
-                _debug.debug("Skipping workflow status update to avoid frequent updates.")
+                _debug.debug("[status] workflow refresh already pending for %s",
+                             job.workflow_id())
         else:
             _debug.debug(f"[status] not scheduling task_update_workflow_status for "
-                         f"workflow={workflow.uuid}: already terminal ({workflow_musical})")
+                         f"workflow={job.workflow_id()}: already terminal ({workflow_musical})")
 
         job_status = job.status()
         detailed_status = job.detailed_status()
@@ -421,23 +414,27 @@ def impview(project_uuid, impression_name):
     """View impression files by gathering metadata from 'stageout' and 'logs'."""
     job_path = config.get_job_path(project_uuid, impression_name)
 
-    # Get runner_id (assuming the VJob logic is necessary for this)
+    runner_id = None
     try:
         job = VJob(job_path, None)
         runner_id = job.machine_id
-    except Exception:
-        # Fallback if VJob/job is not fully configured
-        runner_id = "default_runner"
+    except Exception:  # pylint: disable=broad-exception-caught
+        _debug.exception("Failed to load runner for impression %s", impression_name)
 
     # Use a dictionary to store file info keyed by filename
     # to avoid duplicates when processing 'logs'
     file_infos_dict = {}
 
     max_preview_chars = 1000  # Maximum characters to read for text file previews
-    # Process 'outputs' and 'logs' directories
-    process_directory(job_path, runner_id, "stageout", file_infos_dict, max_preview_chars)
-    process_directory(job_path, runner_id, "logs", file_infos_dict, max_preview_chars)
-    process_directory(job_path, runner_id, "watermarks", file_infos_dict, max_preview_chars)
+    # An impression has no runner before its first submission. Render an empty
+    # state instead of trying to build paths with a None runner ID.
+    if runner_id:
+        process_directory(job_path, runner_id, "stageout", file_infos_dict,
+                          max_preview_chars)
+        process_directory(job_path, runner_id, "logs", file_infos_dict,
+                          max_preview_chars)
+        process_directory(job_path, runner_id, "watermarks", file_infos_dict,
+                          max_preview_chars)
 
     _debug.debug(file_infos_dict)
     # Convert dictionary values to a list for the template
@@ -464,7 +461,9 @@ def impview(project_uuid, impression_name):
                            project_uuid=project_uuid,
                            impression=impression_name,
                            runner_id=runner_id,
-                           files=final_file_infos)
+                           files=final_file_infos,
+                           empty_message=("尚未运行/暂无输出"
+                                          if not runner_id else None))
 
 
 def process_directory2(job_path, runner_id, sub_dir, file_infos_dict,  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals

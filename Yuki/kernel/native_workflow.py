@@ -1,9 +1,7 @@
 """
 Native/Local workflow implementation.
 
-This module provides the NativeWorkflow class which implements workflow execution
-by copying files to a local directory for manual/local execution instead of
-submitting to a remote REANA server.
+This module prepares workflows in shared storage for the host native runner.
 """
 # pylint: disable=cyclic-import
 import os
@@ -13,7 +11,8 @@ from CelebiChrono.utils import metadata
 from Yuki.utils.env_interpreter import EnvInterpreter
 from Yuki.kernel import runner_config
 from .vworkflow import VWorkflow
-from .status_constants import FAILED, DISSONANCE, translate_to_musical, is_terminal_status
+from .status_constants import (
+    FAILED, DISSONANCE, translate_to_musical, is_terminal_status)
 from . import file_types  # pylint: disable=unused-import  # re-exported for tests
 from .file_staging import walk_files
 
@@ -30,7 +29,8 @@ class NativeWorkflow(VWorkflow):
         settings = runner_config.get_runner_settings(
             runner_config.open_config(), self.machine_id or "")
         base_dir = settings.get("workdir") or os.path.join(
-            os.environ["HOME"], ".Yuki", "LocalWorkflows")
+            os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki")),
+            "LocalWorkflows")
         self.local_exec_path = os.path.join(base_dir, self.uuid)
         os.makedirs(self.local_exec_path, exist_ok=True)
 
@@ -68,7 +68,7 @@ class NativeWorkflow(VWorkflow):
         self.set_workflow_status("ready_for_local_execution")
         self.logger(f"[LOCAL] Workflow prepared in: {self.local_exec_path}")
         self.logger(f"[LOCAL] Snakefile: {os.path.join(self.local_exec_path, 'Snakefile')}")
-        self.logger("[LOCAL] You can now run: snakemake --use-conda --cores all")
+        self.logger("[LOCAL] Queued for yuki-native-runner on the host")
 
     def _sync_external_job_status(self, job):
         """Poll local status for external dependency."""
@@ -144,8 +144,7 @@ class NativeWorkflow(VWorkflow):
             elif job.is_input:
                 impression = job.path.split("/")[-1]
                 src_stageout = os.path.join(
-                    os.environ["HOME"],
-                    ".Yuki",
+                    os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki")),
                     "Storage",
                     self.project_uuid,
                     impression,
@@ -311,6 +310,13 @@ class NativeWorkflow(VWorkflow):
     def update_workflow_status(self):  # pylint: disable=too-many-locals
         """Update workflow status from local execution."""
         try:
+            # The host runner owns state after claiming a workflow. Inferring
+            # status from .done markers here would overwrite its failure or
+            # cancellation with a false "running" result.
+            current = metadata.ConfigFile(os.path.join(self.path, "results.json"))
+            recorded = current.read_variable("results", {}).get("status", "")
+            if recorded:
+                return
             # Check if all output files exist
             all_done = True
             self.logger(
@@ -387,13 +393,12 @@ class NativeWorkflow(VWorkflow):
         return self.status()
 
     def force_kill(self):
-        """Mark the local workflow killed (best-effort).
-
-        The native backend runs in a foreground process that Yuki does
-        not track; the recorded status is what clears the stale
-        'running' state.
-        """
-        self.logger("[LOCAL] Force-killing local workflow (marking killed)")
+        """Request cancellation and mark the workflow killed."""
+        self.logger("[LOCAL] Requesting native workflow cancellation")
+        if hasattr(self, "local_exec_path"):
+            with open(os.path.join(self.local_exec_path, "native-runner.cancel"),
+                      "w", encoding="utf-8") as request:
+                request.write("cancel\n")
         self.set_workflow_status("killed")
         for job in self.jobs:
             if job.is_input:
@@ -404,7 +409,11 @@ class NativeWorkflow(VWorkflow):
 
     def kill(self):
         """Kill local workflow execution."""
-        self.logger("[LOCAL] Killing local workflow (manual intervention required)")
+        self.logger("[LOCAL] Requesting native workflow cancellation")
+        if hasattr(self, "local_exec_path"):
+            with open(os.path.join(self.local_exec_path, "native-runner.cancel"),
+                      "w", encoding="utf-8") as request:
+                request.write("cancel\n")
         self.set_workflow_status("killed")
         for job in self.jobs:
             if job.is_input:

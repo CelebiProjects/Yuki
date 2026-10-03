@@ -7,7 +7,8 @@ from celery import Celery
 from CelebiChrono.utils import metadata
 from ..kernel import remote_data_ops, result_transfer
 from ..kernel.vjob import VJob
-from ..kernel.vworkflow import VWorkflow
+from ..kernel.vworkflow import VWorkflow, _yuki_dir
+from .workflow_status_refresh import running_refresh
 from ..utils.logging_config import apply_channel_levels
 
 _debug = logging.getLogger("Yuki.kernel")
@@ -38,9 +39,7 @@ def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None):
     config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki/config.json"))
     backend_types = config.read_variable("backend_types", {})
     backend_type = backend_types.get(machine_uuid, "reana")
-    runners_id = config.read_variable("runners_id", {})
-    runner_name = {v: k for k, v in runners_id.items()}.get(machine_uuid, machine_uuid)
-    _debug.debug(f"[task_exec_impression] runner={runner_name} machine_uuid={machine_uuid} "
+    _debug.debug(f"[task_exec_impression] machine_uuid={machine_uuid} "
                  f"backend_type={backend_type} impressions={impressions}")
     jobs = [
         VJob(os.path.join(os.environ["HOME"], ".Yuki/Storage", project_uuid, imp),
@@ -107,7 +106,7 @@ def _validate_remote_data_binding(workflow, project_uuid, machine_uuid):
 
 
 @celeryapp.task
-def task_update_workflow_status(project_uuid, workflow_id):
+def task_update_workflow_status(project_uuid, workflow_id, token=None):
     """Update workflow status as a background task.
 
     The distribution refresh on the terminal transition happens inside
@@ -116,17 +115,21 @@ def task_update_workflow_status(project_uuid, workflow_id):
     _debug.debug("# >>> task_update_workflow_status")
     _debug.debug(f"[task_update_workflow_status] project_uuid={project_uuid} "
                  f"workflow_id={workflow_id}")
-    workflow = VWorkflow.create(project_uuid, [], workflow_id)
-    _debug.debug(f"[task_update_workflow_status] backend={workflow.backend_type()} "
-                 f"uuid={workflow.uuid} path={workflow.path}")
-    from ..kernel.status_constants import CODA, FAILED, translate_to_musical
-    current_status = workflow.status()
-    if translate_to_musical(current_status) in (CODA, FAILED):
-        _debug.debug(f"[task_update_workflow_status] workflow already terminal "
-                     f"status={current_status}; skipping update_workflow_status")
-        _debug.debug("# <<< task_update_workflow_status")
-        return
-    workflow.update_workflow_status()
+    workflow_path = os.path.join(_yuki_dir(), "Workflows", project_uuid, workflow_id)
+    with running_refresh(workflow_path, token) as acquired:
+        if not acquired:
+            _debug.debug("[task_update_workflow_status] already running: %s", workflow_id)
+            return
+        workflow = VWorkflow.create(project_uuid, [], workflow_id)
+        _debug.debug(f"[task_update_workflow_status] backend={workflow.backend_type()} "
+                     f"uuid={workflow.uuid} path={workflow.path}")
+        from ..kernel.status_constants import CODA, FAILED, translate_to_musical
+        current_status = workflow.status()
+        if translate_to_musical(current_status) in (CODA, FAILED):
+            _debug.debug(f"[task_update_workflow_status] workflow already terminal "
+                         f"status={current_status}; skipping update_workflow_status")
+            return
+        workflow.update_workflow_status()
     _debug.debug("# <<< task_update_workflow_status")
 
 

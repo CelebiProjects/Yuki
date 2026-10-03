@@ -10,6 +10,7 @@ import time
 from abc import ABC
 
 from CelebiChrono.utils import metadata
+from .locked_metadata import read_variable as read_locked_variable
 
 from .status_constants import (
     translate_to_musical, translate_to_legacy, is_valid_status,
@@ -140,8 +141,8 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
         Returns:
             Status name (musical by default, legacy if specified)
         """
-        config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
-        status = config_file.read_variable("status", SILENCE)
+        status = read_locked_variable(os.path.join(self.path, "status.json"),
+                                      "status", SILENCE)
 
         if not musical:
             return status
@@ -220,8 +221,8 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
         Returns:
             Detailed status message string, or empty string if not set.
         """
-        config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
-        return config_file.read_variable("detailed_status", "")
+        return read_locked_variable(os.path.join(self.path, "status.json"),
+                                    "detailed_status", "")
 
     def set_detailed_status(self, message):
         """Set the detailed status message for the job.
@@ -254,8 +255,8 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
     def _read_workflow_results(self, workflow_path, logger=None):
         """Read workflow results and return status."""
         try:
-            results_file = metadata.ConfigFile(os.path.join(workflow_path, "results.json"))
-            results = results_file.read_variable("results", {})
+            results = read_locked_variable(os.path.join(workflow_path, "results.json"),
+                                           "results", {})
             return results.get("status", "unknown")
         except Exception:
             if logger:
@@ -267,8 +268,8 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
     def _find_matched_step(self, workflow_path, logger=None):
         """Find the matched step in workflow log for this job."""
         try:
-            log_file = metadata.ConfigFile(os.path.join(workflow_path, "log.json"))
-            log = log_file.read_variable("logs", {})
+            log = read_locked_variable(os.path.join(workflow_path, "log.json"),
+                                       "logs", {})
             for step in log.values():
                 if step.get("job_name", "") == f"step{self.short_uuid()}":
                     return step
@@ -375,8 +376,11 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
             return
 
         config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
-        current_status = config_file.read_variable("status", SILENCE)
-        config_file.write_variable("machine_id", self.machine_id)
+        current_status = read_locked_variable(os.path.join(self.path, "status.json"),
+                                              "status", SILENCE)
+        if read_locked_variable(os.path.join(self.path, "status.json"),
+                                "machine_id") != self.machine_id:
+            config_file.write_variable("machine_id", self.machine_id)
         if logger:
             logger(f"Job {self.short_uuid()} current status: {current_status}")
         else:

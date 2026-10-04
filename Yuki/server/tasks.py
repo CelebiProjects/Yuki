@@ -145,9 +145,9 @@ def task_update_workflow_status(project_uuid, workflow_id, token=None):
         workflow = VWorkflow.create(project_uuid, [], workflow_id)
         _debug.debug(f"[task_update_workflow_status] backend={workflow.backend_type()} "
                      f"uuid={workflow.uuid} path={workflow.path}")
-        from ..kernel.status_constants import CODA, FAILED, translate_to_musical
+        from ..kernel.status_constants import is_terminal_status
         current_status = workflow.status()
-        if translate_to_musical(current_status) in (CODA, FAILED):
+        if is_terminal_status(current_status):
             _debug.debug(f"[task_update_workflow_status] workflow already terminal "
                          f"status={current_status}; skipping update_workflow_status")
             return

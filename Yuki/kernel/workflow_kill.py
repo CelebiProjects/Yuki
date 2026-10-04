@@ -53,10 +53,14 @@ def kill_running_workflows(runner_id, project_uuid, dry_run=True,
                              if job.is_input or job.job_type() == "algorithm"
                              or job.workflow_id() == name]
             if workflow.backend_type() == "ssh":
-                workflow.force_kill(strict=True)
+                changed = workflow.force_kill(strict=True)
             else:
-                workflow.force_kill()
-            report["killed"].append(entry)
+                changed = workflow.force_kill()
+            if changed is False:
+                report["skipped"].append(
+                    {**entry, "reason": "no active verified execution"})
+            else:
+                report["killed"].append(entry)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             report["failed"].append({**entry, "reason": str(exc)})
     return report

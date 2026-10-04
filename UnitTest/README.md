@@ -14,7 +14,8 @@ The test suite covers:
 - `/export/<impression>/<filename>` - File export
 - `/impview/<impression>` - Impression view with file listing
 - `/fileview/<impression>/<runner_id>/<filename>` - Individual file view
-- `/kill/<impression>` - Kill running jobs
+- `GET /kill/<impression>` - Preview the complete workflow affected by a stop
+- `POST /kill/<impression>` - Stop one explicitly confirmed workflow ID
 - `/runners` - List available runners
 - `/runnersurl` - Get runner URLs
 - `/runnerconnection/<runner>` - Test runner connections

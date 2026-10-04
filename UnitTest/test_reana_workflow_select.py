@@ -197,8 +197,8 @@ def test_update_workflow_status_terminal_transition_records(tmp_path):
     refresh_files.assert_called_once_with("proj-1", wf, "finished", True)
 
 
-def test_update_workflow_status_repeated_terminal_poll_skips(tmp_path):
-    """A poll that finds the workflow already terminal does not re-record."""
+def test_update_workflow_status_repeated_terminal_poll_is_noop(tmp_path):
+    """An already terminal workflow is never queried or refreshed again."""
     wf = _make_wf()
     wf.uuid = "wf-1"
     wf.path = str(tmp_path)
@@ -215,4 +215,5 @@ def test_update_workflow_status_repeated_terminal_poll_skips(tmp_path):
                                                 "logs": "{}"}
         wf.update_workflow_status()
     refresh.assert_not_called()
-    refresh_files.assert_called_once_with("proj-1", wf, "finished", False)
+    refresh_files.assert_not_called()
+    cli.get_workflow_status.assert_not_called()

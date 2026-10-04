@@ -1060,6 +1060,12 @@ class TestSshWorkflow(unittest.TestCase):
         def exec_side_effect(command, timeout=300):  # pylint: disable=unused-argument
             if command.startswith("cat"):
                 return MagicMock(), _MockStdout("12345"), _MockStderr("")
+            if command.startswith("readlink"):
+                return (MagicMock(), _MockStdout(self.workflow.remote_exec_path),
+                        _MockStderr(""))
+            if command.startswith("tr "):
+                return (MagicMock(), _MockStdout("snakemake --snakefile Snakefile"),
+                        _MockStderr(""))
             return MagicMock(), _MockStdout(""), _MockStderr("")
 
         self.mock_client.exec_command.side_effect = exec_side_effect
@@ -1079,6 +1085,12 @@ class TestSshWorkflow(unittest.TestCase):
         def exec_side_effect(command, timeout=300):  # pylint: disable=unused-argument
             if command.startswith("cat"):
                 return (MagicMock(), _MockStdout("1234 1235"),
+                        _MockStderr(""))
+            if command.startswith("readlink"):
+                return (MagicMock(), _MockStdout(self.workflow.remote_exec_path),
+                        _MockStderr(""))
+            if command.startswith("tr "):
+                return (MagicMock(), _MockStdout("bash ./yuki_run.sh"),
                         _MockStderr(""))
             return MagicMock(), _MockStdout(""), _MockStderr("")
 

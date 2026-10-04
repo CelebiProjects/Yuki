@@ -11,12 +11,22 @@ from ..config import config
 
 bp = Blueprint('workflow', __name__)
 
-@bp.route("/kill/<project_uuid>/<impression>", methods=['GET'])
+@bp.route("/kill/<project_uuid>/<impression>", methods=['GET', 'POST'])
 def kill(project_uuid, impression):
-    """Kill a workflow for a specific project and impression."""
+    """Preview an impression's workflow scope, then stop one explicit ID."""
     storage = ImpressionStorage(project_uuid, impression)
-    storage.kill()
-    return "ok"
+    if request.method == "GET":
+        return jsonify(storage.kill_plan())
+    data = request.get_json(silent=True) or request.form
+    workflow_id = data.get("workflow") if data else None
+    if not workflow_id:
+        return jsonify({
+            "error": "workflow is required; GET this endpoint for a preview"
+        }), 400
+    try:
+        return jsonify(storage.kill_workflow(workflow_id))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
 
 @bp.route("/collect/<project_uuid>/<impression>", methods=['GET'])
 def collect(project_uuid, impression):
@@ -106,10 +116,11 @@ def delete_workflow(project_uuid, workflow_uuid):
 @bp.route("/kill-workflow/<project_uuid>/<workflow_uuid>",
            methods=['GET'])
 def kill_workflow(project_uuid, workflow_uuid):
-    """Force-stop a workflow (works even for zombie runs).
+    """Force-stop a workflow with a verified backend execution identity.
 
     Escalates TERM -> KILL on ssh runners, force-stops reana workflows,
-    and marks the status killed so a stale 'running' clears.
+    and marks active work stopped. Terminal workflows and SSH workflows
+    without a live matching PID are left unchanged.
     """
     workflow_dir = os.path.join(os.environ["HOME"], ".Yuki", "Workflows",
                                 project_uuid, workflow_uuid)
@@ -118,11 +129,11 @@ def kill_workflow(project_uuid, workflow_uuid):
                                  "not found"}), 404
     try:
         wf = VWorkflow.create(project_uuid, [], workflow_uuid)
-        wf.force_kill()
+        changed = wf.force_kill()
         backend_type = wf.backend_type()
     except Exception as e:  # pylint: disable=broad-exception-caught
         return jsonify({"error": str(e)}), 500
-    return jsonify({"status": "killed",
+    return jsonify({"status": "stopped" if changed is not False else "unchanged",
                     "project_uuid": project_uuid,
                     "workflow": workflow_uuid,
                     "backend_type": backend_type})

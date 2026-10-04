@@ -114,6 +114,20 @@ def test_task_update_workflow_status_delegates_to_workflow(tmp_path, monkeypatch
     workflow.update_workflow_status.assert_called_once_with()
 
 
+def test_task_update_workflow_status_skips_stopped(tmp_path, monkeypatch):
+    """A queued refresh cannot revive a workflow stopped after dispatch."""
+    from Yuki.server import tasks
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    workflow = mock.Mock()
+    workflow.status.return_value = "stopped"
+
+    with mock.patch.object(tasks, "VWorkflow") as vwf:
+        vwf.create.return_value = workflow
+        tasks.task_update_workflow_status("proj", "wf-1")
+
+    workflow.update_workflow_status.assert_not_called()
+
+
 @pytest.mark.parametrize("status", ["finished", "coda", "failed"])
 def test_refresh_workflow_distributions_terminal(status):
     """Terminal workflows refresh every non-algorithm job's registry."""

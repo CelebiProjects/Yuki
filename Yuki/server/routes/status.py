@@ -13,7 +13,7 @@ from ...kernel.locked_metadata import read_variable as read_locked_variable
 from ...kernel.vworkflow import VWorkflow
 from ...kernel.status_constants import (
     translate_to_musical, translate_to_legacy, is_valid_status,
-    CODA, FAILED
+    is_terminal_status
 )
 from ..config import config
 from ..tasks import task_update_workflow_status
@@ -123,7 +123,7 @@ def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
         # Update workflow status check to use musical names
         workflow_musical = translate_to_musical(workflow_status)
         _debug.debug("The status is: %s", workflow_musical)
-        if workflow_musical not in (CODA, FAILED):
+        if not is_terminal_status(workflow_musical):
             if enqueue_once(workflow_path, project_uuid, job.workflow_id(),
                             task_update_workflow_status):
                 _debug.debug("[status] scheduled workflow refresh for %s",

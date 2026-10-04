@@ -196,6 +196,8 @@ class ReanaWorkflow(VWorkflow):
 
     def kill(self):
         """Kill the workflow execution."""
+        if self._workflow_is_terminal():
+            return False
         if not REANA_AVAILABLE:
             raise ImportError("reana_client is not available")
         client.stop_workflow(
@@ -203,9 +205,12 @@ class ReanaWorkflow(VWorkflow):
             False,
             self.get_access_token(self.machine_id)
         )
+        return self._finalize_stop("REANA workflow stopped by user")
 
-    def force_kill(self):
+    def force_kill(self, strict=False):  # pylint: disable=unused-argument
         """Force-stop the online workflow on the REANA server."""
+        if self._workflow_is_terminal():
+            return False
         if not REANA_AVAILABLE:
             raise ImportError("reana_client is not available")
         self.set_environment(self.machine_id)
@@ -214,7 +219,7 @@ class ReanaWorkflow(VWorkflow):
             True,
             self.get_access_token(self.machine_id)
         )
-        self.set_workflow_status("killed")
+        return self._finalize_stop("REANA workflow force-stopped by user")
 
     def writeline(self, line):
         """Write a line to the YAML file."""
@@ -310,6 +315,10 @@ class ReanaWorkflow(VWorkflow):
 
     def update_workflow_status(self):
         """Update workflow status from REANA."""
+        if self._workflow_is_terminal():
+            self.logger(
+                f"[REANA] Not refreshing terminal workflow {self.uuid}")
+            return
         try:
             if not REANA_AVAILABLE:
                 raise ImportError("reana_client is not available")
@@ -326,9 +335,11 @@ class ReanaWorkflow(VWorkflow):
             # Checked before the write: after it, the recorded status is
             # already terminal and the transition would be invisible.
             entered_terminal = self._entered_terminal_state(status)
-            path = os.path.join(self.path, "results.json")
-            results_file = metadata.ConfigFile(path)
-            results_file.write_variable("results", results)
+            if not self._update_results_if_active(results, replace=True):
+                self.logger(
+                    "[REANA] Discarding remote refresh because local workflow "
+                    "is already terminal")
+                return
             logpath = os.path.join(self.path, "log.json")
             log_file = metadata.ConfigFile(logpath)
             logstring = results.get("logs", "{}")

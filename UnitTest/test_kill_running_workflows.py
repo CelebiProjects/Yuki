@@ -94,6 +94,18 @@ def test_ssh_batch_requires_strict_kill(setup_workflows):
     stale.force_kill.assert_called_once_with(strict=True)
 
 
+def test_missing_verified_execution_is_reported_as_skipped(setup_workflows):
+    stale = setup_workflows("stale")
+    stale.backend_type.return_value = "ssh"
+    stale.force_kill.return_value = False
+    result = workflow_kill.kill_running_workflows(
+        "r1", "proj", dry_run=False, workflows=["stale"])
+    assert result["killed"] == []
+    assert result["skipped"] == [{
+        "project": "proj", "workflow": "stale",
+        "reason": "no active verified execution"}]
+
+
 def test_execution_requires_preview_ids():
     with pytest.raises(ValueError, match="preview"):
         workflow_kill.kill_running_workflows("r1", "proj", dry_run=False)

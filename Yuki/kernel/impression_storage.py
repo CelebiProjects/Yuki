@@ -51,11 +51,60 @@ class ImpressionStorage:
                 yield machine, job, workflow
 
     def kill(self):
-        """Kills all workflows associated with this storage entry."""
-        for _, _, workflow in self._get_runner_contexts():
-            workflow.kill()
-        # Mark local record as failed
-        VJob(self.job_path, None).set_status("failed")
+        """Legacy direct impression kill is intentionally disabled."""
+        raise ValueError(
+            "Impression kill requires an explicit workflow ID; "
+            "call kill_workflow(workflow_id) after previewing kill_plan()")
+
+    def _kill_targets(self):
+        """Return workflows referenced by this impression, deduplicated by ID."""
+        targets = {}
+        for machine, _job, workflow in self._get_runner_contexts():
+            entry = targets.setdefault(workflow.uuid, {
+                "workflow": workflow,
+                "runners": [],
+            })
+            if machine not in entry["runners"]:
+                entry["runners"].append(machine)
+        return targets
+
+    def kill_plan(self):
+        """Describe the full workflow scope affected by stopping an impression."""
+        workflows = []
+        for workflow_id, entry in sorted(self._kill_targets().items()):
+            workflow = entry["workflow"]
+            jobs = []
+            for job in workflow.execution_jobs():
+                jobs.append({"impression": job.uuid,
+                             "status": job.status(musical=True)})
+            workflows.append({
+                "workflow": workflow_id,
+                "backend_type": workflow.backend_type(),
+                "status": translate_to_musical(workflow.status()),
+                "runners": entry["runners"],
+                "jobs": jobs,
+            })
+        return {
+            "status": "confirmation_required" if workflows else "no_workflow",
+            "impression": self.impression,
+            "workflows": workflows,
+        }
+
+    def kill_workflow(self, workflow_id):
+        """Stop exactly one previewed workflow referenced by this impression."""
+        targets = self._kill_targets()
+        if workflow_id not in targets:
+            raise ValueError(
+                f"Workflow {workflow_id} is not referenced by impression "
+                f"{self.impression}")
+        workflow = targets[workflow_id]["workflow"]
+        changed = workflow.kill()
+        return {
+            "status": "stopped" if changed is not False else "unchanged",
+            "impression": self.impression,
+            "workflow": workflow_id,
+            "backend_type": workflow.backend_type(),
+        }
 
     @staticmethod
     def _merge_reports(reports):

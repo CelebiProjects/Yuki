@@ -376,9 +376,10 @@ class NativeWorkflow(VWorkflow):
                          f"Progress: {results['progress']['completed']}/"
                          f"{results['progress']['total']}")
 
-            path = os.path.join(self.path, "results.json")
-            results_file = metadata.ConfigFile(path)
-            results_file.write_variable("results", results)
+            if not self._update_results_if_active(results, replace=True):
+                self.logger(
+                    "[LOCAL] Discarding refresh because workflow is terminal")
+                return
 
             workflow_terminal = status in ("finished", "failed")
             entered_terminal = self._entered_terminal_state(status)
@@ -398,37 +399,27 @@ class NativeWorkflow(VWorkflow):
         self.update_workflow_status()
         return self.status()
 
-    def force_kill(self):
-        """Request cancellation and mark the workflow killed."""
+    def force_kill(self, strict=False):  # pylint: disable=unused-argument
+        """Request cancellation and mark non-terminal work stopped."""
+        if self._workflow_is_terminal():
+            return False
         self.logger("[LOCAL] Requesting native workflow cancellation")
         if hasattr(self, "local_exec_path"):
             with open(os.path.join(self.local_exec_path, "native-runner.cancel"),
                       "w", encoding="utf-8") as request:
                 request.write("cancel\n")
-        self.set_workflow_status("killed")
-        for job in self.jobs:
-            if job.is_input:
-                continue
-            if job.job_type() == "algorithm":
-                continue
-            self._set_owned_job_status(
-                job, FAILED, "Native workflow force-killed by user")
+        return self._finalize_stop("Native workflow force-stopped by user")
 
     def kill(self):
         """Kill local workflow execution."""
+        if self._workflow_is_terminal():
+            return False
         self.logger("[LOCAL] Requesting native workflow cancellation")
         if hasattr(self, "local_exec_path"):
             with open(os.path.join(self.local_exec_path, "native-runner.cancel"),
                       "w", encoding="utf-8") as request:
                 request.write("cancel\n")
-        self.set_workflow_status("killed")
-        for job in self.jobs:
-            if job.is_input:
-                continue
-            if job.job_type() == "algorithm":
-                continue
-            self._set_owned_job_status(
-                job, FAILED, "Native workflow killed by user")
+        return self._finalize_stop("Native workflow stopped by user")
 
     def delete_workspace(self):
         """Delete the local execution workspace."""

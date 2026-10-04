@@ -5,13 +5,14 @@ This module provides utilities to monitor snakemake workflow execution,
 extract execution status and logs, and update workflow results.json
 in the same format as REANA workflows.
 """
+import fcntl
 import os
 import json
 import subprocess
 import time
 import signal
-from CelebiChrono.utils import metadata
-from .status_constants import IN_MOVEMENT, CODA, FAILED, translate_to_musical
+from .status_constants import (
+    IN_MOVEMENT, CODA, FAILED, translate_to_musical, is_terminal_status)
 
 
 class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
@@ -213,21 +214,44 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
             if logger:
                 logger(f"[SNAKEMAKE] Error counting jobs: {e}")
 
+    def _write_results(self, results):
+        """Atomically write results without reversing a terminal state."""
+        os.makedirs(os.path.dirname(self.results_file), exist_ok=True)
+        with open(self.results_file, "a+", encoding="utf-8") as result_file:
+            fcntl.flock(result_file, fcntl.LOCK_EX)
+            try:
+                result_file.seek(0)
+                contents = result_file.read()
+                data = json.loads(contents) if contents.strip() else {}
+                current = data.get("results", {}) or {}
+                current_status = translate_to_musical(
+                    current.get("status", "unknown"))
+                new_status = translate_to_musical(
+                    results.get("status", "unknown"))
+                if (is_terminal_status(current_status) and
+                        current_status != new_status):
+                    return False
+                data["results"] = results
+                result_file.seek(0)
+                result_file.truncate()
+                json.dump(data, result_file)
+                result_file.flush()
+                os.fsync(result_file.fileno())
+                return True
+            finally:
+                fcntl.flock(result_file, fcntl.LOCK_UN)
+
     def _update_results(self, status, total, completed, logs):
         """Update results.json with current status."""
         try:
-            results = {
+            self._write_results({
                 "status": translate_to_musical(status),
                 "progress": {
                     "total": total,
                     "completed": completed
                 },
                 "logs": logs
-            }
-
-            results_file = metadata.ConfigFile(self.results_file)
-            results_file.write_variable("results", results)
-
+            })
         except Exception as e:
             print(f"[SNAKEMAKE] Error writing results: {e}")
 
@@ -275,8 +299,8 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
                 "snakemake_log": snakemake_log_content[-3000:] if snakemake_log_content else ""
             }
 
-            results_file = metadata.ConfigFile(self.results_file)
-            results_file.write_variable("results", results)
+            if not self._write_results(results):
+                return
 
             if logger:
                 logger("[SNAKEMAKE] Execution completed successfully")
@@ -326,8 +350,8 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
                 "snakemake_log": snakemake_log_content[-3000:]  # Last 3000 chars
             }
 
-            results_file = metadata.ConfigFile(self.results_file)
-            results_file.write_variable("results", results)
+            if not self._write_results(results):
+                return
 
             if logger:
                 logger(f"[SNAKEMAKE] Execution failed: {error_msg}")

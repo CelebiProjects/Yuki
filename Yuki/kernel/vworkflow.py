@@ -9,6 +9,8 @@ This module defines the abstract VWorkflow class which:
 """
 # pylint: disable=cyclic-import
 
+import fcntl
+import json
 import logging
 import os
 import time
@@ -29,6 +31,7 @@ from Yuki.utils import snakefile
 from . import execution_lease
 from .execution_lease import WorkflowAlreadyActive, WorkflowLeaseConflict
 from .file_staging import walk_files
+from .locked_metadata import read_variable as read_locked_variable
 
 CHERN_CACHE = ChernCache.instance()
 
@@ -219,6 +222,57 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 f"workflow {self.uuid} no longer owns it")
             return False
         job.set_status(status, detail)
+        return True
+
+    def _workflow_is_terminal(self):
+        """Return whether the persisted workflow status is terminal."""
+        results = read_locked_variable(
+            os.path.join(self.path, "results.json"), "results", {}) or {}
+        status = translate_to_musical(results.get("status", "unknown"))
+        return is_terminal_status(status)
+
+    def _update_results_if_active(self, update, replace=False):
+        """Atomically update results unless another actor made it terminal."""
+        path = os.path.join(self.path, "results.json")
+        os.makedirs(self.path, exist_ok=True)
+        with open(path, "a+", encoding="utf-8") as results_file:
+            fcntl.flock(results_file, fcntl.LOCK_EX)
+            try:
+                results_file.seek(0)
+                contents = results_file.read()
+                data = json.loads(contents) if contents.strip() else {}
+                current = data.get("results", {}) or {}
+                current_status = translate_to_musical(
+                    current.get("status", "unknown"))
+                if is_terminal_status(current_status):
+                    self.logger(
+                        f"Preserving terminal workflow {self.uuid}: "
+                        f"{current_status}")
+                    return False
+                data["results"] = dict(update) if replace else {
+                    **current, **update}
+                results_file.seek(0)
+                results_file.truncate()
+                json.dump(data, results_file)
+                results_file.flush()
+                os.fsync(results_file.fileno())
+                return True
+            finally:
+                fcntl.flock(results_file, fcntl.LOCK_UN)
+
+    def _finalize_stop(self, detail):
+        """Stop only owned, non-terminal jobs and preserve completed work."""
+        # Claim the terminal transition first. Concurrent refreshes use the
+        # same conditional write and therefore cannot resurrect this workflow.
+        if not self._update_results_if_active({"status": STOPPED}):
+            return False
+        for job in self.execution_jobs():
+            current = job.status(musical=True)
+            if is_terminal_status(current):
+                self.logger(
+                    f"Preserving terminal job {job.uuid} during stop: {current}")
+                continue
+            self._set_owned_job_status(job, STOPPED, detail)
         return True
 
     def backend_type(self):
@@ -753,12 +807,8 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         return "unknown"
 
     def set_workflow_status(self, status):
-        """Set the workflow status in the results file."""
-        path = os.path.join(self.path, "results.json")
-        results_file = metadata.ConfigFile(path)
-        results = results_file.read_variable("results", {})
-        results["status"] = status
-        results_file.write_variable("results", results)
+        """Set status without allowing a terminal workflow to transition."""
+        return self._update_results_if_active({"status": status})
 
     def _entered_terminal_state(self, new_status):
         """True when new_status is terminal but the recorded status isn't.
@@ -908,7 +958,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         """
         raise NotImplementedError
 
-    def force_kill(self):
+    def force_kill(self, strict=False):  # pylint: disable=unused-argument
         """Force-stop the workflow - must be implemented by subclass.
 
         Raises:

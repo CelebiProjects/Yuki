@@ -41,6 +41,7 @@ LEGACY_READY = "ready"
 LEGACY_FINISHED = "finished"
 LEGACY_SUCCESS = "success"
 LEGACY_CREATED = "created"
+LEGACY_KILLED = "killed"
 
 # Mapping from legacy names to musical names
 LEGACY_TO_MUSICAL = {
@@ -52,6 +53,7 @@ LEGACY_TO_MUSICAL = {
     LEGACY_READY: TUNING,
     LEGACY_FINISHED: CODA,
     LEGACY_SUCCESS: CODA,
+    LEGACY_KILLED: STOPPED,
     # Note: "failed" maps differently based on context
     # "stopped", "deleted", "archived" remain unchanged
 }
@@ -85,7 +87,7 @@ VALID_STATUSES = {
 VALID_LEGACY_STATUSES = {
     LEGACY_RAW, LEGACY_WAITING, LEGACY_RUNNING, LEGACY_SUBMITTED,
     LEGACY_BUILT, LEGACY_READY, LEGACY_FINISHED, LEGACY_SUCCESS,
-    FAILED, STOPPED, DELETED, ARCHIVED
+    LEGACY_KILLED, FAILED, STOPPED, DELETED, ARCHIVED
 }
 
 

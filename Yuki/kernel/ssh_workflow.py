@@ -18,7 +18,7 @@ from Yuki.kernel import runner_config
 from Yuki.utils.env_interpreter import EnvInterpreter
 from .vworkflow import VWorkflow
 from .ssh_pool import ssh_pool
-from .status_constants import (FAILED, DISSONANCE, STOPPED,
+from .status_constants import (FAILED, DISSONANCE,
                                translate_to_musical, is_terminal_status)
 from .file_staging import walk_files
 
@@ -694,6 +694,35 @@ wait "$snakemake_pid"
         _out, _err, code = ssh.exec(f"kill -0 {pid} 2>/dev/null")
         return code == 0
 
+    def _verified_remote_target(self, ssh):
+        """Return a verified (pid, signal target), or None if execution ended."""
+        started = self._read_remote_started(ssh)
+        candidates = ([(started[0], f"-{started[0]}"),
+                       (started[1], str(started[1]))]
+                      if started else [])
+        marker_pid = None if started else self._read_remote_int(ssh, "yuki.pid")
+        if marker_pid and marker_pid not in {pid for pid, _ in candidates}:
+            candidates.append((marker_pid, str(marker_pid)))
+        for pid, target in candidates:
+            if not self._remote_pid_alive(ssh, pid):
+                continue
+            cwd, err, code = ssh.exec(f"readlink -f /proc/{pid}/cwd")
+            cwd = cwd.strip()
+            if code or not (cwd == self.remote_exec_path or
+                            cwd.startswith(self.remote_exec_path + "/")):
+                raise RuntimeError(
+                    f"PID {pid} cannot be verified as belonging to workflow "
+                    f"{self.uuid}: {err or cwd or 'cwd unavailable'}")
+            command, err, code = ssh.exec(
+                f"tr '\\0' ' ' < /proc/{pid}/cmdline")
+            if code or not any(name in command
+                               for name in ("yuki_run.sh", "snakemake")):
+                raise RuntimeError(
+                    f"PID {pid} command does not match workflow {self.uuid}: "
+                    f"{err or command or 'command unavailable'}")
+            return pid, target
+        return None
+
     def _confirm_remote_start(self, ssh, timeout=SSH_START_CONFIRM_TIMEOUT):
         """Require wrapper markers instead of trusting SSH channel completion."""
         deadline = time.monotonic() + timeout
@@ -888,6 +917,10 @@ wait "$snakemake_pid"
 
     def update_workflow_status(self):
         """Update workflow status from remote execution."""
+        if self._workflow_is_terminal():
+            self.logger(
+                f"[SSH] Not refreshing terminal workflow {self.uuid}")
+            return
         try:
             self.logger(
                 f"[SSH] update_workflow_status workflow={self.uuid} "
@@ -951,9 +984,11 @@ wait "$snakemake_pid"
                 entered_terminal = False
 
             # Keep the workflow pollable until completion metadata is saved.
-            path = os.path.join(self.path, "results.json")
-            results_file = metadata.ConfigFile(path)
-            results_file.write_variable("results", results)
+            if not self._update_results_if_active(results, replace=True):
+                self.logger(
+                    "[SSH] Discarding remote refresh because local workflow "
+                    "is already terminal")
+                return
             self.logger(
                 f"[SSH] propagate_job_statuses finished "
                 f"workflow_terminal={workflow_terminal}"
@@ -978,109 +1013,78 @@ wait "$snakemake_pid"
         self.update_workflow_status()
         return self.status()
 
-    def force_kill(self, strict=False):
+    def force_kill(self, strict=False):  # pylint: disable=unused-argument
         """Force-stop the remote workflow: TERM, then KILL, then pkill.
 
-        Works even when the pid file is missing or the process ignores
-        SIGTERM (zombie runs): the workspace status is marked killed
-        either way, so a stale 'running' clears and the workflow
-        becomes purgeable. Bulk cancellation uses strict mode to require a
-        reachable runner and verify PID ownership before sending signals.
+        The recorded PID must be alive and match both the workflow workspace
+        and expected command. Missing or stale identity is a safe no-op.
         """
+        if self._workflow_is_terminal():
+            return False
         self.logger(f"[SSH] Force-killing remote workflow: "
                     f"{self.remote_exec_path}")
         try:
             with self._ssh() as ssh:
-                started = self._read_remote_started(ssh)
-                wrapper_pid = started[0] if started else None
-                snakemake_pid = (started[1] if started else
-                                 self._read_remote_int(ssh, "yuki.pid"))
-                pid = wrapper_pid or snakemake_pid
-                if strict and pid:
-                    if not self._remote_pid_alive(ssh, pid):
-                        pid = None
-                    else:
-                        cwd, _err, code = ssh.exec(f"readlink -f /proc/{pid}/cwd")
-                        cwd = cwd.strip()
-                        if code or not (cwd == self.remote_exec_path or
-                                        cwd.startswith(self.remote_exec_path + "/")):
-                            raise RuntimeError(
-                                f"PID {pid} cannot be verified as belonging to this workflow")
-                if pid:
-                    target = f"-{pid}" if wrapper_pid else str(pid)
-                    ssh.exec(f"kill -TERM -- {target}")
-                    time.sleep(3)
-                    _out, _err, alive = ssh.exec(
-                        f"kill -0 {pid} 2>/dev/null")
-                    if alive == 0:
-                        ssh.exec(f"kill -KILL -- {target}")
-                    if strict and self._remote_pid_alive(ssh, pid):
-                        raise RuntimeError(f"PID {pid} is still present after force-stop")
-                # Catch orphaned snakemake children regardless of the pid.
-                if strict:
-                    # Escape regexp characters and avoid matching the SSH shell
-                    # command itself by spelling the initial slash as '[/]'.
-                    if not self.remote_exec_path.startswith("/"):
-                        raise RuntimeError("Force-stop requires an absolute remote workspace path")
-                    pattern = "[/]" + re.escape(self.remote_exec_path[1:])
-                    _out, err, code = ssh.exec(f"pkill -KILL -f {shlex.quote(pattern)}")
-                    if code not in (0, 1):  # 1 means no process matched.
-                        raise RuntimeError(f"Remote force-stop failed: {err}")
-                else:
-                    ssh.exec(f"pkill -f {shlex.quote(self.remote_exec_path)} "
-                             "|| true")
+                verified = self._verified_remote_target(ssh)
+                if verified is None:
+                    self.logger(
+                        "[SSH] No live, verified execution found; not changing state")
+                    return False
+                pid, target = verified
+                _out, err, code = ssh.exec(f"kill -TERM -- {target}")
+                if code:
+                    raise RuntimeError(f"Remote TERM failed: {err}")
+                time.sleep(3)
+                if self._remote_pid_alive(ssh, pid):
+                    _out, err, code = ssh.exec(f"kill -KILL -- {target}")
+                    if code:
+                        raise RuntimeError(f"Remote KILL failed: {err}")
+                    time.sleep(1)
+                if self._remote_pid_alive(ssh, pid):
+                    raise RuntimeError(f"PID {pid} is still present after force-stop")
+                # Catch verified workflow children which escaped the process group.
+                if not self.remote_exec_path.startswith("/"):
+                    raise RuntimeError(
+                        "Force-stop requires an absolute remote workspace path")
+                pattern = "[/]" + re.escape(self.remote_exec_path[1:])
+                _out, err, code = ssh.exec(
+                    f"pkill -KILL -f {shlex.quote(pattern)}")
+                if code not in (0, 1):  # 1 means no process matched.
+                    raise RuntimeError(f"Remote force-stop failed: {err}")
                 exit_path = f"{self.remote_exec_path}/yuki.exit"
                 exit_tmp = f"{exit_path}.tmp.kill"
                 _out, err, code = ssh.exec(
                     f"printf '137\\n' > {shlex.quote(exit_tmp)} && "
                     f"mv -f {shlex.quote(exit_tmp)} {shlex.quote(exit_path)}")
-                if strict and code and ssh.exists(self.remote_exec_path):
+                if code and ssh.exists(self.remote_exec_path):
                     raise RuntimeError(f"Could not record remote cancellation: {err}")
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            if strict:
-                self.logger(f"[SSH] Remote force-kill failed: {exc}")
-                raise
-            self.logger(f"[SSH] Remote force-kill failed "
-                        f"(marking killed anyway): {exc}")
+            self.logger(f"[SSH] Remote force-kill failed: {exc}")
+            raise
 
-        self.set_workflow_status("killed")
-        for job in self.jobs:
-            if job.is_input:
-                continue
-            if job.job_type() == "algorithm":
-                continue
-            self._set_owned_job_status(
-                job, STOPPED, "Workflow force-killed by user")
+        return self._finalize_stop("Workflow force-stopped by user")
 
     def kill(self):
         """Kill remote workflow execution."""
+        if self._workflow_is_terminal():
+            return False
         try:
             with self._ssh() as ssh:
-                started = self._read_remote_started(ssh)
-                if started:
-                    wrapper_pid = started[0]
-                    ssh.exec(f"kill -TERM -- -{wrapper_pid}")
+                verified = self._verified_remote_target(ssh)
+                if verified is None:
                     self.logger(
-                        f"[SSH] Sent SIGTERM to remote process group {wrapper_pid}")
-                else:
-                    pid = self._read_remote_int(ssh, "yuki.pid")
-                    if pid:
-                        ssh.exec(f"kill -TERM -- {pid}")
-                        self.logger(f"[SSH] Sent SIGTERM to remote PID {pid}")
-                    else:
-                        self.logger(
-                            "[SSH] No PID marker found; cannot kill remote process")
+                        "[SSH] No live, verified execution found; not changing state")
+                    return False
+                _pid, target = verified
+                _out, err, code = ssh.exec(f"kill -TERM -- {target}")
+                if code:
+                    raise RuntimeError(f"Remote TERM failed: {err}")
+                self.logger(f"[SSH] Sent SIGTERM to verified target {target}")
         except Exception as e:
             self.logger(f"[SSH] Error killing remote workflow: {e}")
+            raise
 
-        self.set_workflow_status("killed")
-        for job in self.jobs:
-            if job.is_input:
-                continue
-            if job.job_type() == "algorithm":
-                continue
-            self._set_owned_job_status(
-                job, FAILED, "SSH workflow killed by user")
+        return self._finalize_stop("SSH workflow stopped by user")
 
     def delete_workspace(self):
         """Delete the remote workflow workspace on the runner."""

@@ -9,6 +9,7 @@ The test suite covers:
 ### Flask Routes
 - `/upload` - File upload functionality (GET/POST)
 - `/execute` - Job execution endpoint
+- `/submissions/<project>/<submission>` - Durable workflow-submission status
 - `/setjobstatus/<impression>/<status>` - Job status setting
 - `/download/<filename>` - File download
 - `/export/<impression>/<filename>` - File export

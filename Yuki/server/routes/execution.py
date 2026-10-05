@@ -8,6 +8,8 @@ from flask import Blueprint, jsonify, request
 from ...kernel.vjob import VJob
 from ...kernel.container_job import ContainerJob
 from ...kernel.impression_storage import ImpressionStorage
+from ...kernel.submission_store import SubmissionStore
+from ...kernel.execution_lease import workflow_is_active
 from ...kernel.status_constants import (
     SILENCE, TUNING, FAILED, DISSONANCE,
 )
@@ -21,7 +23,7 @@ logger = getLogger("YukiLogger")
 _debug = getLogger("Yuki.execution")
 
 @bp.route('/execute', methods=['GET', 'POST'])
-def execute():
+def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Execute impressions."""
     _debug.debug("# >>> execute")
     if request.method == 'POST':
@@ -40,6 +42,7 @@ def execute():
         cache_dict = json.loads(cache_dict)
         contents = request.files["impressions"].read().decode()
         start_jobs = []
+        requested_jobs = []
         _debug.debug("cache_on_runner: %s", cache_dict)
         _debug.debug("machine: %s", machine)
         _debug.debug("contents: %s", contents.split(" "))
@@ -52,6 +55,7 @@ def execute():
             _debug.debug("job %s %s %s", job, job.job_type(), job.status())
 
             if job.job_type() == "task":
+                requested_jobs.append(job)
                 if job.status() not in (SILENCE, FAILED, DISSONANCE):
                     _debug.debug("job status is not raw or failed")
                     continue
@@ -64,19 +68,50 @@ def execute():
                 # start_jobs.append(job)
 
         if len(start_jobs) == 0:
+            workflow_ids = {job.workflow_id() for job in requested_jobs
+                            if job.workflow_id()}
+            if (requested_jobs and len(workflow_ids) == 1
+                    and all(job.workflow_id() in workflow_ids
+                            for job in requested_jobs)):
+                workflow_id = next(iter(workflow_ids))
+                if workflow_is_active(project_uuid, workflow_id):
+                    submission, _ = SubmissionStore.create(
+                        project_uuid, [job.uuid for job in requested_jobs], machine)
+                    record = submission.update(
+                        status="deduplicated", workflow_id=workflow_id,
+                        deduplicated=True)
+                    for job in requested_jobs:
+                        VJob(job.path, machine).set_submission_id(
+                            submission.submission_id)
+                    return jsonify(record)
             _debug.debug("no job to run")
             _debug.debug("# <<< execute")
             return "no job to run"
 
         contents = " ".join([job.uuid for job in start_jobs])
 
-        _debug.debug("Asynchronous execution")
-        _debug.debug("contents %s", contents)
-        task_kwargs = {"cache_on_runner": cache_dict}
-        if timeout is not None:
-            task_kwargs["timeout"] = timeout
-        task = task_exec_impression.apply_async(
-            args=[project_uuid, contents, machine], kwargs=task_kwargs)
+        submission, accepted = SubmissionStore.create(
+            project_uuid, contents.split(" "), machine)
+        try:
+            for impression in contents.split(" "):
+                job_path = config.get_job_path(project_uuid, impression)
+                VJob(job_path, machine).set_submission_id(
+                    submission.submission_id)
+
+            _debug.debug("Asynchronous execution")
+            _debug.debug("contents %s", contents)
+            task_kwargs = {"cache_on_runner": cache_dict}
+            if timeout is not None:
+                task_kwargs["timeout"] = timeout
+            task_kwargs["submission_id"] = submission.submission_id
+            task = task_exec_impression.apply_async(
+                args=[project_uuid, contents, machine], kwargs=task_kwargs)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            failed = submission.update(
+                status="failed",
+                error=f"Failed to dispatch submission: {type(exc).__name__}: {exc}")
+            return jsonify(failed), 503
+        accepted = submission.update(celery_task_id=task.id)
 
         _debug.debug("Contents is: %s", contents)
         for impression in contents.split(" "):
@@ -86,9 +121,25 @@ def execute():
             job = VJob(job_path, machine)
             job.set_runid(task.id)
         _debug.debug("### <<< execute")
-        return task.id
+        response = jsonify(accepted)
+        response.status_code = 202
+        response.headers["Location"] = (
+            f"/submissions/{project_uuid}/{submission.submission_id}")
+        return response
 
     return ""  # For GET requests
+
+
+@bp.route('/submissions/<project_uuid>/<submission_id>', methods=['GET'])
+def submission_status(project_uuid, submission_id):
+    """Return the durable outcome of an asynchronous submission."""
+    try:
+        record = SubmissionStore(project_uuid, submission_id).read()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not record:
+        return jsonify({"error": "submission not found"}), 404
+    return jsonify(record)
 
 @bp.route('/purge', methods=['GET', 'POST'])
 def purge():

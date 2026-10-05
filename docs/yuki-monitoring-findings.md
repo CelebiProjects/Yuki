@@ -4,25 +4,25 @@
 
 ## 问题摘要
 
-| 编号 | 严重度 | 设计问题 |
-| --- | --- | --- |
-| YD-01 | 高 | Web、Celery worker 与 RabbitMQ 共用单一容器，故障和重启影响面过大 |
-| YD-02 | 高 | 工作流状态同步由读请求触发，且刷新路径随工作流规模增长 |
-| YD-03 | 中 | 提交阶段串行执行 SSH 缓存检查，并重复构造相同 workflow 对象 |
-| YD-04 | 中 | 默认固定启动 10 个 Celery prefork worker，空闲资源基线偏高 |
-| YD-05 | 中 | SSH 连接池缺少 idle TTL 和可观测性 |
-| YD-06 | 中 | 终态页面继续轮询并触发后端 workflow/file-status 工作 |
-| YD-07 | 中 | 服务直接使用 Flask development server |
-| YD-08 | 高 | SSH backend 没有把任务内存声明转换成机器级并发约束 |
-| YD-09 | 中 | 失败详情缺少错误聚合和首个有效 traceback |
-| YD-10 | 高 | SSH runner 只以“缓存目录非空”判断命中，无法识别缺失必需输出的不完整缓存 |
-| YD-11 | 高 | workflow 终态转换缺少原子保护，可被多个 worker 重复执行并暴露不一致状态 |
-| YD-12 | 高 | 下游 workflow 构造同步执行上游状态刷新与终态后处理，导致 job 长时间停在 waiting |
-| YD-13 | 高 | job 缺少原子执行租约，重复提交可启动完全重叠的 workflow 并覆盖归属关系 |
-| YD-14 | 高 | impression 级 kill 实际终止共享 workflow，且使用无效终态并可覆盖后来执行的 job 状态 |
-| YD-15 | 高 | 残缺 impression 目录会被误判为已 deposited，固定 UUID 无法自动修复缺失 metadata |
-| YD-16 | 中 | ImpView 将用户日志预览全文写入服务端 DEBUG 日志，造成日志放大和内容泄露风险 |
-| YD-17 | 高 | 异步 workflow 构建失败不会反馈给提交客户端，活动 workflow 冲突会让目标 impression 静默停在 raw |
+| 编号 | 严重度 | 状态 | 设计问题 |
+| --- | --- | --- | --- |
+| YD-01 | 高 | — | Web、Celery worker 与 RabbitMQ 共用单一容器，故障和重启影响面过大 |
+| YD-02 | 高 | — | 工作流状态同步由读请求触发，且刷新路径随工作流规模增长 |
+| YD-03 | 中 | — | 提交阶段串行执行 SSH 缓存检查，并重复构造相同 workflow 对象 |
+| YD-04 | 中 | — | 默认固定启动 10 个 Celery prefork worker，空闲资源基线偏高 |
+| YD-05 | 中 | — | SSH 连接池缺少 idle TTL 和可观测性 |
+| YD-06 | 中 | — | 终态页面继续轮询并触发后端 workflow/file-status 工作 |
+| YD-07 | 中 | — | 服务直接使用 Flask development server |
+| YD-08 | 高 | — | SSH backend 没有把任务内存声明转换成机器级并发约束 |
+| YD-09 | 中 | — | 失败详情缺少错误聚合和首个有效 traceback |
+| YD-10 | 高 | — | SSH runner 只以“缓存目录非空”判断命中，无法识别缺失必需输出的不完整缓存 |
+| YD-11 | 高 | — | workflow 终态转换缺少原子保护，可被多个 worker 重复执行并暴露不一致状态 |
+| YD-12 | 高 | — | 下游 workflow 构造同步执行上游状态刷新与终态后处理，导致 job 长时间停在 waiting |
+| YD-13 | 高 | 已修复 | job 缺少原子执行租约，重复提交可启动完全重叠的 workflow 并覆盖归属关系 |
+| YD-14 | 高 | 已修复 | impression 级 kill 实际终止共享 workflow，且使用无效终态并可覆盖后来执行的 job 状态 |
+| YD-15 | 高 | — | 残缺 impression 目录会被误判为已 deposited，固定 UUID 无法自动修复缺失 metadata |
+| YD-16 | 中 | — | ImpView 将用户日志预览全文写入服务端 DEBUG 日志，造成日志放大和内容泄露风险 |
+| YD-17 | 高 | 已修复 | 异步 workflow 构建失败不会反馈给提交客户端，活动 workflow 冲突会让目标 impression 静默停在 raw |
 
 ## YD-01：多种服务共用单一容器
 
@@ -132,6 +132,8 @@ workflow `fcf5ca3d753242d2a930760efed044e5` 于 09:50:40 开始构造，包含 1
 
 ## YD-13：重复提交可并发执行同一批 job
 
+状态：已修复（2026-10-06）。
+
 Yuki 没有为 impression/job 建立跨请求、跨 worker 的原子执行租约，也没有在 workflow 提交前检查其可执行 job 集合是否与已有活动 workflow 重叠。`job.workflow_id` 是可被后续提交直接覆盖的单值字段，因此重复提交不仅会重复计算，还会令较早 workflow 脱离 job 页面所能追踪的归属关系。
 
 监控中，workflow `fcf5ca3d753242d2a930760efed044e5` 因 YD-12 阻塞后，又出现 workflow `e7970100a51c447f93aa38b18b7fa7c6`。两者均包含 145 个节点和 90 个可执行 task，90/90 的可执行 job 完全相同，目标 runner 均为 `pkufarm212`。前者于 10:17:16、后者于 10:18:09 分别成功启动远端 Snakemake。共享 job（例如 `8c8f208bed612896b6035e394775d876`）的 `workflow_id` 已指向后启动的 `e7970100...`，使先启动的 `fcf5ca3d...` 成为仍在消耗远端资源、但无法通过这些 job 的当前归属字段发现的孤儿执行。
@@ -141,6 +143,8 @@ Yuki 没有为 impression/job 建立跨请求、跨 worker 的原子执行租约
 建议：提交入口用数据库唯一约束或分布式锁按 `(project, impression)` 原子获取执行租约；在创建 workflow 前拒绝或合并与活动 workflow 重叠的 job 集合；`workflow_id` 使用 compare-and-set 并保留执行历史，而不是无条件覆盖；远端启动前再次验证租约所有权；重复请求返回已有 workflow ID；终止、完成和超时路径必须可靠释放租约，并提供孤儿 workflow 检测与回收。
 
 ## YD-14：impression 级 kill 与共享 workflow 状态不一致
+
+状态：已修复（2026-10-06）。
 
 `GET /kill/<project>/<impression>` 通过 `ImpressionStorage.kill()` 找到该 impression 记录的 workflow，但实际调用的是整个 `workflow.kill()`；一个 workflow 中任意 impression 的 kill 操作都会终止整份 workflow，而接口名称和粒度没有体现这一影响范围。多个 impression 指向同一 workflow 时，服务端也不按 workflow UUID 去重或判断是否已经终态。
 
@@ -173,6 +177,8 @@ workflow `7e272f4ac03e46429dae594e578c0427` 展示了更严重的状态反转。
 建议：删除对完整 `file_infos_dict` 的日志输出；调试时只记录 impression、文件数量、文件名、类型和预览长度，不记录 `content` 字段。对用户日志、命令输出和配置内容采用默认脱敏策略，并为结构化日志设置字段白名单和单条大小上限。
 
 ## YD-17：异步提交确认与 workflow 构建结果脱节
+
+状态：已修复（2026-10-06）。
 
 `POST /execute` 只负责把 `task_exec_impression` 投递给 Celery，后台尚未完成 workflow 构建时就返回 HTTP 200。Celebi 客户端因而立即记录 `workflow_submit_completed` 并向用户报告已提交，但没有 submission ID 可供查询，也不会等待或读取 Celery 任务的最终结果。服务端后续构建失败时，错误既不返回客户端，也不写入目标 impression 的可见状态。
 

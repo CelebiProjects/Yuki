@@ -13,8 +13,9 @@ from ...kernel.locked_metadata import read_variable as read_locked_variable
 from ...kernel.vworkflow import VWorkflow
 from ...kernel.status_constants import (
     translate_to_musical, translate_to_legacy, is_valid_status,
-    is_terminal_status
+    is_terminal_status, PRELUDE, DISSONANCE
 )
+from ...kernel.submission_store import SubmissionStore
 from ..config import config
 from ..tasks import task_update_workflow_status
 from ..workflow_status_refresh import enqueue_once
@@ -99,6 +100,29 @@ def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
 
         job = VJob(job_path, machine_id)
         if job.workflow_id() == "":
+            submission_id = job.submission_id()
+            if submission_id:
+                submission = SubmissionStore(
+                    project_uuid, submission_id).read()
+                submission_status = submission.get("status")
+                if submission_status in ("accepted", "building"):
+                    return jsonify({
+                        "status": PRELUDE,
+                        "status_legacy": translate_to_legacy(PRELUDE),
+                        "status_musical": PRELUDE,
+                        "detailed_status": (
+                            f"Submission {submission_id} is {submission_status}"),
+                        "submission": submission,
+                    })
+                if submission_status in ("blocked", "failed"):
+                    return jsonify({
+                        "status": DISSONANCE,
+                        "status_legacy": translate_to_legacy(DISSONANCE),
+                        "status_musical": DISSONANCE,
+                        "detailed_status": submission.get("error", "") or (
+                            f"Submission {submission_id} {submission_status}"),
+                        "submission": submission,
+                    })
             _debug.debug(
                 f"[status] skipping runner={machine} machine_id={machine_id} "
                 f"because workflow_id is empty"

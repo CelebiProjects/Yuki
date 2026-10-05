@@ -9,10 +9,12 @@ from Yuki.server.routes import execution
 from Yuki.server import tasks
 from Yuki.kernel.ssh_workflow import SshWorkflow, _SshConnection
 from Yuki.kernel.status_constants import SILENCE
+from Yuki.kernel.status_constants import PRELUDE
 
 
 @pytest.mark.parametrize('timeout', [None, '3000'])
-def test_execute_dispatches_timeout(timeout):
+def test_execute_dispatches_timeout(timeout, tmp_path, monkeypatch):
+    monkeypatch.setenv('YUKIDIR', str(tmp_path))
     app = Flask(__name__)
     app.register_blueprint(execution.bp)
     data = {'machine': 'runner', 'project_uuid': 'proj', 'cache_on_runner': '{}',
@@ -26,12 +28,39 @@ def test_execute_dispatches_timeout(timeout):
         job.return_value.uuid = 'imp'
         task.apply_async.return_value.id = 'task-id'
         response = app.test_client().post('/execute', data=data)
-    assert response.status_code == 200
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload['status'] == 'accepted'
+    assert response.headers['Location'].endswith(payload['submission_id'])
     task_kwargs = {'cache_on_runner': {'imp': False}}
     if timeout:
         task_kwargs['timeout'] = 3000
+    task_kwargs['submission_id'] = payload['submission_id']
     task.apply_async.assert_called_once_with(
         args=['proj', 'imp', 'runner'], kwargs=task_kwargs)
+
+
+def test_execute_returns_existing_active_workflow(tmp_path, monkeypatch):
+    """A known duplicate is resolved synchronously instead of silently skipped."""
+    monkeypatch.setenv('YUKIDIR', str(tmp_path))
+    app = Flask(__name__)
+    app.register_blueprint(execution.bp)
+    data = {'machine': 'runner', 'project_uuid': 'proj', 'cache_on_runner': '{}',
+            'impressions': (io.BytesIO(b'imp'), 'impressions')}
+    with patch.object(execution, 'VJob') as job, \
+         patch.object(execution, 'workflow_is_active', return_value=True), \
+         patch.object(execution, 'task_exec_impression') as task:
+        job.return_value.job_type.return_value = 'task'
+        job.return_value.status.return_value = PRELUDE
+        job.return_value.uuid = 'imp'
+        job.return_value.path = '/jobs/proj/imp'
+        job.return_value.workflow_id.return_value = 'wf-existing'
+        response = app.test_client().post('/execute', data=data)
+
+    assert response.status_code == 200
+    assert response.get_json()['status'] == 'deduplicated'
+    assert response.get_json()['workflow_id'] == 'wf-existing'
+    task.apply_async.assert_not_called()
 
 
 @pytest.mark.parametrize('timeout', ['0', '-1', 'nan', 'inf', '1.2', ''])

@@ -110,6 +110,14 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
         """Get the run ID for this job."""
         return self.run_config_file.read_variable("runid", "")
 
+    def set_submission_id(self, submission_id):
+        """Associate the latest submission attempt with this runner."""
+        self.run_config_file.write_variable("submission_id", submission_id)
+
+    def submission_id(self):
+        """Return the latest submission attempt for this runner."""
+        return self.run_config_file.read_variable("submission_id", "")
+
     def set_workflow_id(self, workflow_uuid, lease_token=None):
         """Set the current workflow index and retain its assignment history.
 

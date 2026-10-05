@@ -81,6 +81,57 @@ def test_partial_overlap_returns_conflict_without_backend_retry():
     workflow.set_workflow_status.assert_called_once_with("failed")
 
 
+def test_partial_overlap_is_persisted_as_blocked(tmp_path, monkeypatch):
+    """A rejected DAG remains visible after the Celery result disappears."""
+    from Yuki.server import tasks
+    from Yuki.kernel.execution_lease import WorkflowLeaseConflict
+    from Yuki.kernel.submission_store import SubmissionStore
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    store, _ = SubmissionStore.create(
+        "proj", ["imp1", "imp2"], "runner-1", submission_id="sub-1")
+    workflow = mock.Mock(uuid="wf-new")
+    workflow.run.side_effect = WorkflowLeaseConflict(
+        {"imp1": {"workflow_id": "wf-existing"}})
+
+    with mock.patch.object(tasks, "metadata") as meta, \
+         mock.patch.object(tasks, "VJob"), \
+         mock.patch.object(tasks, "VWorkflow") as factory, \
+         mock.patch.object(tasks, "_validate_remote_data_binding", return_value=[]):
+        meta.ConfigFile.return_value.read_variable.return_value = {}
+        factory.create.return_value = workflow
+        tasks.task_exec_impression(
+            "proj", "imp1 imp2", "runner-1", submission_id="sub-1")
+
+    record = store.read()
+    assert record["status"] == "blocked"
+    assert record["workflow_id"] == ""
+    assert record["candidate_workflow_id"] == "wf-new"
+    assert record["retryable"] is True
+    assert record["conflicts"] == {"imp1": "wf-existing"}
+
+
+def test_unexpected_build_failure_is_persisted(tmp_path, monkeypatch):
+    """Construction exceptions cannot leave an accepted submission silent."""
+    from Yuki.server import tasks
+    from Yuki.kernel.submission_store import SubmissionStore
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    store, _ = SubmissionStore.create(
+        "proj", ["imp1"], "runner-1", submission_id="sub-1")
+
+    with mock.patch.object(tasks, "metadata") as meta, \
+         mock.patch.object(tasks, "VJob"), \
+         mock.patch.object(tasks, "VWorkflow") as factory:
+        meta.ConfigFile.return_value.read_variable.return_value = {}
+        factory.create.side_effect = RuntimeError("broken graph")
+        with pytest.raises(RuntimeError, match="broken graph"):
+            tasks.task_exec_impression(
+                "proj", "imp1", "runner-1", submission_id="sub-1")
+
+    record = store.read()
+    assert record["status"] == "failed"
+    assert record["error"] == "RuntimeError: broken graph"
+
+
 def test_task_transfer_results_calls_run_transfer():
     """task_transfer_results delegates to result_transfer.run_transfer."""
     from Yuki.server.tasks import task_transfer_results

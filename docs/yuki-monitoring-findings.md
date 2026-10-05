@@ -22,6 +22,7 @@
 | YD-14 | 高 | impression 级 kill 实际终止共享 workflow，且使用无效终态并可覆盖后来执行的 job 状态 |
 | YD-15 | 高 | 残缺 impression 目录会被误判为已 deposited，固定 UUID 无法自动修复缺失 metadata |
 | YD-16 | 中 | ImpView 将用户日志预览全文写入服务端 DEBUG 日志，造成日志放大和内容泄露风险 |
+| YD-17 | 高 | 异步 workflow 构建失败不会反馈给提交客户端，活动 workflow 冲突会让目标 impression 静默停在 raw |
 
 ## YD-01：多种服务共用单一容器
 
@@ -170,3 +171,19 @@ workflow `7e272f4ac03e46429dae594e578c0427` 展示了更严重的状态反转。
 访问 `/imp-view/<project>/<impression>` 时，`generate_text_preview()` 会读取 `.txt`、`.log` 和 `.stdout` 文件；小文件保留全文，大文件保留首尾各 1000 个字符。随后 `impview()` 对包含这些预览内容的整个 `file_infos_dict` 调用 `_debug.debug(file_infos_dict)`。监控中，一次查看结果就把 `celebi_user_step0.log` 的完整内容连同分析选择、输入路径和计数结果序列化进 Docker 日志。批量查看多个 impression 时，该行为重复发生，既显著放大日志，也让原本只属于任务输出的内容进入集中服务日志及其下游采集系统。
 
 建议：删除对完整 `file_infos_dict` 的日志输出；调试时只记录 impression、文件数量、文件名、类型和预览长度，不记录 `content` 字段。对用户日志、命令输出和配置内容采用默认脱敏策略，并为结构化日志设置字段白名单和单条大小上限。
+
+## YD-17：异步提交确认与 workflow 构建结果脱节
+
+`POST /execute` 只负责把 `task_exec_impression` 投递给 Celery，后台尚未完成 workflow 构建时就返回 HTTP 200。Celebi 客户端因而立即记录 `workflow_submit_completed` 并向用户报告已提交，但没有 submission ID 可供查询，也不会等待或读取 Celery 任务的最终结果。服务端后续构建失败时，错误既不返回客户端，也不写入目标 impression 的可见状态。
+
+一次包含共享上游的双分支提交直接复现了该问题。Kmpip 末端 impression `1d36c584ceb37a37fe0c9d3d6cb77dbd` 先创建 workflow `29ed4729ef174711bd01c8a3ae4ad785`；约一秒后提交 Kppim impression `8e00b78a6b19a2debaa35fa4af45a8fe`。Celebi 日志依次记录 `workflow_submit_started`、`POST /execute status=200` 和 `workflow_submit_completed`，总耗时 708 ms。Yuki 也成功接收异步任务 `1d0656e8-7c6a-473d-b694-2e5d0902139b`，但该任务在 0.791 秒后返回：
+
+```text
+Jobs already belong to active workflows: ... (29ed4729ef174711bd01c8a3ae4ad785)
+```
+
+冲突项是 Kmpip 与 Kppim 共用的六个 Kpi 上游任务，即 run1/run2 的 `pre`、`tmva` 和 `select`。后台返回值同时包含 `deduplicated: False`、一个未绑定的候选 workflow ID，以及六个 impression 到活动 workflow 的映射；然而 HTTP 请求早已成功结束，客户端没有收到这些字段。Kppim 最终既没有 workflow ID，也没有失败详情，只显示 `[silence][raw] Workflow not defined`。`raw` 在这里混淆了“从未提交”和“已接受提交但后台拒绝”两种完全不同的状态。
+
+活动 workflow 冲突保护避免了 YD-13 所述的重复执行，但目前只会整体拒绝第二个 DAG。它不能把已在运行的共享节点作为外部依赖复用，不能让新分支等待现有 workflow 完成，也不能将仅有独立下游的 Kppim 分支挂接到已有执行。要求用户预先知道所有末端并通过 `submit-objects` 合并提交只能作为操作规避，不能替代明确的服务端契约。
+
+建议：`POST /execute` 返回 HTTP 202 和持久化 submission ID，明确区分 accepted 与 scheduled；提供 submission 状态接口，并让 Celebi CLI 等待到 workflow 已创建、去重、阻塞或拒绝后再报告结果。后台拒绝必须写入目标 impression 的 `submission_failed` 或 `blocked` 状态，保存冲突 workflow、共享 impression 和可重试条件，禁止静默保留为 `raw`。对完全重复的提交应返回已有 workflow ID；对部分重叠 DAG，应支持复用已完成节点并等待活动节点，或至少在同步预检阶段返回结构化冲突及联合提交建议。workflow ID 和活动租约的创建、冲突检测及 submission 状态更新需要处于同一原子事务，避免再次出现“请求成功、后台拒绝、用户不可见”的裂缝。

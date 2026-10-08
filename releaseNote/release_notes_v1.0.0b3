@@ -69,3 +69,24 @@
   - `/file-status` no longer lists the runner: it reads `<machine>/<kind>.filelist.json` (workflow-id keyed, so a re-run starts fresh) and returns immediately, with a "listing from <stamp>" note.
   - The listings are refreshed by the status-update path (Celery): pre-execution statuses write empty listings locally without contacting the runner, in-movement and terminal statuses list live (stageout and logs). A failed refresh keeps the previous files and records the error, reported by `/file-status` as a "refresh failed" warning.
   - Writes are atomic (tmp + rename), and the refresh runs before the terminal distribution recording so the final distribution sees the final file set. This supersedes the finished-job-only caching of the previous entry.
++ Add the `yuki-native-runner` host agent for automatic native workflow execution.
+  - `start`, `status`, `logs`, and `stop` manage a background agent over the shared Yuki directory; foreground mode supports service managers.
+  - Native workflows are claimed under advisory locks and run through Snakemake/Conda on the host without exposing a Docker API port.
+  - On restart, an interrupted agent waits for a still-live Snakemake process and marks an orphaned unfinished workflow failed instead of executing it a second time.
++ Harden workflow status monitoring.
+  - Coordinate refresh dispatch and execution across web and Celery processes so repeated status reads cannot queue or run overlapping refreshes for the same workflow.
+  - Use locked metadata reads for shared status files, preserve terminal job states, and avoid polling terminal workflows.
+  - Propagate native Snakemake results to individual jobs and render impressions without an assigned runner as an explicit empty state.
++ Prevent duplicate workflow execution (YD-13).
+  - Atomically claim the complete execution-job set with project-wide leases before publishing workflow ownership or mutating shared job state.
+  - Identical active submissions resolve to the existing workflow; partially overlapping DAGs are rejected with structured conflict details.
+  - Validate ownership before backend launch and status writes so a stale or restarted worker cannot overwrite a newer execution.
++ Make workflow cancellation terminal-safe (YD-14).
+  - Impression-level cancellation first previews every referenced workflow and requires an explicit workflow ID before stopping it.
+  - Terminal workflows and jobs are immutable during cancellation, preserving completed work and preventing late kill/refresh tasks from reversing final state.
+  - SSH cancellation verifies the saved PID, working directory, and command line before sending signals; unverifiable or already-finished processes are left unchanged.
++ Persist asynchronous workflow submission outcomes (YD-17).
+  - `POST /execute` returns HTTP 202 with a durable submission ID; `GET /submissions/<project>/<submission>` exposes `accepted`, `building`, `scheduled`, `deduplicated`, `blocked`, and `failed` states.
+  - Celery dispatch errors, construction failures, runner-binding failures, and lease conflicts are retained with workflow/conflict details instead of leaving the target impression silently `raw`.
+  - Impression status reports accepted and rejected submissions even before a workflow ID exists; terminal submission records cannot be rewritten by late workers.
++ Add `docs/yuki-monitoring-findings.md` and mark YD-13, YD-14, and YD-17 as fixed.

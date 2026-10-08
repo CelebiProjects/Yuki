@@ -4,20 +4,19 @@ set -eu
 RABBITMQ_PORT="${RABBITMQ_PORT:-5672}"
 RABBITMQ_WAIT_TIMEOUT="${RABBITMQ_WAIT_TIMEOUT:-60}"
 RABBITMQ_DATA_DIR="${RABBITMQ_DATA_DIR:-${YUKIDIR:-$HOME/.Yuki}/RabbitMQ}"
-CONDA_ENV_PREFIX="${CONDA_PREFIX:-}"
+CONDA_ENV_PREFIX="${RABBITMQ_CONDA_PREFIX:-${YUKIDIR:-$HOME/.Yuki}/Conda/rabbitmq}"
 DRY_RUN=0
 
 usage() {
     cat <<'EOF'
 Usage: scripts/setup-rabbitmq.sh [--prefix CONDA_PREFIX] [--dry-run]
 
-Install rabbitmq-server from conda-forge into a Conda environment, start it in
-detached mode, and wait until the AMQP port is ready. The active environment is
-used by default; when no environment is active, the Conda base environment is
-used.
+Create a small dedicated Conda environment containing rabbitmq-server, start it
+in detached mode, and wait until the AMQP port is ready. The solver uses only
+conda-forge's smaller current repodata to reduce peak memory usage.
 
 Options:
-  --prefix PATH  Install into and run from this existing Conda environment.
+  --prefix PATH  Create or reuse the RabbitMQ Conda environment at this path.
   --dry-run      Print installation and startup commands without running them.
   -h, --help     Show this help message.
 
@@ -25,6 +24,7 @@ Environment variables:
   RABBITMQ_PORT          AMQP port to probe (default: 5672)
   RABBITMQ_WAIT_TIMEOUT  Readiness timeout in seconds (default: 60)
   RABBITMQ_DATA_DIR      State/log directory (default: ~/.Yuki/RabbitMQ)
+  RABBITMQ_CONDA_PREFIX  Conda environment (default: ~/.Yuki/Conda/rabbitmq)
   YUKIDIR                Changes the default state directory parent
 EOF
 }
@@ -74,15 +74,7 @@ if ! command -v conda >/dev/null 2>&1; then
     exit 1
 fi
 
-if [ -z "$CONDA_ENV_PREFIX" ]; then
-    CONDA_ENV_PREFIX="$(conda info --base)"
-fi
 CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX%/}"
-
-if [ ! -d "$CONDA_ENV_PREFIX/conda-meta" ]; then
-    log "Error: not an existing Conda environment: $CONDA_ENV_PREFIX"
-    exit 1
-fi
 
 find_rabbitmq_server() {
     for candidate in \
@@ -100,9 +92,16 @@ find_rabbitmq_server() {
 if RABBITMQ_SERVER="$(find_rabbitmq_server)"; then
     log "RabbitMQ is already installed in $CONDA_ENV_PREFIX."
 else
-    log "Installing rabbitmq-server from conda-forge into $CONDA_ENV_PREFIX..."
-    run conda install --yes --prefix "$CONDA_ENV_PREFIX" \
-        --channel conda-forge rabbitmq-server
+    if [ -d "$CONDA_ENV_PREFIX/conda-meta" ]; then
+        conda_action="install"
+        log "Installing rabbitmq-server into $CONDA_ENV_PREFIX..."
+    else
+        conda_action="create"
+        log "Creating a dedicated RabbitMQ environment at $CONDA_ENV_PREFIX..."
+    fi
+    run conda "$conda_action" --yes --prefix "$CONDA_ENV_PREFIX" \
+        --solver libmamba --override-channels --channel conda-forge \
+        --repodata-fn current_repodata.json rabbitmq-server
     if [ "$DRY_RUN" -eq 1 ]; then
         RABBITMQ_SERVER="$CONDA_ENV_PREFIX/sbin/rabbitmq-server"
     elif ! RABBITMQ_SERVER="$(find_rabbitmq_server)"; then
@@ -111,9 +110,10 @@ else
     fi
 fi
 
-PYTHON_BIN="$CONDA_ENV_PREFIX/bin/python"
+CONDA_BASE="$(conda info --base)"
+PYTHON_BIN="$CONDA_BASE/bin/python"
 if [ ! -x "$PYTHON_BIN" ]; then
-    log "Error: Python was not found in the Conda environment: $PYTHON_BIN"
+    log "Error: Python was not found in the Conda base environment: $PYTHON_BIN"
     exit 1
 fi
 

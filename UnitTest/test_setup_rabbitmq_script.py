@@ -28,3 +28,13 @@ def test_setup_rabbitmq_script_help_is_side_effect_free():
     assert "conda-forge" in result.stdout
     assert "--prefix" in result.stdout
     assert "--dry-run" in result.stdout
+    assert "current repodata" in result.stdout
+
+
+def test_setup_rabbitmq_script_uses_reduced_memory_conda_solve():
+    source = SCRIPT.read_text()
+
+    assert "--solver libmamba" in source
+    assert "--override-channels" in source
+    assert "--repodata-fn current_repodata.json" in source
+    assert "/Conda/rabbitmq" in source

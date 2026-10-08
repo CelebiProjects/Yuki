@@ -22,6 +22,19 @@ pip install dist/yuki-*.whl
 
 Requires a RabbitMQ broker at `amqp://localhost` (or run everything in Docker — see below).
 
+Install `rabbitmq-server` from conda-forge into the active Conda environment
+and start a local broker:
+
+```bash
+scripts/setup-rabbitmq.sh
+```
+
+The script is idempotent and waits for port 5672 before returning. If no Conda
+environment is active, it uses the base environment; pass `--prefix PATH` to
+select another existing environment. Use `--dry-run` to preview installation
+and startup commands. The readiness timeout can be changed with
+`RABBITMQ_WAIT_TIMEOUT`.
+
 ```bash
 yuki server start    # Flask on port 3315 + Celery worker
 yuki server status

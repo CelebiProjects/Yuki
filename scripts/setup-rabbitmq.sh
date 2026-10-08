@@ -6,10 +6,11 @@ RABBITMQ_WAIT_TIMEOUT="${RABBITMQ_WAIT_TIMEOUT:-60}"
 RABBITMQ_DATA_DIR="${RABBITMQ_DATA_DIR:-${YUKIDIR:-$HOME/.Yuki}/RabbitMQ}"
 CONDA_ENV_PREFIX="${RABBITMQ_CONDA_PREFIX:-${YUKIDIR:-$HOME/.Yuki}/Conda/rabbitmq}"
 DRY_RUN=0
+RESTART=0
 
 usage() {
     cat <<'EOF'
-Usage: scripts/setup-rabbitmq.sh [--prefix CONDA_PREFIX] [--dry-run]
+Usage: scripts/setup-rabbitmq.sh [--prefix CONDA_PREFIX] [--restart] [--dry-run]
 
 Create a small dedicated Conda environment containing rabbitmq-server, start it
 in detached mode, and wait until the AMQP port is ready. The solver uses only
@@ -17,6 +18,7 @@ conda-forge's smaller current repodata to reduce peak memory usage.
 
 Options:
   --prefix PATH  Create or reuse the RabbitMQ Conda environment at this path.
+  --restart      Restart a running broker so configuration changes take effect.
   --dry-run      Print installation and startup commands without running them.
   -h, --help     Show this help message.
 
@@ -56,6 +58,9 @@ while [ "$#" -gt 0 ]; do
         --dry-run)
             DRY_RUN=1
             ;;
+        --restart)
+            RESTART=1
+            ;;
         -h|--help)
             usage
             exit 0
@@ -81,6 +86,20 @@ find_rabbitmq_server() {
         "$CONDA_ENV_PREFIX/lib/rabbitmq/sbin/rabbitmq-server" \
         "$CONDA_ENV_PREFIX/sbin/rabbitmq-server" \
         "$CONDA_ENV_PREFIX/bin/rabbitmq-server"
+    do
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+find_rabbitmqctl() {
+    for candidate in \
+        "$CONDA_ENV_PREFIX/lib/rabbitmq/sbin/rabbitmqctl" \
+        "$CONDA_ENV_PREFIX/sbin/rabbitmqctl" \
+        "$CONDA_ENV_PREFIX/bin/rabbitmqctl"
     do
         if [ -x "$candidate" ]; then
             printf '%s\n' "$candidate"
@@ -118,6 +137,34 @@ if [ ! -x "$PYTHON_BIN" ]; then
     exit 1
 fi
 
+RABBITMQ_CONFIG_FILE="${RABBITMQ_CONFIG_FILE:-$RABBITMQ_DATA_DIR/rabbitmq.conf}"
+export RABBITMQ_ALLOW_INPUT_NON_SENSITIVE_DATA=1
+export RABBITMQ_CONFIG_FILE
+export RABBITMQ_MNESIA_BASE="$RABBITMQ_DATA_DIR/mnesia"
+export RABBITMQ_LOG_BASE="$RABBITMQ_DATA_DIR/log"
+export RABBITMQ_PID_FILE="$RABBITMQ_DATA_DIR/rabbitmq.pid"
+export PATH="$CONDA_ENV_PREFIX/bin:$CONDA_ENV_PREFIX/lib/rabbitmq/sbin:$PATH"
+
+run mkdir -p "$RABBITMQ_MNESIA_BASE" "$RABBITMQ_LOG_BASE" \
+    "$(dirname "$RABBITMQ_CONFIG_FILE")"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    log "+ write compatibility setting to $RABBITMQ_CONFIG_FILE"
+else
+    "$PYTHON_BIN" - "$RABBITMQ_CONFIG_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+key = "deprecated_features.permit.transient_nonexcl_queues"
+setting = f"{key} = true"
+lines = path.read_text().splitlines() if path.exists() else []
+lines = [line for line in lines if not line.strip().startswith(f"{key} =")]
+lines.append(setting)
+path.write_text("\n".join(lines) + "\n")
+PY
+fi
+
 port_is_open() {
     "$PYTHON_BIN" - "$RABBITMQ_PORT" <<'PY'
 import socket
@@ -132,17 +179,19 @@ PY
 }
 
 if [ "$DRY_RUN" -eq 0 ] && port_is_open; then
-    log "RabbitMQ is already reachable at amqp://localhost:${RABBITMQ_PORT}."
-    exit 0
+    if [ "$RESTART" -eq 0 ]; then
+        log "RabbitMQ is already reachable at amqp://localhost:${RABBITMQ_PORT}."
+        log "Run again with --restart to apply the compatibility configuration."
+        exit 0
+    fi
+    if ! RABBITMQCTL="$(find_rabbitmqctl)"; then
+        log "Error: rabbitmqctl was not found in $CONDA_ENV_PREFIX."
+        exit 1
+    fi
+    log "Stopping the running RabbitMQ node..."
+    run "$RABBITMQCTL" shutdown
 fi
 
-export RABBITMQ_ALLOW_INPUT_NON_SENSITIVE_DATA=1
-export RABBITMQ_MNESIA_BASE="$RABBITMQ_DATA_DIR/mnesia"
-export RABBITMQ_LOG_BASE="$RABBITMQ_DATA_DIR/log"
-export RABBITMQ_PID_FILE="$RABBITMQ_DATA_DIR/rabbitmq.pid"
-export PATH="$CONDA_ENV_PREFIX/bin:$CONDA_ENV_PREFIX/lib/rabbitmq/sbin:$PATH"
-
-run mkdir -p "$RABBITMQ_MNESIA_BASE" "$RABBITMQ_LOG_BASE"
 log "Starting RabbitMQ from Conda in detached mode..."
 run "$RABBITMQ_SERVER" -detached
 

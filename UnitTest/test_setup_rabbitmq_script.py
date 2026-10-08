@@ -27,6 +27,7 @@ def test_setup_rabbitmq_script_help_is_side_effect_free():
     assert "Usage: scripts/setup-rabbitmq.sh" in result.stdout
     assert "conda-forge" in result.stdout
     assert "--prefix" in result.stdout
+    assert "--restart" in result.stdout
     assert "--dry-run" in result.stdout
     assert "current repodata" in result.stdout
 
@@ -45,3 +46,11 @@ def test_setup_rabbitmq_script_finds_conda_forge_binary_layout():
 
     assert 'lib/rabbitmq/sbin/rabbitmq-server' in source
     assert 'lib/rabbitmq/sbin:$PATH' in source
+
+
+def test_setup_rabbitmq_script_enables_celery_compatibility_mode():
+    source = SCRIPT.read_text()
+
+    assert "deprecated_features.permit.transient_nonexcl_queues" in source
+    assert "RABBITMQ_CONFIG_FILE" in source
+    assert 'lib/rabbitmq/sbin/rabbitmqctl' in source

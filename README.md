@@ -36,6 +36,15 @@ conda-forge's `current_repodata.json`. Use `--dry-run` to preview installation
 and startup commands. The readiness timeout can be changed with
 `RABBITMQ_WAIT_TIMEOUT`.
 
+RabbitMQ 4.3 disables transient non-exclusive queues by default, while the
+current Celery/Kombu control mailbox still declares them. The script enables
+that deprecated compatibility feature in its private `rabbitmq.conf`. If the
+broker was already running, restart it once to apply the setting:
+
+```bash
+scripts/setup-rabbitmq.sh --restart
+```
+
 ```bash
 yuki server start    # Flask on port 3315 + Celery worker
 yuki server status

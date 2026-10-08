@@ -78,6 +78,7 @@ CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX%/}"
 
 find_rabbitmq_server() {
     for candidate in \
+        "$CONDA_ENV_PREFIX/lib/rabbitmq/sbin/rabbitmq-server" \
         "$CONDA_ENV_PREFIX/sbin/rabbitmq-server" \
         "$CONDA_ENV_PREFIX/bin/rabbitmq-server"
     do
@@ -103,7 +104,7 @@ else
         --solver libmamba --override-channels --channel conda-forge \
         --repodata-fn current_repodata.json rabbitmq-server
     if [ "$DRY_RUN" -eq 1 ]; then
-        RABBITMQ_SERVER="$CONDA_ENV_PREFIX/sbin/rabbitmq-server"
+        RABBITMQ_SERVER="$CONDA_ENV_PREFIX/lib/rabbitmq/sbin/rabbitmq-server"
     elif ! RABBITMQ_SERVER="$(find_rabbitmq_server)"; then
         log "Error: Conda installation completed, but rabbitmq-server was not found."
         exit 1
@@ -139,6 +140,7 @@ export RABBITMQ_ALLOW_INPUT_NON_SENSITIVE_DATA=1
 export RABBITMQ_MNESIA_BASE="$RABBITMQ_DATA_DIR/mnesia"
 export RABBITMQ_LOG_BASE="$RABBITMQ_DATA_DIR/log"
 export RABBITMQ_PID_FILE="$RABBITMQ_DATA_DIR/rabbitmq.pid"
+export PATH="$CONDA_ENV_PREFIX/bin:$CONDA_ENV_PREFIX/lib/rabbitmq/sbin:$PATH"
 
 run mkdir -p "$RABBITMQ_MNESIA_BASE" "$RABBITMQ_LOG_BASE"
 log "Starting RabbitMQ from Conda in detached mode..."

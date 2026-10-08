@@ -38,3 +38,10 @@ def test_setup_rabbitmq_script_uses_reduced_memory_conda_solve():
     assert "--override-channels" in source
     assert "--repodata-fn current_repodata.json" in source
     assert "/Conda/rabbitmq" in source
+
+
+def test_setup_rabbitmq_script_finds_conda_forge_binary_layout():
+    source = SCRIPT.read_text()
+
+    assert 'lib/rabbitmq/sbin/rabbitmq-server' in source
+    assert 'lib/rabbitmq/sbin:$PATH' in source

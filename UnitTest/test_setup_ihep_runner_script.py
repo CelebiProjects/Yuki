@@ -40,6 +40,9 @@ def test_setup_ihep_runner_is_independent_of_afs_at_runtime():
     assert "XDG_CONFIG_HOME" in source
     assert "CONDA_PKGS_DIRS" in source
     assert "CONDA_ENVS_PATH" in source
+    assert 'SCRIPT_ENV="$IHEP_ROOT/conda-envs/script"' in source
+    assert '"$RUNNER_CONDA" "$script_action"' in source
+    assert '"$RUNNER_CONDA" run --name script python --version' in source
     assert "snakemake-executor-plugin-cluster-generic" in source
     assert '"$RUNNER_ENV/bin/python" -m pip install' in source
     assert "remote_workdir=$WORKFLOW_ROOT" in source

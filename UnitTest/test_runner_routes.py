@@ -529,8 +529,8 @@ def test_runner_ssh_config_mangles_unmapped_environment(monkeypatch):
     assert r.get_json()["conda_env"] == "reanahub_env-root6_6.18.04"
 
 
-def test_runner_ssh_config_skips_environment_for_script_tasks(monkeypatch):
-    """script/rawdata environments yield no conda_env."""
+def test_runner_ssh_config_resolves_script_as_named_environment(monkeypatch):
+    """Script tasks require the runner's real named Conda environment."""
     _temp_config(monkeypatch)
     c = _app(runner_routes.bp).test_client()
     c.post("/register-runner", data={
@@ -540,7 +540,7 @@ def test_runner_ssh_config_skips_environment_for_script_tasks(monkeypatch):
     r = c.get("/runner-ssh-config/cluster",
               query_string={"environment": "script"})
     assert r.status_code == 200
-    assert "conda_env" not in r.get_json()
+    assert r.get_json()["conda_env"] == "script"
 
 
 def test_runner_ssh_config_without_environment_param(monkeypatch):

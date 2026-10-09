@@ -190,10 +190,10 @@ class NativeWorkflow(VWorkflow):
     def _write_environment_directive(self, snake_file, environment, indent=1):
         """Write a conda environment directive for local native execution.
 
-        Skips writing the directive for pure-copy procedures (setup, finalize,
-        rawdata, datalist, script) that do not need a conda environment.
+        Skips writing the directive for data-only procedures that do not need
+        a conda environment. ``script`` is a real named environment.
         """
-        if environment in ("rawdata", "datalist", "lhcb_ap_datalist", "script"):
+        if environment in ("rawdata", "datalist", "lhcb_ap_datalist"):
             return
         if environment == DEFAULT_ENVIRONMENT:
             return

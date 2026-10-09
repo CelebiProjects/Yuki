@@ -64,6 +64,10 @@ absolute paths when registering the runner. Its Conda wrapper sets
 `register_envs: false`, so coordinator and rule jobs do not need an AFS token
 to update `~/.conda/environments.txt`. The wrapper also redirects XDG and
 Conda caches away from AFS home, so workflow execution stays entirely on CEFS.
+It creates a named `script` analysis environment under `conda-envs/script`;
+`runner-envs ihep` must list that environment. IHEP tasks declaring
+`environment: script` are run through this Conda environment, never through
+the worker node's system Python.
 
 Do not put the installation on `/workfs2/higgs/mzhao` unless its user quota is
 large enough for Conda's package and file count.

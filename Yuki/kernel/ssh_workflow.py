@@ -29,8 +29,11 @@ DEFAULT_SSH_PORT = 22
 SSH_START_CONFIRM_TIMEOUT = 5
 SSH_START_CONFIRM_INTERVAL = 0.1
 
-# Environments that need no conda activation on ssh runners
-PURE_COPY_ENVIRONMENTS = ("rawdata", "datalist", "lhcb_ap_datalist", "script")
+# Data-only procedures do not execute analysis commands and need no Conda
+# activation. ``script`` is an execution environment and must remain visible
+# to Snakemake so a missing runner environment fails instead of silently using
+# the worker node's system Python.
+PURE_COPY_ENVIRONMENTS = ("rawdata", "datalist", "lhcb_ap_datalist")
 
 
 class SSHStartNotConfirmed(RuntimeError):

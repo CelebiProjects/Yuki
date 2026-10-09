@@ -121,6 +121,18 @@ def test_step_memory_fallback_is_configurable_and_invalid_values_are_safe(
     assert "fallback_memory_mb=1024" in workflow._build_hep_step_submitter()
 
 
+def test_script_tasks_activate_named_conda_environment(tmp_path):
+    workflow = _workflow(tmp_path)
+    snake_file = mock.MagicMock()
+
+    workflow._write_environment_directive(snake_file, "script")
+
+    assert snake_file.addline.call_args_list == [
+        mock.call("conda:", 1),
+        mock.call('"script"', 2),
+    ]
+
+
 @pytest.mark.parametrize(("job_resource", "expected_mb"), [
     ('"mem_mb": 256', "256"),
     ("", "8192"),

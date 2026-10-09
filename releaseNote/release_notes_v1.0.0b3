@@ -23,7 +23,8 @@
   - Convert each Celebi `memory_limit` to the numeric Snakemake `mem_mb` resource in Python and pass it to `hep_sub -m`; use `hep_step_memory_mb` only when the job has no valid memory quantity.
   - Keep XDG, Conda, Snakemake, and Apptainer state on the shared workflow filesystem so child jobs can move between worker nodes without depending on login-node `/tmp`, worker-local `/scratch`, or an AFS token.
   - Add runner registration/probing, configuration fields, SSH-compatible transfer/cache/purge support, installation documentation, and `scripts/setup-ihep-runner.sh` for a CEFS-hosted Conda/Snakemake environment. Initial AFS home access is handled interactively with `kinit` and `aklog -d`.
-  - Validate the complete two-task dependency chain on `lxlogin.ihep.ac.cn`: outer and per-rule HepJobs, cross-node stageout consumption, final status propagation, and output collection all completed successfully.
+  - Install and expose a real named `script` Conda environment on IHEP; `environment: script` tasks now activate it and fail when it is unavailable instead of silently using the worker's system Python.
+  - Validate the IHEP transport and scheduling path on `lxlogin.ihep.ac.cn`: outer and per-rule HepJobs, cross-node stageout consumption, final status propagation, and output collection all completed successfully.
 + Docker consolidation.
   - Multi-stage `docker/Dockerfile` (base -> dev -> prod) with a non-root `yuki` runtime.
   - Unified `docker/scripts/build.sh` (dev/prod, version and nightly tagging, tar export).

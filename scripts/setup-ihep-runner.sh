@@ -82,6 +82,7 @@ IHEP_ROOT="${IHEP_ROOT%/}"
 CONDA_ROOT="$IHEP_ROOT/miniconda3"
 CONDA_REAL="$CONDA_ROOT/bin/conda"
 RUNNER_ENV="$IHEP_ROOT/envs/snakemake"
+SCRIPT_ENV="$IHEP_ROOT/conda-envs/script"
 WORKFLOW_ROOT="$IHEP_ROOT/workflows"
 RUNNER_BIN="$IHEP_ROOT/bin"
 RUNNER_CONDA="$RUNNER_BIN/conda"
@@ -196,6 +197,18 @@ run env "PIP_CACHE_DIR=$CACHE_ROOT/pip" "XDG_CACHE_HOME=$CACHE_ROOT" \
     "$RUNNER_ENV/bin/python" -m pip install --upgrade \
     'snakemake>=8.6,<10' snakemake-executor-plugin-cluster-generic
 
+if [ -x "$SCRIPT_ENV/bin/python" ]; then
+    log "Updating the script analysis environment..."
+    script_action=install
+else
+    log "Creating the script analysis environment..."
+    script_action=create
+fi
+run "$RUNNER_CONDA" "$script_action" --yes --prefix "$SCRIPT_ENV" \
+    --solver libmamba --override-channels --channel conda-forge \
+    --repodata-fn current_repodata.json \
+    'python=3.12'
+
 if [ "$DRY_RUN" -eq 1 ]; then
     log "+ verify conda, snakemake, cluster-generic, and shared workdir"
     exit 0
@@ -209,6 +222,7 @@ fi
 
 "$RUNNER_CONDA" --version
 "$SNAKEMAKE" --version
+"$RUNNER_CONDA" run --name script python --version
 if ! "$SNAKEMAKE" --help 2>&1 | grep -q -- '--cluster-generic-submit-cmd'; then
     log "Error: Snakemake cannot see the cluster-generic executor plugin."
     exit 1

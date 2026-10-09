@@ -5,7 +5,8 @@ import tempfile
 
 from CelebiChrono.utils.metadata import ConfigFile
 
-from . import file_types, remote_data_ops
+from .storage import file_types
+from . import remote_data_ops
 from .file_staging import walk_files
 
 

@@ -43,7 +43,7 @@ find = {}
 include-package-data = true
 
 [tool.setuptools.package-data]
-Yuki = ["templates/*.html"]
+Yuki = ["templates/*.html", "server/services/*.yaml"]
 
 [project.scripts]
 yuki = "Yuki.main:main"

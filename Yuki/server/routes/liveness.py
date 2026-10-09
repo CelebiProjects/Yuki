@@ -4,7 +4,7 @@ versions of tasks/algorithms; Yuki stores and serves the set.
 """
 from flask import Blueprint, jsonify, request
 
-from ...kernel import liveness
+from ...kernel.storage import liveness
 
 bp = Blueprint('liveness', __name__)
 

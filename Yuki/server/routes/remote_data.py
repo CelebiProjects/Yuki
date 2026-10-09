@@ -8,8 +8,8 @@ import os
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
 from ...kernel import remote_data_ops
-from ...kernel import runner_config
-from ...kernel.registration_progress import progress_cache
+from ...kernel.runners import config as runner_config
+from ...kernel.execution.progress import progress_cache
 from ..config import config
 from ..tasks import task_cache_results, task_register_remote_data
 

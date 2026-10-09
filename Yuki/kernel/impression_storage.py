@@ -9,13 +9,13 @@ import json
 import shutil
 import tempfile
 from CelebiChrono.utils.metadata import ConfigFile
-from . import file_types
+from .storage import file_types
 from . import remote_data_ops
-from . import runner_config
-from .registration_progress import remote_listing_cache
+from .runners import config as runner_config
+from .execution.progress import remote_listing_cache
 from .rawdata_collection import collect_rawdata, local_rawdata_files
-from .vjob import VJob
-from .vworkflow import VWorkflow
+from .jobs.base import VJob
+from .workflows.base import VWorkflow
 from .status_constants import (
     CODA, FAILED, DISSONANCE, IN_MOVEMENT, PRE_EXECUTION_STATUSES,
     translate_to_musical)

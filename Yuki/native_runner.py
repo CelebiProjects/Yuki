@@ -9,7 +9,7 @@ from contextlib import contextmanager
 import click
 from CelebiChrono.utils.metadata import ConfigFile
 
-from Yuki.kernel import runner_config
+from Yuki.kernel.runners import config as runner_config
 from Yuki.kernel.local_execution import execute_workflow, timestamp_logger
 
 

@@ -13,7 +13,7 @@ from CelebiChrono.utils import metadata
 from ..config import config
 from ..resumable_upload_handler import get_upload_manager
 from ...kernel.impression_storage import ImpressionStorage
-from ...kernel.vworkflow import VWorkflow
+from ...kernel.workflows.base import VWorkflow
 
 bp = Blueprint('upload', __name__)
 logger = getLogger("YukiLogger")

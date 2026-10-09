@@ -4,7 +4,7 @@ from logging import getLogger
 
 from flask import Blueprint, request, send_file, jsonify
 
-from Yuki.kernel.impression_transfer import (
+from Yuki.services.impression_transfer import (
     export_impression_to_buffer,
     import_impression_from_stream,
 )

@@ -14,7 +14,7 @@ from logging import getLogger
 from flask import Blueprint, request, jsonify
 
 from CelebiChrono.utils.metadata import ConfigFile
-from ...kernel.reana_booker import ReanaBooker
+from ..services.reana_booking import ReanaBooker
 
 bp = Blueprint('booking', __name__)
 logger = getLogger("YukiLogger")

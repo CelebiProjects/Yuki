@@ -6,10 +6,10 @@ import json
 from logging import getLogger
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
-from ...kernel import liveness
-from ...kernel import runner_config
-from ...kernel import runner_inventory
-from ...kernel.ssh_workflow import (
+from ...kernel.storage import liveness
+from ...kernel.runners import config as runner_config
+from ...services import runner_inventory
+from ...kernel.workflows.ssh import (
     environment_needs_conda, resolve_conda_environment)
 from .. import runner_probe
 from ..config import config

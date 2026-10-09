@@ -14,7 +14,7 @@ import time
 
 from CelebiChrono.utils.metadata import ConfigFile
 from Yuki.kernel.status_constants import CODA
-from . import liveness
+from .storage import liveness
 
 REMOTE_MD5_SCRIPT = r'''
 import hashlib, json, os, stat, sys
@@ -278,7 +278,7 @@ def find_job_by_impression(yuki_dir, impression_uuid):
 
 def _ssh_settings(runner_id, yuki_dir=None):
     """Merged ssh settings for a runner (yuki_dir injects the config root)."""
-    from Yuki.kernel import runner_config
+    from Yuki.kernel.runners import config as runner_config
     config_file = runner_config.open_config()
     if yuki_dir:
         config_file = ConfigFile(os.path.join(yuki_dir, "config.json"))
@@ -287,7 +287,7 @@ def _ssh_settings(runner_id, yuki_dir=None):
 
 def _ssh_connection(runner_id):
     """An _SshConnection for the runner (paramiko import stays lazy)."""
-    from Yuki.kernel.ssh_workflow import _SshConnection
+    from Yuki.kernel.workflows.ssh import _SshConnection
     settings = _ssh_settings(runner_id)
     return _SshConnection(host=settings.get("host", ""),
                           user=settings.get("user", ""),
@@ -320,7 +320,7 @@ def list_cache_files(runner_id, project_uuid, impression):
 
 def _runner_name(runner_id, yuki_dir=None):
     """Runner name for a runner id (fallback: the id itself)."""
-    from Yuki.kernel import runner_config
+    from Yuki.kernel.runners import config as runner_config
     cfg = runner_config.open_config()
     if yuki_dir:
         cfg = ConfigFile(os.path.join(yuki_dir, "config.json"))
@@ -481,7 +481,7 @@ def cache_results_job(runner_id, project_uuid, impression,  # pylint: disable=to
     """
     yuki_dir = yuki_dir or _yuki_dir()
     imp_dir = os.path.join(yuki_dir, "Storage", project_uuid, impression)
-    from Yuki.kernel.vjob import VJob
+    from Yuki.kernel.jobs.base import VJob
     job = VJob(imp_dir, runner_id)
     workflow_id = job.workflow_id()
     if not workflow_id:
@@ -721,7 +721,7 @@ def copy_remote_data_job(job_id, impression_uuid, project_uuid, runner_id,  # py
     or SSH session waits for the actual copy to finish.
     """
     from . import detached_copy
-    from .ssh_workflow import SSHStartNotConfirmed
+    from .workflows.ssh import SSHStartNotConfirmed
 
     yuki_dir = _yuki_dir()
     state = read_job_state(yuki_dir, job_id) or {}

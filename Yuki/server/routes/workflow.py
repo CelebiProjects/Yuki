@@ -4,9 +4,9 @@ Workflow management routes for starting, stopping, and monitoring workflows.
 import os
 from flask import Blueprint, request, jsonify
 from Yuki.kernel.impression_storage import ImpressionStorage
-from Yuki.kernel.vworkflow import VWorkflow
+from Yuki.kernel.workflows.base import VWorkflow
 from Yuki.kernel.status_constants import IN_MOVEMENT, translate_to_musical
-from ...kernel import workflow_purge, workflow_kill
+from ...services import workflow_purge, workflow_kill
 from ..config import config
 
 bp = Blueprint('workflow', __name__)

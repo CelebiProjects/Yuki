@@ -5,11 +5,11 @@ from logging import getLogger
 
 from flask import Blueprint, jsonify, request
 
-from ...kernel.vjob import VJob
-from ...kernel.container_job import ContainerJob
+from ...kernel.jobs.base import VJob
+from ...kernel.jobs.container import ContainerJob
 from ...kernel.impression_storage import ImpressionStorage
-from ...kernel.submission_store import SubmissionStore
-from ...kernel.execution_lease import workflow_is_active
+from ...kernel.execution.submissions import SubmissionStore
+from ...kernel.execution.lease import workflow_is_active
 from ...kernel.status_constants import (
     SILENCE, TUNING, FAILED, DISSONANCE,
 )

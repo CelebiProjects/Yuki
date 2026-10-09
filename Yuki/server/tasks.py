@@ -6,11 +6,11 @@ import os
 from celery import Celery
 from CelebiChrono.utils import metadata
 from ..kernel import remote_data_ops, result_transfer
-from ..kernel.vjob import VJob
-from ..kernel.vworkflow import VWorkflow, _yuki_dir
-from ..kernel.execution_lease import (
+from ..kernel.jobs.base import VJob
+from ..kernel.workflows.base import VWorkflow, _yuki_dir
+from ..kernel.execution.lease import (
     WorkflowAlreadyActive, WorkflowLeaseConflict)
-from ..kernel.submission_store import SubmissionStore
+from ..kernel.execution.submissions import SubmissionStore
 from .workflow_status_refresh import running_refresh
 from ..utils.logging_config import apply_channel_levels
 

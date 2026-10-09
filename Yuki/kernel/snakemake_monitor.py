@@ -258,7 +258,7 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
     def _propagate_per_job_status(self, logger=None):
         """Reconcile each VJob's status with on-disk markers."""
         try:
-            from .vworkflow import VWorkflow
+            from .workflows.base import VWorkflow
             workflow = VWorkflow.create(
                 self.project_uuid, [],
                 uuid=self.workflow_uuid, mode="native",

@@ -4,7 +4,7 @@ import subprocess
 
 import click
 
-from Yuki.utils.env_interpreter import EnvInterpreter
+from Yuki.kernel.runners.environments import EnvInterpreter
 from .server_main import server_start
 from .server_main import stop as server_stop
 from .server_main import status as server_status
@@ -207,7 +207,7 @@ def impression_export(impressions, project_uuid, output, yuki_dir):
 
     IMPRESSIONS are one or more 32-character hex impression UUIDs.
     """
-    from Yuki.kernel.impression_transfer import export_impressions
+    from Yuki.services.impression_transfer import export_impressions
 
     yuki_dir = os.path.expanduser(yuki_dir)
     export_impressions(project_uuid, list(impressions), output,
@@ -227,7 +227,7 @@ def impression_import(tar_file, project_uuid, yuki_dir):
 
     TAR_FILE is the path to the tar.gz archive.
     """
-    from Yuki.kernel.impression_transfer import import_impression
+    from Yuki.services.impression_transfer import import_impression
 
     yuki_dir = os.path.expanduser(yuki_dir)
     result = import_impression(project_uuid, tar_file, yuki_dir=yuki_dir)
@@ -317,7 +317,7 @@ def purge_ssh_runner_cache(runner, project, impression, dry_run, yes):  # pylint
     distribution.json cache state) is cleared to match. Registered data
     only lives on the runner — restore it afterwards with register-data.
     """
-    from Yuki.kernel import runner_config
+    from Yuki.kernel.runners import config as runner_config
     from Yuki.kernel.remote_data_ops import purge_runner_cache
 
     config_file = runner_config.open_config()

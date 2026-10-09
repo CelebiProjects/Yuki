@@ -5,9 +5,9 @@ import time
 
 from CelebiChrono.utils.metadata import ConfigFile
 
-from Yuki.kernel import runner_config
+from Yuki.kernel.runners import config as runner_config
 from Yuki.kernel import file_staging, snakemake_monitor
-from Yuki.kernel import execution_lease
+from Yuki.kernel.execution import lease as execution_lease
 
 
 def workflow_location(yuki_dir, workflow_uuid):

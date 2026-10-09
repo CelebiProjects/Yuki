@@ -5,8 +5,8 @@ import json
 import os
 from typing import List, Optional, Tuple
 
-from Yuki.kernel import runner_config
-from Yuki.kernel.ssh_workflow import _SshConnection
+from Yuki.kernel.runners import config as runner_config
+from Yuki.kernel.workflows.ssh import _SshConnection
 
 
 def _resolve_yuki_dir():
@@ -121,7 +121,7 @@ def _reana_context(project_uuid: str, impression: str, runner_name: str,
     url = urls.get(runner_id, "")
     token = tokens.get(runner_id, "")
     job_path = os.path.join(yuki_dir, "Storage", project_uuid, impression)
-    from Yuki.kernel.vjob import VJob
+    from Yuki.kernel.jobs.base import VJob
     workflow_id = VJob(job_path, runner_id).workflow_id()
     if not workflow_id:
         raise ValueError(

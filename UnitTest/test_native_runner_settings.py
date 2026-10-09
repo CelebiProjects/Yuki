@@ -3,7 +3,7 @@ import json
 import os
 from unittest import mock
 
-from Yuki.kernel.snakemake_monitor import SnakemakeMonitor
+from Yuki.kernel.execution.monitor import SnakemakeMonitor
 
 
 def _monitor(tmp):
@@ -43,11 +43,11 @@ def test_native_workflow_uses_workdir_setting(monkeypatch, tmp_path):
     with open(yuki_dir / "config.json", "w", encoding="utf-8") as f:
         json.dump({"runner_settings": {"m1": {"workdir": str(tmp_path / "custom")}}}, f)
 
-    from Yuki.kernel.native_workflow import NativeWorkflow
+    from Yuki.kernel.workflows.native import NativeWorkflow
     with mock.patch.object(NativeWorkflow, "__init__", lambda self, *a, **k: None):
         NativeWorkflow.__new__(NativeWorkflow)
     # exercise the path-resolution logic directly
-    from Yuki.kernel import runner_config
+    from Yuki.kernel.runners import config as runner_config
     settings = runner_config.get_runner_settings(runner_config.open_config(), "m1")
     assert settings["workdir"] == str(tmp_path / "custom")
 
@@ -72,8 +72,8 @@ def test_run_workflow_resolves_custom_workdir(monkeypatch, tmp_path):
 
     from click.testing import CliRunner
     from Yuki.main import cli
-    with mock.patch("Yuki.kernel.snakemake_monitor.SnakemakeMonitor") as mon_cls, \
-            mock.patch("Yuki.kernel.file_staging.FileStager") as stager_cls:
+    with mock.patch("Yuki.kernel.execution.monitor.SnakemakeMonitor") as mon_cls, \
+            mock.patch("Yuki.kernel.storage.staging.FileStager") as stager_cls:
         stager_cls.return_value.stage_in.return_value = True
         stager_cls.return_value.stage_out.return_value = True
         mon_cls.return_value.execute_snakemake.return_value = 0

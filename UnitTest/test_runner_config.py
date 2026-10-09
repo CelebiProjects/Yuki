@@ -3,7 +3,7 @@ import os
 import tempfile
 
 from CelebiChrono.utils.metadata import ConfigFile
-from Yuki.kernel import runner_config
+from Yuki.kernel.runners import config as runner_config
 
 
 def _cfg():

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from colored import Fore, Style
-from Yuki.kernel.reana_booker import ReanaBooker
+from Yuki.server.services.reana_booking import ReanaBooker
 
 
 class TestReanaBooker(unittest.TestCase):
@@ -79,7 +79,7 @@ class TestReanaBooker(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Invalid project path", str(result.messages))
 
-    @patch("Yuki.kernel.reana_booker.reana_client.get_workflow_status")
+    @patch("Yuki.server.services.reana_booking.reana_client.get_workflow_status")
     def test_get_workflow_found(self, mock_get_status):
         """Test finding an existing workflow."""
         print(Fore.BLUE + "Testing Get Workflow Found..." + Style.RESET)
@@ -99,7 +99,7 @@ class TestReanaBooker(unittest.TestCase):
         self.assertEqual(call_kwargs["workflow"], "celebi-test-project")
         self.assertEqual(call_kwargs["access_token"], "test-token")
 
-    @patch("Yuki.kernel.reana_booker.reana_client.get_workflow_status")
+    @patch("Yuki.server.services.reana_booking.reana_client.get_workflow_status")
     def test_get_workflow_not_found(self, mock_get_status):
         """Test when workflow does not exist."""
         print(Fore.BLUE + "Testing Get Workflow Not Found..." + Style.RESET)
@@ -109,7 +109,7 @@ class TestReanaBooker(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch("Yuki.kernel.reana_booker.reana_client.get_workflow_status")
+    @patch("Yuki.server.services.reana_booking.reana_client.get_workflow_status")
     def test_get_workflow_connection_error(self, mock_get_status):
         """Test handling connection error during workflow lookup."""
         print(Fore.BLUE + "Testing Get Workflow Connection Error..." + Style.RESET)
@@ -119,7 +119,7 @@ class TestReanaBooker(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch("Yuki.kernel.reana_booker.reana_client.create_workflow")
+    @patch("Yuki.server.services.reana_booking.reana_client.create_workflow")
     @patch("builtins.open", unittest.mock.mock_open(read_data="version: 0.8.0"))
     def test_create_workflow(self, mock_create_workflow):
         """Test creating a new workflow."""
@@ -138,7 +138,7 @@ class TestReanaBooker(unittest.TestCase):
         self.assertEqual(call_kwargs["access_token"], "test-token")
         self.assertIn("reana_specification", call_kwargs)
 
-    @patch("Yuki.kernel.reana_booker.reana_client.create_workflow")
+    @patch("Yuki.server.services.reana_booking.reana_client.create_workflow")
     def test_create_workflow_with_repo_metadata(self, mock_create_workflow):
         """Test creating a workflow with reana_repo metadata."""
         print(Fore.BLUE + "Testing Create Workflow with Repo Metadata..." + Style.RESET)
@@ -170,7 +170,7 @@ class TestReanaBooker(unittest.TestCase):
         self.assertEqual(spec["reana_repo"]["objects"][0]["descriptor"], "taskA")
         self.assertEqual(spec["reana_repo"]["objects"][0]["impression"], "imp-abc-123")
 
-    @patch("Yuki.kernel.reana_booker.reana_client.create_workflow")
+    @patch("Yuki.server.services.reana_booking.reana_client.create_workflow")
     def test_create_workflow_with_local_config_override(self, mock_create_workflow):
         """Test that config.local.json overrides config.json for impression."""
         print(Fore.BLUE + "Testing Local Config Override..." + Style.RESET)
@@ -226,7 +226,7 @@ class TestReanaBooker(unittest.TestCase):
             "dot_a/dot_b/file.txt"
         )
 
-    @patch("Yuki.kernel.reana_booker.reana_client.upload_file")
+    @patch("Yuki.server.services.reana_booking.reana_client.upload_file")
     def test_upload_files(self, mock_upload_file):
         """Test uploading files to workflow workspace."""
         print(Fore.BLUE + "Testing Upload Files..." + Style.RESET)
@@ -272,7 +272,7 @@ class TestReanaBooker(unittest.TestCase):
             self.assertEqual(kwargs.get("access_token"), "test-token")
             self.assertEqual(kwargs.get("workflow"), "workflow-123")
 
-    @patch("Yuki.kernel.reana_booker.reana_client.upload_file")
+    @patch("Yuki.server.services.reana_booking.reana_client.upload_file")
     def test_upload_stageout_files(self, mock_upload_file):
         """Test uploading stageout files from Yuki storage."""
         print(Fore.BLUE + "Testing Upload Stageout Files..." + Style.RESET)
@@ -319,7 +319,7 @@ class TestReanaBooker(unittest.TestCase):
             self.assertEqual(kwargs.get("access_token"), "test-token")
             self.assertEqual(kwargs.get("workflow"), "workflow-123")
 
-    @patch("Yuki.kernel.reana_booker.reana_client.upload_file")
+    @patch("Yuki.server.services.reana_booking.reana_client.upload_file")
     def test_upload_files_skips_unchanged_objects(self, mock_upload_file):
         """Test skipping upload for objects with matching impression UUID."""
         print(Fore.BLUE + "Testing Upload Files Skip Unchanged..." + Style.RESET)
@@ -380,9 +380,9 @@ class TestReanaBooker(unittest.TestCase):
             ""
         )
 
-    @patch("Yuki.kernel.reana_booker.reana_client.upload_file")
-    @patch("Yuki.kernel.reana_booker.reana_client.create_workflow")
-    @patch("Yuki.kernel.reana_booker.reana_client.get_workflow_status")
+    @patch("Yuki.server.services.reana_booking.reana_client.upload_file")
+    @patch("Yuki.server.services.reana_booking.reana_client.create_workflow")
+    @patch("Yuki.server.services.reana_booking.reana_client.get_workflow_status")
     def test_book_project_existing_workflow(
         self, mock_get_status, mock_create_workflow, mock_upload_file
     ):
@@ -403,9 +403,9 @@ class TestReanaBooker(unittest.TestCase):
         mock_create_workflow.assert_not_called()
         mock_upload_file.assert_called()
 
-    @patch("Yuki.kernel.reana_booker.reana_client.upload_file")
-    @patch("Yuki.kernel.reana_booker.reana_client.create_workflow")
-    @patch("Yuki.kernel.reana_booker.reana_client.get_workflow_status")
+    @patch("Yuki.server.services.reana_booking.reana_client.upload_file")
+    @patch("Yuki.server.services.reana_booking.reana_client.create_workflow")
+    @patch("Yuki.server.services.reana_booking.reana_client.get_workflow_status")
     def test_book_project_new_workflow(
         self, mock_get_status, mock_create_workflow, mock_upload_file
     ):

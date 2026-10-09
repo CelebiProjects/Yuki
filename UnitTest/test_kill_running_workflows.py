@@ -4,7 +4,7 @@ from unittest import mock
 
 import pytest
 
-from Yuki.kernel import workflow_kill
+from Yuki.services import workflow_kill
 from Yuki.server.routes import workflow as routes
 
 

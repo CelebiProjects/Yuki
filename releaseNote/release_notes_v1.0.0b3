@@ -27,7 +27,7 @@
   - Validate the IHEP transport and scheduling path on `lxlogin.ihep.ac.cn`: outer and per-rule HepJobs, cross-node stageout consumption, final status propagation, and output collection all completed successfully.
 + Reorganize the Yuki package by responsibility.
   - Split kernel implementations into `jobs`, `workflows`, `runners`, `execution`, and `storage` packages; move shared application operations to `Yuki.services`, server-only REANA booking to `Yuki.server.services`, and domain-independent helpers to `Yuki.utils`.
-  - Preserve legacy flat import paths as true module aliases for compatibility with existing callers and mock patch targets.
+  - Remove all obsolete flat modules after migrating production code and tests to the canonical package paths; the `kernel` root now contains only its package initializer.
 + Docker consolidation.
   - Multi-stage `docker/Dockerfile` (base -> dev -> prod) with a non-root `yuki` runtime.
   - Unified `docker/scripts/build.sh` (dev/prod, version and nightly tagging, tar export).

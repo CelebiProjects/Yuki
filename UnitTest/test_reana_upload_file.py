@@ -3,7 +3,7 @@
 import os
 from unittest import mock
 
-from Yuki.kernel import reana_workflow
+from Yuki.kernel.workflows import reana as reana_workflow
 
 
 class _FakeJob:

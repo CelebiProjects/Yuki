@@ -7,8 +7,8 @@ from unittest import mock
 import pytest
 from flask import Flask
 
-from Yuki.kernel.impression_storage import ImpressionStorage
-from Yuki.kernel import remote_data_ops
+from Yuki.kernel.storage.impressions import ImpressionStorage
+from Yuki.kernel.storage import remote as remote_data_ops
 from Yuki.server.routes import execution, upload, workflow
 
 

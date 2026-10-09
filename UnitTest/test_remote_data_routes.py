@@ -4,7 +4,7 @@ import os
 from unittest import mock
 
 from CelebiChrono.utils.metadata import ConfigFile
-from Yuki.kernel import remote_data_ops
+from Yuki.kernel.storage import remote as remote_data_ops
 from Yuki.server.routes import remote_data as remote_data_routes
 
 
@@ -429,7 +429,7 @@ def test_verify_data_remote_match(monkeypatch, tmp_path):
             """Answer md5 queries with the expected digest."""
             return "abc123", "", 0
 
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=FakeSsh()):
         r = _app(remote_data_routes.bp).test_client().get(
             "/verify-data/proj/imp-1")
@@ -460,7 +460,7 @@ def test_verify_data_remote_mismatch(monkeypatch, tmp_path):
             """Answer md5 queries with the mismatch digest."""
             return "different", "", 0
 
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=FakeSsh()):
         r = _app(remote_data_routes.bp).test_client().get(
             "/verify-data/proj/imp-1")

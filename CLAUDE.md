@@ -180,7 +180,7 @@ Note: as of the Docker consolidation (2026-08), containers run as non-root user 
 3. Add tests in `UnitTest/test_server.py`
 
 ### Adding New Job Types
-1. Extend `VJob` base class in `Yuki/kernel/`
+1. Extend `VJob` base class in `Yuki/kernel/jobs/base.py`
 2. Implement required abstract methods
 3. Update factory pattern in `VJob.create()` if needed
 
@@ -197,5 +197,5 @@ Note: as of the Docker consolidation (2026-08), containers run as non-root user 
 - `.github/workflows/docker-nightly.yml`: Nightly image CI
 - `Yuki/main.py`: CLI entry point with Click commands
 - `Yuki/server/app.py`: Flask application setup
-- `Yuki/kernel/vjob.py`: Job abstraction and factory pattern
+- `Yuki/kernel/jobs/base.py`: Job abstraction and factory pattern
 - `UnitTest/README.md`: Comprehensive test documentation

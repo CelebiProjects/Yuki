@@ -1,11 +1,11 @@
 """Tests for live log collection while a job is running."""
 from unittest import mock
 
-from Yuki.kernel.status_constants import CODA, FAILED, IN_MOVEMENT
+from Yuki.kernel.execution.status import CODA, FAILED, IN_MOVEMENT
 
 
 def _storage(tmp_path):
-    from Yuki.kernel import impression_storage as ims
+    from Yuki.kernel.storage import impressions as ims
     s = ims.ImpressionStorage.__new__(ims.ImpressionStorage)
     s.project_uuid = "proj-1"
     s.impression = "imp7"

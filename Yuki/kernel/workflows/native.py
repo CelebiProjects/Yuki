@@ -11,10 +11,10 @@ from CelebiChrono.utils import metadata
 from ..runners.environments import EnvInterpreter
 from ..runners import config as runner_config
 from .base import VWorkflow
-from ..status_constants import (
+from ..execution.status import (
     FAILED, DISSONANCE, translate_to_musical, is_terminal_status)
 from ..storage import file_types  # pylint: disable=unused-import  # re-exported for tests
-from ..file_staging import walk_files
+from ..storage.staging import walk_files
 
 DEFAULT_ENVIRONMENT = "docker.io/reanahub/reana-env-root6:6.18.04"
 

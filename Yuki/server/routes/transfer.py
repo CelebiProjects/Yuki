@@ -11,7 +11,7 @@ from logging import getLogger
 from CelebiChrono.utils import csys
 from flask import Blueprint, request, send_file, jsonify
 
-from ...kernel import result_transfer
+from ...services import result_transfer
 from ...kernel.runners import config as runner_config
 from ..config import config
 from ..tasks import task_transfer_results

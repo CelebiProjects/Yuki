@@ -5,9 +5,9 @@ import tempfile
 
 from CelebiChrono.utils.metadata import ConfigFile
 
-from .storage import file_types
-from . import remote_data_ops
-from .file_staging import walk_files
+from . import file_types
+from . import remote as remote_data_ops
+from .staging import walk_files
 
 
 def local_rawdata_files(job_path):

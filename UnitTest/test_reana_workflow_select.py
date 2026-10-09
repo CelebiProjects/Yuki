@@ -4,7 +4,7 @@ from unittest import mock
 
 import pytest
 
-from Yuki.kernel import reana_workflow
+from Yuki.kernel.workflows import reana as reana_workflow
 
 
 def _make_wf():
@@ -186,9 +186,9 @@ def test_update_workflow_status_terminal_transition_records(tmp_path):
     wf.jobs = []
     with mock.patch.object(reana_workflow, "REANA_AVAILABLE", True), \
          mock.patch.object(reana_workflow, "client") as cli, \
-         mock.patch("Yuki.kernel.impression_storage."
+         mock.patch("Yuki.kernel.storage.impressions."
                     "refresh_workflow_distributions") as refresh, \
-         mock.patch("Yuki.kernel.impression_storage."
+         mock.patch("Yuki.kernel.storage.impressions."
                     "refresh_job_filelists") as refresh_files:
         cli.get_workflow_status.return_value = {"status": "finished",
                                                 "logs": "{}"}
@@ -207,9 +207,9 @@ def test_update_workflow_status_repeated_terminal_poll_is_noop(tmp_path):
         '{"results": {"status": "finished"}}')
     with mock.patch.object(reana_workflow, "REANA_AVAILABLE", True), \
          mock.patch.object(reana_workflow, "client") as cli, \
-         mock.patch("Yuki.kernel.impression_storage."
+         mock.patch("Yuki.kernel.storage.impressions."
                     "refresh_workflow_distributions") as refresh, \
-         mock.patch("Yuki.kernel.impression_storage."
+         mock.patch("Yuki.kernel.storage.impressions."
                     "refresh_job_filelists") as refresh_files:
         cli.get_workflow_status.return_value = {"status": "finished",
                                                 "logs": "{}"}

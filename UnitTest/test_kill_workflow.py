@@ -8,7 +8,7 @@ import pytest
 
 def test_vworkflow_force_kill_not_implemented():
     """The base workflow has no generic force-kill."""
-    from Yuki.kernel.vworkflow import VWorkflow
+    from Yuki.kernel.workflows.base import VWorkflow
 
     class _ConcreteVWorkflow(VWorkflow):
         """Concrete subclass so the abstract base can be instantiated."""
@@ -37,7 +37,7 @@ def _fake_job(status="in movement"):
 
 
 def _ssh_workflow(tmp_path):
-    from Yuki.kernel.ssh_workflow import SshWorkflow
+    from Yuki.kernel.workflows.ssh import SshWorkflow
     workflow = SshWorkflow.__new__(SshWorkflow)
     workflow.uuid = tmp_path.name
     workflow.project_uuid = "proj"
@@ -53,7 +53,7 @@ def _ssh_workflow(tmp_path):
 
 def test_ssh_force_kill_escalates_to_kill9(tmp_path):
     """TERM, then KILL when the process survives, then pkill + exit file."""
-    from Yuki.kernel.ssh_workflow import SshWorkflow
+    from Yuki.kernel.workflows.ssh import SshWorkflow
     workflow = _ssh_workflow(tmp_path)
 
     ssh = mock.MagicMock()
@@ -77,7 +77,7 @@ def test_ssh_force_kill_escalates_to_kill9(tmp_path):
 
     ssh.exec.side_effect = exec_side_effect
     with mock.patch.object(SshWorkflow, "_ssh", return_value=ssh), \
-            mock.patch("Yuki.kernel.ssh_workflow.time.sleep"):
+            mock.patch("Yuki.kernel.workflows.ssh.time.sleep"):
         workflow.force_kill()
 
     commands = [c for c in ssh.exec.call_args_list]
@@ -97,7 +97,7 @@ def test_ssh_force_kill_escalates_to_kill9(tmp_path):
 
 def test_ssh_force_kill_without_identity_is_noop(tmp_path):
     """No live PID means no signal and no false stopped state."""
-    from Yuki.kernel.ssh_workflow import SshWorkflow
+    from Yuki.kernel.workflows.ssh import SshWorkflow
     workflow = _ssh_workflow(tmp_path)
 
     ssh = mock.MagicMock()
@@ -105,7 +105,7 @@ def test_ssh_force_kill_without_identity_is_noop(tmp_path):
     ssh.__exit__.return_value = False
     ssh.exec.return_value = ("", "", 1)  # cat pid fails
     with mock.patch.object(SshWorkflow, "_ssh", return_value=ssh), \
-            mock.patch("Yuki.kernel.ssh_workflow.time.sleep"):
+            mock.patch("Yuki.kernel.workflows.ssh.time.sleep"):
         assert workflow.force_kill() is False
 
     flattened = [c[0][0] for c in ssh.exec.call_args_list]
@@ -116,7 +116,7 @@ def test_ssh_force_kill_without_identity_is_noop(tmp_path):
 
 def test_native_force_kill_marks_stopped(tmp_path):
     """The native cancellation request uses the valid stopped state."""
-    from Yuki.kernel.native_workflow import NativeWorkflow
+    from Yuki.kernel.workflows.native import NativeWorkflow
     workflow = NativeWorkflow.__new__(NativeWorkflow)
     workflow.uuid = tmp_path.name
     workflow.project_uuid = "proj"
@@ -136,7 +136,7 @@ def test_native_force_kill_marks_stopped(tmp_path):
 
 def test_force_kill_preserves_finished_job(tmp_path):
     """Stopping an active workflow never rewrites a completed job."""
-    from Yuki.kernel.ssh_workflow import SshWorkflow
+    from Yuki.kernel.workflows.ssh import SshWorkflow
     workflow = _ssh_workflow(tmp_path)
     finished = _fake_job("finished")
     running = _fake_job("in movement")
@@ -151,7 +151,7 @@ def test_force_kill_preserves_finished_job(tmp_path):
             mock.patch.object(workflow, "_verified_remote_target",
                               return_value=(1234, "1234")), \
             mock.patch.object(workflow, "_remote_pid_alive", return_value=False), \
-            mock.patch("Yuki.kernel.ssh_workflow.time.sleep"):
+            mock.patch("Yuki.kernel.workflows.ssh.time.sleep"):
         assert workflow.force_kill() is True
 
     finished.set_status.assert_not_called()
@@ -161,7 +161,7 @@ def test_force_kill_preserves_finished_job(tmp_path):
 
 def test_force_kill_finished_workflow_is_noop(tmp_path):
     """A completed workflow is immutable and receives no remote signal."""
-    from Yuki.kernel.ssh_workflow import SshWorkflow
+    from Yuki.kernel.workflows.ssh import SshWorkflow
     workflow = _ssh_workflow(tmp_path)
     workflow.set_workflow_status("finished")
     with mock.patch.object(SshWorkflow, "_ssh") as connect:
@@ -174,7 +174,7 @@ def test_force_kill_finished_workflow_is_noop(tmp_path):
 
 def test_legacy_killed_status_is_terminal():
     """Historical invalid kill records are treated as stopped, not running."""
-    from Yuki.kernel.status_constants import (
+    from Yuki.kernel.execution.status import (
         STOPPED, is_terminal_status, translate_to_musical)
     assert translate_to_musical("killed") == STOPPED
     assert is_terminal_status("killed")
@@ -194,7 +194,7 @@ def test_remote_refresh_cannot_resurrect_stopped_workflow(tmp_path):
 
 def test_native_monitor_cannot_resurrect_stopped_workflow(tmp_path):
     """Host progress updates preserve an already stopped workflow."""
-    from Yuki.kernel.snakemake_monitor import SnakemakeMonitor
+    from Yuki.kernel.execution.monitor import SnakemakeMonitor
     workflow_path = tmp_path / "workflow"
     workflow_path.mkdir()
     results_path = workflow_path / "results.json"
@@ -210,7 +210,7 @@ def test_native_monitor_cannot_resurrect_stopped_workflow(tmp_path):
 
 def test_direct_impression_kill_requires_explicit_workflow():
     """The legacy ambiguous impression-level mutation is disabled."""
-    from Yuki.kernel import impression_storage
+    from Yuki.kernel.storage import impressions as impression_storage
     storage = impression_storage.ImpressionStorage.__new__(
         impression_storage.ImpressionStorage)
     with pytest.raises(ValueError, match="explicit workflow ID"):
@@ -219,7 +219,7 @@ def test_direct_impression_kill_requires_explicit_workflow():
 
 def test_impression_kill_plan_deduplicates_and_shows_full_scope():
     """Preview exposes all jobs and one shared workflow only once."""
-    from Yuki.kernel import impression_storage
+    from Yuki.kernel.storage import impressions as impression_storage
     storage = impression_storage.ImpressionStorage.__new__(
         impression_storage.ImpressionStorage)
     storage.impression = "requested"
@@ -249,7 +249,7 @@ def test_impression_kill_plan_deduplicates_and_shows_full_scope():
 
 def test_impression_kill_executes_only_confirmed_workflow():
     """Execution requires an exact workflow ID from the preview."""
-    from Yuki.kernel import impression_storage
+    from Yuki.kernel.storage import impressions as impression_storage
     storage = impression_storage.ImpressionStorage.__new__(
         impression_storage.ImpressionStorage)
     storage.impression = "requested"
@@ -328,7 +328,7 @@ def test_strict_ssh_kill_clears_missing_pid_without_matching_own_shell(tmp_path)
 
 def test_reana_force_kill_stops_with_force(tmp_path):
     """stop_workflow gets force=True and the status is marked stopped."""
-    from Yuki.kernel import reana_workflow
+    from Yuki.kernel.workflows import reana as reana_workflow
     workflow = reana_workflow.ReanaWorkflow.__new__(
         reana_workflow.ReanaWorkflow)
     workflow.machine_id = "r1"

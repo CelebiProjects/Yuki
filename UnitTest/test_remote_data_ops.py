@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 
 from CelebiChrono.utils.file_utils import dir_md5
-from Yuki.kernel.remote_data_ops import (
+from Yuki.kernel.storage.remote import (
     REMOTE_MD5_SCRIPT, remote_md5_command, build_remote_fast_copy_command,
     read_remote_progress, _yuki_dir,
 )
@@ -283,9 +283,9 @@ class _FakeSsh:
 def test_read_remote_progress_parses_file():
     """read_remote_progress returns the parsed progress dict."""
     fake = _FakeSsh(out='{"stage": "copying", "bytes_done": 3, "bytes_total": 7}')
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake), \
-            mock.patch("Yuki.kernel.remote_data_ops.progress_file_path",
+            mock.patch("Yuki.kernel.storage.remote.progress_file_path",
                        return_value="/w/prog.json"):
         assert read_remote_progress("r1", "job-1") == {
             "stage": "copying", "bytes_done": 3, "bytes_total": 7}
@@ -296,11 +296,11 @@ def test_read_remote_progress_none_on_any_failure():
     for fake in (_FakeSsh(out="", err="No such file", code=1),
                  _FakeSsh(out="not json", code=0),
                  _FakeSsh(out="42", code=0)):
-        with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+        with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                         return_value=fake), \
-                mock.patch("Yuki.kernel.remote_data_ops.progress_file_path",
+                mock.patch("Yuki.kernel.storage.remote.progress_file_path",
                            return_value="/w/prog.json"):
             assert read_remote_progress("r1", "job-1") is None
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     side_effect=ConnectionError("banner")):
         assert read_remote_progress("r1", "job-1") is None

@@ -5,7 +5,7 @@ from unittest import mock
 from click.testing import CliRunner
 
 from Yuki import native_runner
-from Yuki.kernel.local_execution import execute_workflow
+from Yuki.kernel.execution.local import execute_workflow
 
 
 def _prepared(tmp_path, status="ready_for_local_execution"):
@@ -102,8 +102,8 @@ def test_runner_foreground_and_status(monkeypatch, tmp_path):
 def test_output_collection_failure_is_not_success(monkeypatch, tmp_path):
     root, path = _prepared(tmp_path)
     monkeypatch.setenv("YUKIDIR", str(root))
-    with mock.patch("Yuki.kernel.file_staging.FileStager") as stager, \
-            mock.patch("Yuki.kernel.snakemake_monitor.SnakemakeMonitor") as monitor:
+    with mock.patch("Yuki.kernel.storage.staging.FileStager") as stager, \
+            mock.patch("Yuki.kernel.execution.monitor.SnakemakeMonitor") as monitor:
         stager.return_value.stage_in.return_value = True
         stager.return_value.stage_out.return_value = False
         monitor.return_value.execute_snakemake.return_value = 0
@@ -116,8 +116,8 @@ def test_cancelled_before_snakemake_does_not_launch(monkeypatch, tmp_path):
     root, _path = _prepared(tmp_path)
     monkeypatch.setenv("YUKIDIR", str(root))
     (root / "LocalWorkflows" / "workflow" / "native-runner.cancel").write_text("cancel\n")
-    with mock.patch("Yuki.kernel.file_staging.FileStager") as stager, \
-            mock.patch("Yuki.kernel.snakemake_monitor.SnakemakeMonitor") as monitor:
+    with mock.patch("Yuki.kernel.storage.staging.FileStager") as stager, \
+            mock.patch("Yuki.kernel.execution.monitor.SnakemakeMonitor") as monitor:
         stager.return_value.stage_in.return_value = True
         assert execute_workflow("workflow") == 1
     monitor.return_value.execute_snakemake.assert_not_called()
@@ -127,7 +127,7 @@ def test_cancelled_before_snakemake_does_not_launch(monkeypatch, tmp_path):
 def test_native_status_refresh_preserves_host_failure(monkeypatch, tmp_path):
     root, path = _prepared(tmp_path, "failed")
     monkeypatch.setenv("YUKIDIR", str(root))
-    from Yuki.kernel.native_workflow import NativeWorkflow
+    from Yuki.kernel.workflows.native import NativeWorkflow
     workflow = NativeWorkflow("project", [], "workflow")
     workflow.update_workflow_status()
     assert _status(path) == "failed"

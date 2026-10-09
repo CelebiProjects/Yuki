@@ -11,7 +11,7 @@ import json
 import subprocess
 import time
 import signal
-from .status_constants import (
+from .status import (
     IN_MOVEMENT, CODA, FAILED, translate_to_musical, is_terminal_status)
 
 
@@ -258,7 +258,7 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
     def _propagate_per_job_status(self, logger=None):
         """Reconcile each VJob's status with on-disk markers."""
         try:
-            from .workflows.base import VWorkflow
+            from ..workflows.base import VWorkflow
             workflow = VWorkflow.create(
                 self.project_uuid, [],
                 uuid=self.workflow_uuid, mode="native",

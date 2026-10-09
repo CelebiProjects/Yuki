@@ -18,9 +18,9 @@ from ..runners import config as runner_config
 from ..runners.environments import EnvInterpreter
 from .base import VWorkflow
 from ..runners.ssh_pool import ssh_pool
-from ..status_constants import (FAILED, DISSONANCE,
+from ..execution.status import (FAILED, DISSONANCE,
                                translate_to_musical, is_terminal_status)
-from ..file_staging import walk_files
+from ..storage.staging import walk_files
 
 logger = getLogger("YukiLogger")
 
@@ -794,7 +794,7 @@ wait "$snakemake_pid"
         never fail over a stale registry.
         """
         try:
-            from Yuki.kernel.impression_storage import ImpressionStorage
+            from Yuki.kernel.storage.impressions import ImpressionStorage
             ImpressionStorage(self.project_uuid, job.uuid).update_distribution()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.logger(f"[SSH] Failed to record distribution for "

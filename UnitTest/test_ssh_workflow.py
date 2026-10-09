@@ -193,7 +193,7 @@ class TestSshWorkflow(unittest.TestCase):
     # pylint: disable=too-many-instance-attributes,too-many-public-methods
 
     def setUp(self):
-        from Yuki.kernel.ssh_pool import ssh_pool
+        from Yuki.kernel.runners.ssh_pool import ssh_pool
         ssh_pool.close()
         self.addCleanup(ssh_pool.close)
         self.tmpdir = tempfile.mkdtemp()
@@ -206,7 +206,7 @@ class TestSshWorkflow(unittest.TestCase):
         # Write SSH config for the fake runner.
         self._write_ssh_config()
 
-        from Yuki.kernel.ssh_workflow import SshWorkflow
+        from Yuki.kernel.workflows.ssh import SshWorkflow
         self.workflow = SshWorkflow(self.project_uuid, [], None)
         self.workflow.uuid = self.workflow_uuid
         self.workflow.machine_id = "runner-uuid"
@@ -227,7 +227,7 @@ class TestSshWorkflow(unittest.TestCase):
         # Status updates that observe the terminal transition refresh the
         # distribution registry; isolate tests from that heavy side effect.
         self._refresh_patcher = patch(
-            "Yuki.kernel.impression_storage.refresh_workflow_distributions",
+            "Yuki.kernel.storage.impressions.refresh_workflow_distributions",
             create=True)
         self.mock_refresh = self._refresh_patcher.start()
 
@@ -357,9 +357,9 @@ class TestSshWorkflow(unittest.TestCase):
         self.mock_client.exec_command.return_value = (
             MagicMock(), _MockStdout("started"), _MockStderr("")
         )
-        from Yuki.kernel.ssh_workflow import SSHStartNotConfirmed
+        from Yuki.kernel.workflows.ssh import SSHStartNotConfirmed
 
-        with patch("Yuki.kernel.ssh_workflow._SshConnection.exec_start_detached",
+        with patch("Yuki.kernel.workflows.ssh._SshConnection.exec_start_detached",
                    side_effect=SSHStartNotConfirmed("no confirmation")), \
                 patch.object(self.workflow, "_confirm_remote_start") as confirm:
             self.workflow._start_remote_snakemake()
@@ -371,9 +371,9 @@ class TestSshWorkflow(unittest.TestCase):
         ssh = MagicMock()
         ssh.exists.return_value = False
 
-        with patch("Yuki.kernel.ssh_workflow.time.monotonic",
+        with patch("Yuki.kernel.workflows.ssh.time.monotonic",
                    side_effect=[0.0, 1.0]), \
-                patch("Yuki.kernel.ssh_workflow.time.sleep"):
+                patch("Yuki.kernel.workflows.ssh.time.sleep"):
             with self.assertRaisesRegex(RuntimeError, "yuki.started"):
                 self.workflow._confirm_remote_start(ssh, timeout=0.5)
 
@@ -410,7 +410,7 @@ class TestSshWorkflow(unittest.TestCase):
         The channel is left for the connection teardown: closing it
         directly blocks on hosts whose sshd never confirms the close.
         """
-        from Yuki.kernel.ssh_workflow import _SshConnection, SSHStartNotConfirmed
+        from Yuki.kernel.workflows.ssh import _SshConnection, SSHStartNotConfirmed
         conn = _SshConnection("host", "user")
         conn._client = MagicMock()
         stdout = MagicMock()
@@ -430,7 +430,7 @@ class TestSshWorkflow(unittest.TestCase):
         waiting for EOF (the channel may never reach EOF when the
         session keeps a background job alive).
         """
-        from Yuki.kernel.ssh_workflow import _SshConnection
+        from Yuki.kernel.workflows.ssh import _SshConnection
         conn = _SshConnection("host", "user")
         conn._client = MagicMock()
         stdout = MagicMock()
@@ -445,7 +445,7 @@ class TestSshWorkflow(unittest.TestCase):
 
     def test_exec_bounds_the_wait_with_channel_timeout(self):
         """exec polls for readiness before fetching the exit status."""
-        from Yuki.kernel.ssh_workflow import _SshConnection
+        from Yuki.kernel.workflows.ssh import _SshConnection
         conn = _SshConnection("host", "user")
         conn._client = MagicMock()
         stdout = MagicMock()
@@ -468,7 +468,7 @@ class TestSshWorkflow(unittest.TestCase):
 
     def test_exec_times_out_when_channel_never_finishes(self):
         """A stuck channel raises socket.timeout instead of hanging forever."""
-        from Yuki.kernel.ssh_workflow import _SshConnection
+        from Yuki.kernel.workflows.ssh import _SshConnection
         conn = _SshConnection("host", "user")
         conn._client = MagicMock()
         stdout = MagicMock()
@@ -727,7 +727,7 @@ class TestSshWorkflow(unittest.TestCase):
     def test_update_workflow_status_detects_remote_exit_nonzero(self, mock_ssh_cls):
         """A nonzero remote yuki.exit marks the workflow failed with the
         snakemake log tail, and never-run jobs fail with a skip message."""
-        from Yuki.kernel.status_constants import FAILED
+        from Yuki.kernel.execution.status import FAILED
 
         mock_ssh_cls.return_value = self.mock_client
         self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
@@ -828,8 +828,8 @@ class TestSshWorkflow(unittest.TestCase):
     @patch("paramiko.SSHClient")
     def test_finished_waits_for_saved_listings_and_retries(self, mock_ssh_cls):
         """Both remote scans and local saves must succeed before completion."""
-        from Yuki.kernel.impression_storage import ImpressionStorage
-        from Yuki.kernel.vjob import VJob
+        from Yuki.kernel.storage.impressions import ImpressionStorage
+        from Yuki.kernel.jobs.base import VJob
 
         mock_ssh_cls.return_value = self.mock_client
         self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
@@ -867,7 +867,7 @@ class TestSshWorkflow(unittest.TestCase):
                 return real_replace(source, target)
 
             real_replace = os.replace
-            with patch("Yuki.kernel.impression_storage.os.replace",
+            with patch("Yuki.kernel.storage.impressions.os.replace",
                        side_effect=fail_listing_save):
                 self.workflow.update_workflow_status()
             self.assertEqual(job.status(), "running")
@@ -940,7 +940,7 @@ class TestSshWorkflow(unittest.TestCase):
         # update_distribution resolves paths through the server config
         # singleton; point it at the tmp HOME.
         with patch("Yuki.server.config.config", _fake_server_config(self.tmpdir)):
-            from Yuki.kernel.vjob import VJob
+            from Yuki.kernel.jobs.base import VJob
             self.workflow.jobs = [
                 VJob(done_job_dir, "runner-uuid"),
                 VJob(pending_job_dir, "runner-uuid"),
@@ -975,7 +975,7 @@ class TestSshWorkflow(unittest.TestCase):
         self.mock_sftp.files[
             f"{self.workflow.remote_exec_path}/{job.short_uuid()}.done"] = b""
 
-        with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
+        with patch("Yuki.kernel.storage.impressions.ImpressionStorage") as mock_storage:
             self.workflow.propagate_job_statuses(
                 workflow_terminal=False, listing_failures=set())
 
@@ -988,7 +988,7 @@ class TestSshWorkflow(unittest.TestCase):
     def test_propagate_records_distribution_on_failed_transition(
             self, mock_ssh_cls):
         """A job that ran and failed must also record its produced data."""
-        from Yuki.kernel.status_constants import FAILED
+        from Yuki.kernel.execution.status import FAILED
 
         mock_ssh_cls.return_value = self.mock_client
         self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
@@ -1002,7 +1002,7 @@ class TestSshWorkflow(unittest.TestCase):
         self.mock_client.exec_command.return_value = (
             MagicMock(), _MockStdout("RuntimeError: segfault"), _MockStderr(""))
 
-        with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
+        with patch("Yuki.kernel.storage.impressions.ImpressionStorage") as mock_storage:
             self.workflow.propagate_job_statuses(
                 workflow_terminal=True, listing_failures=set())
 
@@ -1023,7 +1023,7 @@ class TestSshWorkflow(unittest.TestCase):
         self.mock_sftp.files[
             f"{self.workflow.remote_exec_path}/{job.short_uuid()}.done"] = b""
 
-        with patch("Yuki.kernel.impression_storage.ImpressionStorage") as mock_storage:
+        with patch("Yuki.kernel.storage.impressions.ImpressionStorage") as mock_storage:
             mock_storage.return_value.update_distribution.side_effect = OSError("boom")
             self.workflow.propagate_job_statuses(
                 workflow_terminal=False, listing_failures=set())  # no raise
@@ -1309,7 +1309,7 @@ class TestSshWorkflow(unittest.TestCase):
         self.mock_sftp.files[f"{remote_stageout}/plots/mass.png"] = b"img"
         self.mock_sftp.files[f"{remote_stageout}/ntuple.root"] = b"data"
 
-        from Yuki.kernel import file_types
+        from Yuki.kernel.storage import file_types
         report = self.workflow.download_selected(
             impression, file_types.make_predicate("plots/*.png"), "stageout"
         )

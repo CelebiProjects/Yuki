@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 
-from Yuki.kernel.detached_copy import launch_command, read_state
+from Yuki.kernel.execution.detached_copy import launch_command, read_state
 
 
 class LocalSsh:  # pylint: disable=too-few-public-methods

@@ -4,7 +4,7 @@ import json
 import os
 from unittest import mock
 
-from Yuki.kernel import impression_storage as ims
+from Yuki.kernel.storage import impressions as ims
 
 
 def _storage(tmp_path):
@@ -185,7 +185,7 @@ def _ssh_storage(tmp_path):
 def test_update_distribution_refresh_cache_ssh_records_cached_entry(tmp_path):
     """refresh_cache live-checks the ssh cache and records a verified entry."""
     storage = _ssh_storage(tmp_path)
-    with mock.patch("Yuki.kernel.remote_data_ops.list_cache_files",
+    with mock.patch("Yuki.kernel.storage.remote.list_cache_files",
                     create=True,
                     return_value=[{"name": "a.root", "size": 10},
                                   {"name": "b.root", "size": 20}]) as lister:
@@ -211,7 +211,7 @@ def test_update_distribution_refresh_cache_skips_registered(tmp_path):
     storage._remote_hosted_files = lambda kind: (
         [{"name": "dataset.root", "size": 99, "in_runner": True}], None)
 
-    with mock.patch("Yuki.kernel.remote_data_ops.list_cache_files",
+    with mock.patch("Yuki.kernel.storage.remote.list_cache_files",
                     create=True) as lister:
         storage.update_distribution(refresh_cache=True,
                                     cache_runner_id="runner-1")
@@ -233,7 +233,7 @@ def test_update_distribution_refresh_cache_preserves_transferred(tmp_path):
                                       "updated": "t0"}},
         },
     })
-    with mock.patch("Yuki.kernel.remote_data_ops.list_cache_files",
+    with mock.patch("Yuki.kernel.storage.remote.list_cache_files",
                     create=True,
                     return_value=[{"name": "a.root", "size": 10}]):
         storage.update_distribution(refresh_cache=True,
@@ -256,7 +256,7 @@ def test_update_distribution_refresh_cache_drops_stale_entry(tmp_path):
                                       "bytes": 20, "updated": "t0"}},
         },
     })
-    with mock.patch("Yuki.kernel.remote_data_ops.list_cache_files",
+    with mock.patch("Yuki.kernel.storage.remote.list_cache_files",
                     create=True, return_value=[]):
         storage.update_distribution(refresh_cache=True,
                                     cache_runner_id="runner-1")
@@ -269,7 +269,7 @@ def test_update_distribution_refresh_cache_ssh_failure_is_best_effort(
         tmp_path):
     """An unreachable ssh cache never breaks the refresh."""
     storage = _ssh_storage(tmp_path)
-    with mock.patch("Yuki.kernel.remote_data_ops.list_cache_files",
+    with mock.patch("Yuki.kernel.storage.remote.list_cache_files",
                     create=True, side_effect=OSError("boom")):
         dist = storage.update_distribution(refresh_cache=True,
                                            cache_runner_id="runner-1")

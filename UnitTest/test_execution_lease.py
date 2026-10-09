@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from Yuki.kernel import execution_lease
+from Yuki.kernel.execution import lease as execution_lease
 
 
 def _claim_worker(root, workflow_id, ready, start, output):
@@ -96,7 +96,7 @@ def test_terminal_owner_can_be_replaced_but_old_token_cannot_write(
 
 def test_stale_workflow_skips_shared_job_status_write(tmp_path, monkeypatch):
     """A late completion from an old workflow cannot overwrite its rerun."""
-    from Yuki.kernel.native_workflow import NativeWorkflow
+    from Yuki.kernel.workflows.native import NativeWorkflow
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
     old = execution_lease.claim_many(
         "project", "runner", "wf-old", ["job-a"])
@@ -121,7 +121,7 @@ def test_stale_workflow_skips_shared_job_status_write(tmp_path, monkeypatch):
 
 def test_legacy_workflow_pointer_also_blocks_late_status_write():
     """Pre-lease workflows cannot overwrite a job already reassigned."""
-    from Yuki.kernel.native_workflow import NativeWorkflow
+    from Yuki.kernel.workflows.native import NativeWorkflow
     workflow = NativeWorkflow.__new__(NativeWorkflow)
     workflow.uuid = "wf-old"
     workflow.lease_token = ""

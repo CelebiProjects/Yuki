@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from Yuki.kernel.vworkflow import VWorkflow
+from Yuki.kernel.workflows.base import VWorkflow
 
 
 class _DummyWorkflow(VWorkflow):

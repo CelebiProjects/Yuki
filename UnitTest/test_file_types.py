@@ -1,5 +1,5 @@
 """Tests for the file_types classification helpers."""
-from Yuki.kernel import file_types
+from Yuki.kernel.storage import file_types
 
 
 def test_is_plot_by_extension():

@@ -7,7 +7,7 @@ from unittest import mock
 from flask import Flask
 
 from Yuki.server.routes import status as status_routes
-from Yuki.kernel.locked_metadata import read_variable as read_locked_variable
+from Yuki.utils.locked_metadata import read_variable as read_locked_variable
 from Yuki.server.workflow_status_refresh import enqueue_once, running_refresh
 
 

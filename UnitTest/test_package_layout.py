@@ -1,35 +1,60 @@
-"""Import compatibility checks for the reorganized Yuki package."""
+"""Checks for the reorganized Yuki package boundaries."""
 import importlib
+from pathlib import Path
 
 import pytest
 
 
-@pytest.mark.parametrize(("legacy", "canonical"), [
-    ("Yuki.kernel.vjob", "Yuki.kernel.jobs.base"),
-    ("Yuki.kernel.container_job", "Yuki.kernel.jobs.container"),
-    ("Yuki.kernel.image_job", "Yuki.kernel.jobs.image"),
-    ("Yuki.kernel.vworkflow", "Yuki.kernel.workflows.base"),
-    ("Yuki.kernel.native_workflow", "Yuki.kernel.workflows.native"),
-    ("Yuki.kernel.ssh_workflow", "Yuki.kernel.workflows.ssh"),
-    ("Yuki.kernel.ihep_workflow", "Yuki.kernel.workflows.ihep"),
-    ("Yuki.kernel.reana_workflow", "Yuki.kernel.workflows.reana"),
-    ("Yuki.kernel.runner_config", "Yuki.kernel.runners.config"),
-    ("Yuki.kernel.ssh_pool", "Yuki.kernel.runners.ssh_pool"),
-    ("Yuki.kernel.execution_lease", "Yuki.kernel.execution.lease"),
-    ("Yuki.kernel.submission_store", "Yuki.kernel.execution.submissions"),
-    ("Yuki.kernel.registration_progress", "Yuki.kernel.execution.progress"),
-    ("Yuki.kernel.liveness", "Yuki.kernel.storage.liveness"),
-    ("Yuki.kernel.file_types", "Yuki.kernel.storage.file_types"),
-    ("Yuki.kernel.impression_transfer", "Yuki.services.impression_transfer"),
-    ("Yuki.kernel.runner_inventory", "Yuki.services.runner_inventory"),
-    ("Yuki.kernel.workflow_kill", "Yuki.services.workflow_kill"),
-    ("Yuki.kernel.workflow_purge", "Yuki.services.workflow_purge"),
-    ("Yuki.kernel.reana_booker", "Yuki.server.services.reana_booking"),
-    ("Yuki.kernel.locked_metadata", "Yuki.utils.locked_metadata"),
-    ("Yuki.kernel.resource_units", "Yuki.utils.resource_units"),
-    ("Yuki.utils.env_interpreter", "Yuki.kernel.runners.environments"),
-    ("Yuki.utils.snakefile", "Yuki.kernel.workflows.snakefile"),
-])
-def test_legacy_module_is_canonical_module(legacy, canonical):
-    """Legacy imports remain the same module object, preserving patch targets."""
-    assert importlib.import_module(legacy) is importlib.import_module(canonical)
+CANONICAL_MODULES = (
+    "Yuki.kernel.jobs.base",
+    "Yuki.kernel.jobs.container",
+    "Yuki.kernel.jobs.image",
+    "Yuki.kernel.workflows.base",
+    "Yuki.kernel.workflows.native",
+    "Yuki.kernel.workflows.ssh",
+    "Yuki.kernel.workflows.ihep",
+    "Yuki.kernel.workflows.reana",
+    "Yuki.kernel.runners.config",
+    "Yuki.kernel.runners.environments",
+    "Yuki.kernel.runners.ssh_pool",
+    "Yuki.kernel.execution.lease",
+    "Yuki.kernel.execution.submissions",
+    "Yuki.kernel.execution.progress",
+    "Yuki.kernel.execution.status",
+    "Yuki.kernel.execution.detached_copy",
+    "Yuki.kernel.execution.monitor",
+    "Yuki.kernel.execution.local",
+    "Yuki.kernel.storage.liveness",
+    "Yuki.kernel.storage.file_types",
+    "Yuki.kernel.storage.staging",
+    "Yuki.kernel.storage.remote",
+    "Yuki.kernel.storage.rawdata",
+    "Yuki.kernel.storage.impressions",
+    "Yuki.kernel.workflows.snakefile",
+    "Yuki.services.impression_transfer",
+    "Yuki.services.result_transfer",
+    "Yuki.services.runner_inventory",
+    "Yuki.services.workflow_kill",
+    "Yuki.services.workflow_purge",
+    "Yuki.server.services.reana_booking",
+    "Yuki.utils.locked_metadata",
+    "Yuki.utils.resource_units",
+)
+
+@pytest.mark.parametrize("module", CANONICAL_MODULES)
+def test_canonical_module_imports(module):
+    """Every canonical package path is importable."""
+    assert importlib.import_module(module) is not None
+
+
+def test_flat_kernel_implementations_are_removed():
+    """The kernel root is a namespace, not a home for implementations."""
+    kernel = Path(__file__).parents[1] / "Yuki" / "kernel"
+    assert sorted(path.name for path in kernel.glob("*.py")) == ["__init__.py"]
+
+
+def test_misplaced_utils_are_removed():
+    """Runner and workflow helpers no longer masquerade as generic utilities."""
+    utils = Path(__file__).parents[1] / "Yuki" / "utils"
+    assert not (utils / "env_interpreter.py").exists()
+    assert not (utils / "snakefile.py").exists()

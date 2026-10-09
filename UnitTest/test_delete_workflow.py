@@ -9,7 +9,7 @@ import pytest
 
 def test_vworkflow_delete_workspace_not_implemented():
     """The base workflow has no generic way to delete a workspace."""
-    from Yuki.kernel.vworkflow import VWorkflow
+    from Yuki.kernel.workflows.base import VWorkflow
 
     class _ConcreteVWorkflow(VWorkflow):
         """Concrete subclass so the abstract base can be instantiated."""
@@ -30,7 +30,7 @@ def test_vworkflow_delete_workspace_not_implemented():
 
 def test_ssh_delete_workspace_removes_remote_dir():
     """The remote workspace is deleted with a quoted rm -rf command."""
-    from Yuki.kernel.ssh_workflow import SshWorkflow
+    from Yuki.kernel.workflows.ssh import SshWorkflow
     workflow = SshWorkflow.__new__(SshWorkflow)
     workflow.remote_exec_path = "/remote/workflows/proj/wf one"
     workflow.logger = lambda msg: None
@@ -51,7 +51,7 @@ def test_ssh_delete_workspace_removes_remote_dir():
 
 def test_ssh_delete_workspace_failure_raises():
     """A nonzero remote exit code surfaces as a RuntimeError."""
-    from Yuki.kernel.ssh_workflow import SshWorkflow
+    from Yuki.kernel.workflows.ssh import SshWorkflow
     workflow = SshWorkflow.__new__(SshWorkflow)
     workflow.remote_exec_path = "/remote/workflows/proj/wf1"
     workflow.logger = lambda msg: None
@@ -68,7 +68,7 @@ def test_ssh_delete_workspace_failure_raises():
 
 def test_native_delete_workspace_removes_local_dir(tmp_path):
     """The local execution workspace is removed."""
-    from Yuki.kernel.native_workflow import NativeWorkflow
+    from Yuki.kernel.workflows.native import NativeWorkflow
     workflow = NativeWorkflow.__new__(NativeWorkflow)
     workflow.local_exec_path = str(tmp_path / "wf1")
     workflow.logger = lambda msg: None
@@ -84,7 +84,7 @@ def test_native_delete_workspace_removes_local_dir(tmp_path):
 
 def test_native_delete_workspace_missing_dir_no_raise(tmp_path):
     """Deleting an already-gone workspace does not raise."""
-    from Yuki.kernel.native_workflow import NativeWorkflow
+    from Yuki.kernel.workflows.native import NativeWorkflow
     workflow = NativeWorkflow.__new__(NativeWorkflow)
     workflow.local_exec_path = str(tmp_path / "gone")
     workflow.logger = lambda msg: None
@@ -94,7 +94,7 @@ def test_native_delete_workspace_missing_dir_no_raise(tmp_path):
 
 def test_reana_delete_workspace_calls_client():
     """The online workflow is deleted with workspace + all-runs flags."""
-    from Yuki.kernel import reana_workflow
+    from Yuki.kernel.workflows import reana as reana_workflow
     workflow = reana_workflow.ReanaWorkflow.__new__(
         reana_workflow.ReanaWorkflow)
     workflow.machine_id = "r1"

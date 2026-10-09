@@ -22,16 +22,15 @@ kernel/
   jobs/        job domain models
   workflows/   workflow model, Snakefile builder, and execution backends
   runners/     runner configuration, environment mapping, and SSH pooling
-  execution/   leases, submissions, and progress snapshots
-  storage/     liveness and output-file classification
+  execution/   status, leases, submissions, monitoring, and local execution
+  storage/     staging, impressions, raw data, remote data, and file metadata
 ```
 
-Legacy flat modules such as `Yuki.kernel.vworkflow` remain compatibility
-aliases for one deprecation cycle. They resolve to the same module objects as
-their canonical paths, so existing imports and `unittest.mock.patch` targets
-continue to affect the implementation. The legacy alias modules are the sole
-exception to the dependency direction above. New code must use canonical paths.
+The former flat kernel modules have been removed. Code and `unittest.mock.patch`
+targets must use the canonical package paths; keeping duplicate compatibility
+files would make the physical layout misleading and allow the old architecture
+to keep spreading.
 
 Server-only REANA booking lives in `Yuki.server.services`; reusable lifecycle,
-inventory, and transfer operations live in `Yuki.services`. Do not move domain
+inventory, and result-transfer operations live in `Yuki.services`. Do not move domain
 logic into `utils` merely to avoid choosing an owner.

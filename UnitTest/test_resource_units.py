@@ -1,7 +1,7 @@
 """Tests for Python-side workflow resource conversion."""
 import pytest
 
-from Yuki.kernel.resource_units import memory_to_mb
+from Yuki.utils.resource_units import memory_to_mb
 
 
 @pytest.mark.parametrize(("quantity", "expected"), [

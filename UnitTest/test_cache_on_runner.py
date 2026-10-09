@@ -5,7 +5,7 @@ import os
 from unittest import mock
 
 from CelebiChrono.utils.metadata import ConfigFile
-from Yuki.kernel.container_job import ContainerJob
+from Yuki.kernel.jobs.container import ContainerJob
 
 
 def _job(machine_id="m1", is_input=False, cache=True):

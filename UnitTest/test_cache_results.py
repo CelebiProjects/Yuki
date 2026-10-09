@@ -3,7 +3,7 @@
 import json
 from unittest import mock
 
-from Yuki.kernel.remote_data_ops import cache_results_job
+from Yuki.kernel.storage.remote import cache_results_job
 
 
 class _FakeSsh:
@@ -65,9 +65,9 @@ def test_cache_results_copies_stageout_into_cache(tmp_path):
     _write_runner_config(tmp_path)
     fake = _FakeSsh()
     updates = []
-    with mock.patch("Yuki.kernel.vjob.VJob",
+    with mock.patch("Yuki.kernel.jobs.base.VJob",
                     return_value=_job_stub()), \
-            mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+            mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                        return_value=fake):
         result = cache_results_job("r1", "proj", "imp1",
                                    updates.append, yuki_dir=str(tmp_path))
@@ -87,9 +87,9 @@ def test_cache_results_records_distribution(tmp_path):
     """distribution.json gains a transferred cache entry for the runner."""
     _write_runner_config(tmp_path)
     fake = _FakeSsh(files=[("a.root", "/cache/a.root", 10)])
-    with mock.patch("Yuki.kernel.vjob.VJob",
+    with mock.patch("Yuki.kernel.jobs.base.VJob",
                     return_value=_job_stub()), \
-            mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+            mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                        return_value=fake):
         cache_results_job("r1", "proj", "imp1",
                           lambda _s: None, yuki_dir=str(tmp_path))
@@ -108,9 +108,9 @@ def test_cache_results_no_workflow_noop(tmp_path):
     _write_runner_config(tmp_path)
     fake = _FakeSsh()
     updates = []
-    with mock.patch("Yuki.kernel.vjob.VJob",
+    with mock.patch("Yuki.kernel.jobs.base.VJob",
                     return_value=_job_stub(workflow_id="")), \
-            mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+            mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                        return_value=fake):
         result = cache_results_job("r1", "proj", "imp1",
                                    updates.append, yuki_dir=str(tmp_path))
@@ -124,9 +124,9 @@ def test_cache_results_copy_failure_raises(tmp_path):
     _write_runner_config(tmp_path)
     fake = _FakeSsh()
     fake.exec = lambda command, timeout=300: ("", "no space left", 1)
-    with mock.patch("Yuki.kernel.vjob.VJob",
+    with mock.patch("Yuki.kernel.jobs.base.VJob",
                     return_value=_job_stub()), \
-            mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+            mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                        return_value=fake):
         try:
             cache_results_job("r1", "proj", "imp1",
@@ -144,9 +144,9 @@ def test_cache_results_skips_unfinished_jobs(tmp_path):
     _write_runner_config(tmp_path)
     fake = _FakeSsh()
     updates = []
-    with mock.patch("Yuki.kernel.vjob.VJob",
+    with mock.patch("Yuki.kernel.jobs.base.VJob",
                     return_value=_job_stub(status="failed")), \
-            mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+            mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                        return_value=fake):
         result = cache_results_job("r1", "proj", "imp1",
                                    updates.append, yuki_dir=str(tmp_path))
@@ -161,9 +161,9 @@ def test_cache_results_skips_missing_stageout(tmp_path):
     _write_runner_config(tmp_path)
     fake = _FakeSsh(stageout_exists=False)
     updates = []
-    with mock.patch("Yuki.kernel.vjob.VJob",
+    with mock.patch("Yuki.kernel.jobs.base.VJob",
                     return_value=_job_stub()), \
-            mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+            mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                        return_value=fake):
         result = cache_results_job("r1", "proj", "imp1",
                                    updates.append, yuki_dir=str(tmp_path))

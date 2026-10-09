@@ -3,7 +3,7 @@
 import json
 import os
 
-from Yuki.kernel.file_staging import FileStager, walk_files
+from Yuki.kernel.storage.staging import FileStager, walk_files
 
 
 def test_walk_files_yields_relative_paths(tmp_path):

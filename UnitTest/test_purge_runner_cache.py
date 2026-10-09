@@ -6,7 +6,7 @@ from unittest import mock
 
 from click.testing import CliRunner
 
-from Yuki.kernel.remote_data_ops import purge_runner_cache
+from Yuki.kernel.storage.remote import purge_runner_cache
 from Yuki.main import cli
 
 
@@ -81,7 +81,7 @@ def test_purge_deletes_matching_remote_dirs(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {"imp-a": {}, "imp-b": {}}, "proj2": {"imp-c": {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         summary = purge_runner_cache("r1", project="proj1", yuki_dir=str(tmp_path))
 
@@ -102,7 +102,7 @@ def test_purge_skips_running_registration(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {"imp-running": {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         summary = purge_runner_cache("r1", project="proj1", yuki_dir=str(tmp_path))
 
@@ -121,7 +121,7 @@ def test_purge_clears_local_markers(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {"imp-reg": {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         summary = purge_runner_cache("r1", project="proj1", yuki_dir=str(tmp_path))
 
@@ -143,7 +143,7 @@ def test_purge_drops_distribution_cache_entries(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {"imp-cache": {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         purge_runner_cache("r1", project="proj1", yuki_dir=str(tmp_path))
 
@@ -162,7 +162,7 @@ def test_purge_dry_run_changes_nothing(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {"imp-reg": {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         summary = purge_runner_cache("r1", project="proj1", dry_run=True,
                                      yuki_dir=str(tmp_path))
@@ -179,7 +179,7 @@ def test_purge_filters_by_impression(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {"imp-a": {}, "imp-b": {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         summary = purge_runner_cache("r1", project="proj1",
                                      impression="imp-a", yuki_dir=str(tmp_path))
@@ -229,7 +229,7 @@ def test_cli_purges_with_resolved_runner_id(monkeypatch, tmp_path):
     planned = _summary([{"project": "proj1", "impression": "imp-a",
                          "kind": "registered",
                          "remote_dir": "/remote/work/impressions/proj1/imp-a"}])
-    with mock.patch("Yuki.kernel.remote_data_ops.purge_runner_cache",
+    with mock.patch("Yuki.kernel.storage.remote.purge_runner_cache",
                     return_value=planned) as m_purge:
         result = _invoke(monkeypatch, tmp_path,
                          ["purge-ssh-runner-cache", "farm", "--yes"])
@@ -246,7 +246,7 @@ def test_cli_dry_run_skips_confirmation(monkeypatch, tmp_path):
                          "kind": "cache",
                          "remote_dir": "/remote/work/impressions/proj1/imp-a"}],
                        dry_run=True)
-    with mock.patch("Yuki.kernel.remote_data_ops.purge_runner_cache",
+    with mock.patch("Yuki.kernel.storage.remote.purge_runner_cache",
                     return_value=planned) as m_purge:
         result = _invoke(monkeypatch, tmp_path,
                          ["purge-ssh-runner-cache", "farm",
@@ -260,7 +260,7 @@ def test_cli_dry_run_skips_confirmation(monkeypatch, tmp_path):
 def test_cli_confirmation_aborts(monkeypatch, tmp_path):
     """Answering 'n' aborts before the kernel purge runs."""
     _write_runner_config(tmp_path)
-    with mock.patch("Yuki.kernel.remote_data_ops.purge_runner_cache",
+    with mock.patch("Yuki.kernel.storage.remote.purge_runner_cache",
                     return_value=_summary([])) as m_purge:
         result = _invoke(monkeypatch, tmp_path,
                          ["purge-ssh-runner-cache", "farm"], user_input="n\n")
@@ -270,7 +270,7 @@ def test_cli_confirmation_aborts(monkeypatch, tmp_path):
 
 def test_purge_runner_cache_superseded_scope(tmp_path):
     """superseded=True selects only explicitly-superseded impressions."""
-    from Yuki.kernel import liveness
+    from Yuki.kernel.storage import liveness
     _write_runner_config(tmp_path)
     live_a, old_b = "a" * 32, "b" * 32
     liveness.save_live_set("proj1", [live_a], [old_b],
@@ -278,7 +278,7 @@ def test_purge_runner_cache_superseded_scope(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {live_a: {}, old_b: {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         summary = purge_runner_cache("r1", superseded=True, dry_run=True,
                                      yuki_dir=str(tmp_path))
@@ -295,7 +295,7 @@ def test_purge_superseded_never_touches_unknown(tmp_path):
     fake = _FakeSsh(tree={"remote": {"work": {"impressions": {
         "proj1": {live_a: {}},
     }}}})
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=fake):
         summary = purge_runner_cache("r1", superseded=True, dry_run=True,
                                      yuki_dir=str(tmp_path))

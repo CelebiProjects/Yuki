@@ -7,7 +7,7 @@ from CelebiChrono.utils.metadata import ConfigFile
 from Yuki.kernel.storage import liveness
 from Yuki.kernel.runners import config as runner_config
 from Yuki.kernel.workflows.ssh import _SshConnection
-from Yuki.kernel.status_constants import IN_MOVEMENT, translate_to_musical
+from Yuki.kernel.execution.status import IN_MOVEMENT, translate_to_musical
 from Yuki.kernel.workflows.base import VWorkflow
 
 

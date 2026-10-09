@@ -23,7 +23,7 @@ from Yuki.kernel.jobs.base import VJob
 from Yuki.kernel.jobs.container import ContainerJob
 from Yuki.kernel.jobs.image import ImageJob
 from Yuki.utils.resource_units import memory_to_mb
-from Yuki.kernel.status_constants import (
+from Yuki.kernel.execution.status import (
     PRELUDE, IN_MOVEMENT, DISSONANCE, FAILED,
     CODA, FINAL_NOTE, STOPPED, DELETED,
     translate_to_musical, is_terminal_status
@@ -31,7 +31,7 @@ from Yuki.kernel.status_constants import (
 from . import snakefile
 from ..execution import lease as execution_lease
 from ..execution.lease import WorkflowAlreadyActive, WorkflowLeaseConflict
-from ..file_staging import walk_files
+from ..storage.staging import walk_files
 from Yuki.utils.locked_metadata import read_variable as read_locked_variable
 
 CHERN_CACHE = ChernCache.instance()
@@ -846,7 +846,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         try:
             # Lazy import: impression_storage imports this module at module
             # level, so importing it here avoids a circular import.
-            from Yuki.kernel.impression_storage import \
+            from Yuki.kernel.storage.impressions import \
                 refresh_workflow_distributions
             refresh_workflow_distributions(self.project_uuid, self, status)
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -862,7 +862,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         try:
             # Lazy import: impression_storage imports this module at module
             # level, so importing it here avoids a circular import.
-            from Yuki.kernel.impression_storage import refresh_job_filelists
+            from Yuki.kernel.storage.impressions import refresh_job_filelists
             return refresh_job_filelists(self.project_uuid, self, status,
                                          terminal_transition)
         except Exception as exc:  # pylint: disable=broad-exception-caught

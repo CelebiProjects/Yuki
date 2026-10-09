@@ -10,7 +10,7 @@ import click
 from CelebiChrono.utils.metadata import ConfigFile
 
 from Yuki.kernel.runners import config as runner_config
-from Yuki.kernel.local_execution import execute_workflow, timestamp_logger
+from Yuki.kernel.execution.local import execute_workflow, timestamp_logger
 
 
 def _root():

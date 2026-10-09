@@ -1,4 +1,4 @@
-"""Tests for Yuki.kernel.result_transfer."""
+"""Tests for Yuki.services.result_transfer."""
 # pylint: disable=missing-function-docstring
 import json
 import os
@@ -8,7 +8,7 @@ from unittest import mock
 import pytest
 from CelebiChrono.utils.metadata import ConfigFile
 
-from Yuki.kernel import result_transfer
+from Yuki.services import result_transfer
 
 
 def test_resolve_yuki_dir_defaults_to_home():
@@ -295,7 +295,7 @@ def test_run_transfer_with_mocked_remote(tmp_path, monkeypatch):
     _write_runner_config(yuki_dir)
     monkeypatch.setenv("YUKIDIR", str(yuki_dir))
 
-    with mock.patch("Yuki.kernel.result_transfer._ssh_connection") as ssh_conn, \
+    with mock.patch("Yuki.services.result_transfer._ssh_connection") as ssh_conn, \
          _patch_server_config(yuki_dir):
         ssh = mock.MagicMock()
         ssh.exists.return_value = False
@@ -328,7 +328,7 @@ def test_run_transfer_updates_distribution_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("YUKIDIR", str(yuki_dir))
 
     ssh = FakeSsh()
-    with mock.patch("Yuki.kernel.result_transfer._ssh_connection") as ssh_conn, \
+    with mock.patch("Yuki.services.result_transfer._ssh_connection") as ssh_conn, \
          _patch_server_config(yuki_dir):
         ssh_conn.return_value.__enter__ = mock.Mock(return_value=ssh)
         ssh_conn.return_value.__exit__ = mock.Mock(return_value=False)
@@ -352,7 +352,7 @@ def test_run_transfer_runner_to_yuki_lands_in_machine_stageout(
     _write_runner_config(yuki_dir)
     monkeypatch.setenv("YUKIDIR", str(yuki_dir))
 
-    with mock.patch("Yuki.kernel.result_transfer._ssh_connection") as ssh_conn, \
+    with mock.patch("Yuki.services.result_transfer._ssh_connection") as ssh_conn, \
          _patch_server_config(yuki_dir):
         ssh = mock.MagicMock()
         ssh.exists.return_value = True
@@ -427,7 +427,7 @@ def test_run_transfer_reana_to_ssh_pulls_via_reana_cli(tmp_path, monkeypatch):
     ssh = FakeSsh()
     ssh.exec_script = _reana_exec_script(ssh, [("a.txt", 5), ("sub/b.txt", 4)])
 
-    with mock.patch("Yuki.kernel.result_transfer._ssh_connection") as ssh_conn, \
+    with mock.patch("Yuki.services.result_transfer._ssh_connection") as ssh_conn, \
          _patch_server_config(yuki_dir, impression="8355eae8"):
         ssh_conn.return_value.__enter__ = mock.Mock(return_value=ssh)
         ssh_conn.return_value.__exit__ = mock.Mock(return_value=False)
@@ -457,7 +457,7 @@ def test_run_transfer_reana_to_ssh_missing_cli_fails(tmp_path, monkeypatch):
     ssh.exec_script = lambda cmd: ("", "not found", 1) if "which" in cmd \
         else ("", "", 0)
 
-    with mock.patch("Yuki.kernel.result_transfer._ssh_connection") as ssh_conn, \
+    with mock.patch("Yuki.services.result_transfer._ssh_connection") as ssh_conn, \
          _patch_server_config(yuki_dir, impression="8355eae8"):
         ssh_conn.return_value.__enter__ = mock.Mock(return_value=ssh)
         ssh_conn.return_value.__exit__ = mock.Mock(return_value=False)

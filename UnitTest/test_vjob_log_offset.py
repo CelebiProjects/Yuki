@@ -1,5 +1,5 @@
 """Tests for VJob.log offset support."""
-from Yuki.kernel.vjob import VJob
+from Yuki.kernel.jobs.base import VJob
 
 
 def _make_vjob(path, machine_id="runner-1"):

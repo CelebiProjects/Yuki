@@ -13,7 +13,7 @@ import time
 from CelebiChrono.utils import metadata
 from .base import VJob
 from .image import ImageJob
-from ..file_staging import walk_files
+from ..storage.staging import walk_files
 
 _debug = logging.getLogger("Yuki.kernel")
 

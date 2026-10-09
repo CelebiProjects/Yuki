@@ -22,7 +22,7 @@ class TestNativeWorkflowPropagation(unittest.TestCase):
         self.workflow_uuid = "w" * 32
 
         # Construct NativeWorkflow against the temp HOME.
-        from Yuki.kernel.native_workflow import NativeWorkflow
+        from Yuki.kernel.workflows.native import NativeWorkflow
         self.workflow = NativeWorkflow(self.project_uuid, [], None)
         # Override generated uuid -> known value so paths are predictable.
         self.workflow.uuid = self.workflow_uuid
@@ -101,7 +101,7 @@ class TestNativeWorkflowPropagation(unittest.TestCase):
 
     def test_propagate_missing_done_no_logs_becomes_failed_with_skip_message(self):
         """A terminal workflow marks a never-run job as failed with skip detail."""
-        from Yuki.kernel.status_constants import FAILED
+        from Yuki.kernel.execution.status import FAILED
         job = self._make_job("a" * 32)
         self.workflow.jobs = [job]
         # No .done, no imp<short>/logs/ directory.
@@ -132,7 +132,7 @@ class TestNativeWorkflowPropagation(unittest.TestCase):
 
     def test_propagate_missing_done_terminal_becomes_failed(self):
         """A job that ran and failed carries the traceback into its status."""
-        from Yuki.kernel.status_constants import FAILED
+        from Yuki.kernel.execution.status import FAILED
         short = "a" * 7
         # 32-char uuid whose first 7 chars match `short`.
         job_uuid = short + "z" * 25
@@ -169,7 +169,7 @@ class TestNativeWorkflowPropagation(unittest.TestCase):
 
     def test_propagate_does_not_churn_terminal_status(self):
         """Terminal statuses are never overwritten by propagation."""
-        from Yuki.kernel.status_constants import CODA, FINAL_NOTE, FAILED, STOPPED, DELETED
+        from Yuki.kernel.execution.status import CODA, FINAL_NOTE, FAILED, STOPPED, DELETED
         coda_job = self._make_job("a" * 32, status_value=CODA)
         final_job = self._make_job("b" * 32, status_value=FINAL_NOTE)
         failed_job = self._make_job("c" * 32, status_value=FAILED)
@@ -283,7 +283,7 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
         self.project_uuid = "p" * 32
         self.workflow_uuid = "w" * 32
 
-        from Yuki.kernel.native_workflow import NativeWorkflow
+        from Yuki.kernel.workflows.native import NativeWorkflow
         self.workflow = NativeWorkflow(self.project_uuid, [], None)
         self.workflow.uuid = self.workflow_uuid
         self.workflow.local_exec_path = os.path.join(
@@ -317,7 +317,7 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
     def test_failed_input_fails_fast_without_polling(self):
         """A permanently failed input immediately fails the workflow and its
         execution jobs, naming the blocking input."""
-        from Yuki.kernel.status_constants import FAILED
+        from Yuki.kernel.execution.status import FAILED
 
         input_job = self._make_job("a" * 32, status_value="failed", is_input=True)
         exec_job = self._make_job("b" * 32)
@@ -325,7 +325,7 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
 
         # Polling dependency workflows would be pointless: fail fast must not
         # reach VWorkflow.create.
-        with patch("Yuki.kernel.vworkflow.VWorkflow.create",
+        with patch("Yuki.kernel.workflows.base.VWorkflow.create",
                    side_effect=AssertionError("should not poll workflows")):
             result = self.workflow._wait_for_dependencies()
 
@@ -339,7 +339,7 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
     def test_dependency_wait_timeout_fails_loudly(self):
         """Exhausting the wait window marks the workflow and jobs failed with
         a message naming the still-pending inputs."""
-        from Yuki.kernel.status_constants import FAILED
+        from Yuki.kernel.execution.status import FAILED
 
         input_job = self._make_job("a" * 32, status_value="prelude", is_input=True)
         exec_job = self._make_job("b" * 32)
@@ -348,9 +348,9 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
         dep_workflow = MagicMock()
         dep_workflow.update_workflow_status.return_value = None
 
-        with patch("Yuki.kernel.vworkflow.VWorkflow.create",
+        with patch("Yuki.kernel.workflows.base.VWorkflow.create",
                    return_value=dep_workflow), \
-             patch("Yuki.kernel.vworkflow.time.sleep"):
+             patch("Yuki.kernel.workflows.base.time.sleep"):
             result = self.workflow._wait_for_dependencies()
 
         self.assertIs(result, False)
@@ -362,7 +362,7 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
 
     def test_backend_failure_message_includes_exception(self):
         """The generic backend failure message carries the exception text."""
-        from Yuki.kernel.status_constants import FAILED
+        from Yuki.kernel.execution.status import FAILED
 
         exec_job = self._make_job("b" * 32)
         self.workflow.jobs = [exec_job]
@@ -385,7 +385,7 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
         ssh handler's dissonance on remote-start failure, or a coda from
         an earlier run) must not be clobbered with a generic failure.
         """
-        from Yuki.kernel.status_constants import DISSONANCE, FAILED
+        from Yuki.kernel.execution.status import DISSONANCE, FAILED
 
         dissonant_job = self._make_job("a" * 32, status_value=DISSONANCE)
         running_job = self._make_job("b" * 32, status_value="in_movement")
@@ -407,13 +407,13 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
 
     def test_successful_wait_returns_true(self):
         """Fully finished inputs let the wait complete and return True."""
-        from Yuki.kernel.status_constants import CODA
+        from Yuki.kernel.execution.status import CODA
 
         input_job = self._make_job("a" * 32, status_value=CODA, is_input=True)
         exec_job = self._make_job("b" * 32)
         self.workflow.jobs = [input_job, exec_job]
 
-        with patch("Yuki.kernel.vworkflow.VWorkflow.create",
+        with patch("Yuki.kernel.workflows.base.VWorkflow.create",
                    side_effect=AssertionError("should not poll workflows")):
             result = self.workflow._wait_for_dependencies()
 

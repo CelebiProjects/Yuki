@@ -12,7 +12,7 @@ from abc import ABC
 from CelebiChrono.utils import metadata
 from Yuki.utils.locked_metadata import read_variable as read_locked_variable
 
-from ..status_constants import (
+from ..execution.status import (
     translate_to_musical, translate_to_legacy, is_valid_status,
     get_detailed_status_message, is_terminal_status,
     SILENCE, PRELUDE, IN_MOVEMENT, COMPOSING, ORCHESTRATING,

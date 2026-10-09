@@ -13,7 +13,7 @@ import json
 import os
 
 from Yuki.kernel.runners import config as runner_config
-from Yuki.kernel.file_staging import walk_files
+from Yuki.kernel.storage.staging import walk_files
 from Yuki.kernel.workflows.ssh import _SshConnection
 
 

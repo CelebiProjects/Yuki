@@ -43,7 +43,7 @@ def test_task_exec_impression_logs_submit_finished():
 def test_duplicate_submission_returns_existing_workflow():
     """An identical active job set is idempotent instead of launching again."""
     from Yuki.server import tasks
-    from Yuki.kernel.execution_lease import WorkflowAlreadyActive
+    from Yuki.kernel.execution.lease import WorkflowAlreadyActive
     workflow = mock.Mock()
     workflow.uuid = "wf-new"
     workflow.run.side_effect = WorkflowAlreadyActive(
@@ -63,7 +63,7 @@ def test_duplicate_submission_returns_existing_workflow():
 def test_partial_overlap_returns_conflict_without_backend_retry():
     """A partial overlap is reported and not retried as another workflow."""
     from Yuki.server import tasks
-    from Yuki.kernel.execution_lease import WorkflowLeaseConflict
+    from Yuki.kernel.execution.lease import WorkflowLeaseConflict
     workflow = mock.Mock()
     workflow.uuid = "wf-new"
     workflow.run.side_effect = WorkflowLeaseConflict(
@@ -84,8 +84,8 @@ def test_partial_overlap_returns_conflict_without_backend_retry():
 def test_partial_overlap_is_persisted_as_blocked(tmp_path, monkeypatch):
     """A rejected DAG remains visible after the Celery result disappears."""
     from Yuki.server import tasks
-    from Yuki.kernel.execution_lease import WorkflowLeaseConflict
-    from Yuki.kernel.submission_store import SubmissionStore
+    from Yuki.kernel.execution.lease import WorkflowLeaseConflict
+    from Yuki.kernel.execution.submissions import SubmissionStore
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
     store, _ = SubmissionStore.create(
         "proj", ["imp1", "imp2"], "runner-1", submission_id="sub-1")
@@ -113,7 +113,7 @@ def test_partial_overlap_is_persisted_as_blocked(tmp_path, monkeypatch):
 def test_unexpected_build_failure_is_persisted(tmp_path, monkeypatch):
     """Construction exceptions cannot leave an accepted submission silent."""
     from Yuki.server import tasks
-    from Yuki.kernel.submission_store import SubmissionStore
+    from Yuki.kernel.execution.submissions import SubmissionStore
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
     store, _ = SubmissionStore.create(
         "proj", ["imp1"], "runner-1", submission_id="sub-1")
@@ -182,7 +182,7 @@ def test_task_update_workflow_status_skips_stopped(tmp_path, monkeypatch):
 @pytest.mark.parametrize("status", ["finished", "coda", "failed"])
 def test_refresh_workflow_distributions_terminal(status):
     """Terminal workflows refresh every non-algorithm job's registry."""
-    from Yuki.kernel.impression_storage import refresh_workflow_distributions
+    from Yuki.kernel.storage.impressions import refresh_workflow_distributions
     task_job = mock.Mock()
     task_job.job_type.return_value = "task"
     task_job.uuid = "imp1"
@@ -194,7 +194,7 @@ def test_refresh_workflow_distributions_terminal(status):
     workflow.jobs = [task_job, algo_job]
     workflow.machine_id = "runner-1"
 
-    with mock.patch("Yuki.kernel.impression_storage.ImpressionStorage") as ims:
+    with mock.patch("Yuki.kernel.storage.impressions.ImpressionStorage") as ims:
         refresh_workflow_distributions("proj", workflow, status)
 
     ims.assert_called_once_with("proj", "imp1")
@@ -204,11 +204,11 @@ def test_refresh_workflow_distributions_terminal(status):
 
 def test_refresh_workflow_distributions_no_refresh_while_running():
     """A non-terminal workflow status leaves the registry alone."""
-    from Yuki.kernel.impression_storage import refresh_workflow_distributions
+    from Yuki.kernel.storage.impressions import refresh_workflow_distributions
     workflow = mock.Mock()
     workflow.jobs = []
 
-    with mock.patch("Yuki.kernel.impression_storage.ImpressionStorage") as ims:
+    with mock.patch("Yuki.kernel.storage.impressions.ImpressionStorage") as ims:
         refresh_workflow_distributions("proj", workflow, "running")
 
     ims.assert_not_called()
@@ -216,7 +216,7 @@ def test_refresh_workflow_distributions_no_refresh_while_running():
 
 def test_refresh_workflow_distributions_survives_failure():
     """A failing refresh never fails the status update."""
-    from Yuki.kernel.impression_storage import refresh_workflow_distributions
+    from Yuki.kernel.storage.impressions import refresh_workflow_distributions
     task_job = mock.Mock()
     task_job.job_type.return_value = "task"
     task_job.uuid = "imp1"
@@ -225,6 +225,6 @@ def test_refresh_workflow_distributions_survives_failure():
     workflow.jobs = [task_job]
     workflow.machine_id = "runner-1"
 
-    with mock.patch("Yuki.kernel.impression_storage.ImpressionStorage") as ims:
+    with mock.patch("Yuki.kernel.storage.impressions.ImpressionStorage") as ims:
         ims.return_value.update_distribution.side_effect = OSError("boom")
         refresh_workflow_distributions("proj", workflow, "failed")  # no raise

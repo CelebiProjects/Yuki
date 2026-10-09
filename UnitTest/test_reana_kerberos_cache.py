@@ -9,11 +9,11 @@ import os
 from unittest import mock
 
 from CelebiChrono.utils.metadata import ConfigFile
-from Yuki.kernel import vworkflow
-from Yuki.kernel.container_job import ContainerJob
-from Yuki.kernel.reana_workflow import ReanaWorkflow
-from Yuki.kernel.ssh_workflow import SshWorkflow
-from Yuki.kernel.vjob import VJob
+from Yuki.kernel.workflows import base as vworkflow
+from Yuki.kernel.jobs.container import ContainerJob
+from Yuki.kernel.workflows.reana import ReanaWorkflow
+from Yuki.kernel.workflows.ssh import SshWorkflow
+from Yuki.kernel.jobs.base import VJob
 
 
 def _write_runner_flag(tmp_path, machine_id, value):

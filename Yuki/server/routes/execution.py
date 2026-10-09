@@ -7,10 +7,10 @@ from flask import Blueprint, jsonify, request
 
 from ...kernel.jobs.base import VJob
 from ...kernel.jobs.container import ContainerJob
-from ...kernel.impression_storage import ImpressionStorage
+from ...kernel.storage.impressions import ImpressionStorage
 from ...kernel.execution.submissions import SubmissionStore
 from ...kernel.execution.lease import workflow_is_active
-from ...kernel.status_constants import (
+from ...kernel.execution.status import (
     SILENCE, TUNING, FAILED, DISSONANCE,
 )
 from ..config import config

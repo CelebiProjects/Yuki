@@ -12,7 +12,7 @@ import os
 from CelebiChrono.utils import csys
 from CelebiChrono.utils import metadata
 from .base import VJob
-from ..status_constants import COMPOSING, ORCHESTRATING
+from ..execution.status import COMPOSING, ORCHESTRATING
 # from Yuki.kernel.VWorkflow import VWorkflow
 class ImageJob(VJob):
     """

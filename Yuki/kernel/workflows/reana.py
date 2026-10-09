@@ -9,10 +9,10 @@ import os
 import time
 import json
 from CelebiChrono.utils import metadata
-from Yuki.kernel.status_constants import ORCHESTRATING
+from Yuki.kernel.execution.status import ORCHESTRATING
 from .base import VWorkflow, _yuki_dir
 from ..storage import file_types  # pylint: disable=unused-import  # re-exported for tests
-from ..file_staging import walk_files
+from ..storage.staging import walk_files
 
 # Try to import reana_client, but it might not be available
 try:

@@ -3,8 +3,8 @@ import json
 import os
 from unittest import mock
 
-from Yuki.kernel import liveness
-from Yuki.kernel import workflow_purge
+from Yuki.kernel.storage import liveness
+from Yuki.services import workflow_purge
 
 
 def _workflow_mirror(tmp_path, project, workflow, machine_id,

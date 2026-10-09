@@ -645,7 +645,7 @@ def test_yuki_overview_returns_runner_inventory(monkeypatch, tmp_path):
                 "yuki": {"origin": "collected", "files": 3, "bytes": 40},
             }
     }, f)
-    from Yuki.kernel import liveness
+    from Yuki.kernel.storage import liveness
     liveness.save_live_set("proj", [impression], [], yuki_dir=str(tmp_path))
     r = _app(runner_routes.bp).test_client().get(
         "/yuki-overview?project_uuid=proj")
@@ -667,7 +667,7 @@ def test_refresh_distribution_route(monkeypatch, tmp_path):
     fake.update_distribution.return_value = {"live": 1, "superseded": 0,
                                              "live_workflows": 1}
     from Yuki.server.routes import status as status_routes
-    with mock.patch("Yuki.kernel.impression_storage.ImpressionStorage",
+    with mock.patch("Yuki.kernel.storage.impressions.ImpressionStorage",
                     return_value=fake) as storage:
         app = _app(status_routes.bp)
         r = app.test_client().post("/refresh-distribution/proj/imp-1")

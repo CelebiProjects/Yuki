@@ -8,11 +8,11 @@ from unittest import mock
 
 import pytest
 
-from Yuki.kernel.status_constants import CODA
+from Yuki.kernel.execution.status import CODA
 
 
 def _storage(tmp_path):
-    from Yuki.kernel import impression_storage as ims
+    from Yuki.kernel.storage import impressions as ims
     s = ims.ImpressionStorage.__new__(ims.ImpressionStorage)
     s.project_uuid = "proj-1"
     s.impression = "imp7"
@@ -466,7 +466,7 @@ def _registered_storage(tmp_path, status):
 
 def test_copying_status_shows_growing_files_without_freezing_partial_cache(tmp_path):
     """Show live destination files and refresh sizes as copying proceeds."""
-    from Yuki.kernel.registration_progress import ProgressCache
+    from Yuki.kernel.execution.progress import ProgressCache
 
     storage, ims = _registered_storage(tmp_path, "running")
     machine_dir = tmp_path / "job" / "runner-1"
@@ -501,7 +501,7 @@ def test_file_status_endpoint_returns_while_remote_scan_is_blocked(  # pylint: d
         tmp_path, monkeypatch, registration_status):
     """Live and final file lists must not block the HTTP status request."""
     from flask import Flask
-    from Yuki.kernel.registration_progress import ProgressCache
+    from Yuki.kernel.execution.progress import ProgressCache
     from Yuki.server.routes import execution
 
     storage, ims = _registered_storage(tmp_path, registration_status)
@@ -545,7 +545,7 @@ def test_archived_listing_replaces_old_partial_cache_and_caches_empty(tmp_path):
     storage, ims = _registered_storage(tmp_path, "archived")
     machine_dir = tmp_path / "job" / "runner-1"
     _write_cache(machine_dir, "remote-data", [{"name": "partial.root", "size": 10}])
-    from Yuki.kernel.registration_progress import ProgressCache
+    from Yuki.kernel.execution.progress import ProgressCache
     with mock.patch.object(ims, "remote_listing_cache", ProgressCache(wait=1)), \
             mock.patch.object(ims.remote_data_ops, "list_managed_files", return_value=[]) as scan:
         assert storage.file_status() == []

@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from Yuki.kernel.ssh_workflow import SshWorkflow
+from Yuki.kernel.workflows.ssh import SshWorkflow
 
 
 def _workflow(tmp_path, monkeypatch, config_data):
@@ -104,7 +104,7 @@ def test_remote_exec_path_has_workflows_and_project(tmp_path, monkeypatch):
     monkeypatch.setenv("YUKIDIR", str(yuki_dir))
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    from Yuki.kernel.vworkflow import VWorkflow
+    from Yuki.kernel.workflows.base import VWorkflow
 
     def fake_init(self, project_uuid, _jobs, uuid=None):
         self.project_uuid = project_uuid

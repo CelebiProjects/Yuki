@@ -3,7 +3,7 @@ from unittest import mock
 
 from flask import Flask
 
-from Yuki.kernel.submission_store import SubmissionStore
+from Yuki.kernel.execution.submissions import SubmissionStore
 from Yuki.server.routes import execution, status as status_route
 
 

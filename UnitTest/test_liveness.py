@@ -1,9 +1,9 @@
-"""Tests for the live-set registry (kernel/liveness.py)."""
+"""Tests for the live-set registry (kernel/storage/liveness.py)."""
 import json
 import os
 from unittest import mock
 
-from Yuki.kernel import liveness
+from Yuki.kernel.storage import liveness
 
 
 def _write_run_config(tmp_path, project, impression, machine, workflow):

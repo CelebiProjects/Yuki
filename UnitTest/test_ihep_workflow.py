@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 from CelebiChrono.utils.metadata import ConfigFile
 
-from Yuki.kernel.ihep_workflow import IhepWorkflow
+from Yuki.kernel.workflows.ihep import IhepWorkflow
 
 
 class FakeSsh:

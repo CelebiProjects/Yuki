@@ -471,7 +471,7 @@ def run_transfer(job_id: str, project_uuid: str, impression: str,
             # Record the destination entry in the impression's distribution
             # registry, so Yuki knows where the data lives and how it got
             # there.
-            from Yuki.kernel.impression_storage import ImpressionStorage
+            from Yuki.kernel.storage.impressions import ImpressionStorage
             ImpressionStorage(project_uuid, impression).update_distribution(
                 overrides={dist_override[0]: dist_override[1]})
     except Exception as exc:  # pylint: disable=broad-exception-caught

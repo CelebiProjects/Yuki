@@ -3,7 +3,7 @@
 import os
 from unittest import mock
 
-from Yuki.kernel import reana_booker
+from Yuki.server.services import reana_booking as reana_booker
 
 
 def _booker():

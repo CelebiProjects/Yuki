@@ -11,7 +11,7 @@ from Yuki.kernel.storage import file_types
 from ...kernel.jobs.base import VJob
 from ...utils.locked_metadata import read_variable as read_locked_variable
 from ...kernel.workflows.base import VWorkflow
-from ...kernel.status_constants import (
+from ...kernel.execution.status import (
     translate_to_musical, translate_to_legacy, is_valid_status,
     is_terminal_status, PRELUDE, DISSONANCE
 )
@@ -267,7 +267,7 @@ def _refresh_distribution(project_uuid, impression_name):
     are swallowed: whereabouts must never 500 over a stale registry.
     """
     try:
-        from Yuki.kernel.impression_storage import ImpressionStorage
+        from Yuki.kernel.storage.impressions import ImpressionStorage
         ImpressionStorage(project_uuid, impression_name).update_distribution()
     except Exception:  # pylint: disable=broad-exception-caught
         pass
@@ -328,7 +328,7 @@ def whereabouts(project_uuid, impression_name):
 def refresh_distribution(project_uuid, impression_name):
     """Refresh the impression's distribution.json registry."""
     try:
-        from ...kernel.impression_storage import ImpressionStorage
+        from ...kernel.storage.impressions import ImpressionStorage
         summary = ImpressionStorage(project_uuid, impression_name).update_distribution()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return jsonify({"error": str(exc)}), 500

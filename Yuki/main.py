@@ -170,7 +170,7 @@ def run_workflow(workflow_uuid, cores):  # pylint: disable=too-many-locals,too-m
     Files are copied using hard links when on the same filesystem for
     performance, with automatic fallback to regular copy for cross-filesystem.
     """
-    from Yuki.kernel.local_execution import (
+    from Yuki.kernel.execution.local import (
         execute_workflow, timestamp_logger, workflow_location)
     from Yuki.native_runner import _lock, _set_state
     try:
@@ -318,7 +318,7 @@ def purge_ssh_runner_cache(runner, project, impression, dry_run, yes):  # pylint
     only lives on the runner — restore it afterwards with register-data.
     """
     from Yuki.kernel.runners import config as runner_config
-    from Yuki.kernel.remote_data_ops import purge_runner_cache
+    from Yuki.kernel.storage.remote import purge_runner_cache
 
     config_file = runner_config.open_config()
     runners_id = config_file.read_variable("runners_id", {})

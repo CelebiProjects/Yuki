@@ -64,7 +64,7 @@ workflow `e150fc6b2cc54afe81bb7af9599541bb` 的一次批量提交包含 140 个�
 
 ## YD-05：SSH 连接池缺少空闲回收
 
-`Yuki/kernel/ssh_pool.py` 的连接池上限为 4，但没有本地 idle TTL。访问 workflow 和 file-status 接口后，Paramiko SSH 连接及线程会保持存在，通常只在连接失效、被丢弃或进程退出时关闭。当前没有观察到无界增长，但多 runner 场景下可能按目标长期占用连接。
+`Yuki/kernel/runners/ssh_pool.py` 的连接池上限为 4，但没有本地 idle TTL。访问 workflow 和 file-status 接口后，Paramiko SSH 连接及线程会保持存在，通常只在连接失效、被丢弃或进程退出时关闭。当前没有观察到无界增长，但多 runner 场景下可能按目标长期占用连接。
 
 建议：增加可配置 idle TTL、周期清理、连接数和空闲时长指标，并明确池上限是全局还是按远端目标计算。
 
@@ -98,7 +98,7 @@ SSH backend 使用 `snakemake --use-conda --cores all --snakefile Snakefile`，�
 
 ## YD-10：SSH 缓存命中不校验完整性
 
-`Yuki/kernel/ssh_workflow.py` 的 `_cache_hit()` 只执行“目录存在且 `ls -A` 非空”的检查。命中后，`ContainerJob.setup_commands()` 使用通配符把缓存中现有条目链接到 workflow 的 `stageout`，不会依据预期输出清单验证每个必需文件。
+`Yuki/kernel/workflows/ssh.py` 的 `_cache_hit()` 只执行“目录存在且 `ls -A` 非空”的检查。命中后，`ContainerJob.setup_commands()` 使用通配符把缓存中现有条目链接到 workflow 的 `stageout`，不会依据预期输出清单验证每个必需文件。
 
 监控中，workflow `ab7ebddb617a491fb3ed2e2dabe6d02e` 复用了 12 个已标记完成的选择任务；Yuki 接受远端缓存命中，但其中 11 个下游任务随后因必需的 `selected/stageout/mc.root` 不存在而失败，仅 1 个完成。重新生成这些输入缓存后，同一批 11 个任务在 workflow `6b5fde1256ea4131a48ce2f0f5b5e234` 中全部完成（11/11）。这一对照证明“目录非空”不足以代表 impression 缓存可用，缺失文件直到计算阶段才被发现。
 

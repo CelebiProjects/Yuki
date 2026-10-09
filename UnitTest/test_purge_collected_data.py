@@ -6,7 +6,7 @@ from unittest import mock
 
 from CelebiChrono.utils.metadata import ConfigFile
 
-from Yuki.kernel import impression_storage as ims
+from Yuki.kernel.storage import impressions as ims
 
 
 def _storage(tmp_path):

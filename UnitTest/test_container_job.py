@@ -2,7 +2,7 @@
 from unittest import mock
 
 from CelebiChrono.utils import metadata
-from Yuki.kernel.container_job import ContainerJob
+from Yuki.kernel.jobs.container import ContainerJob
 
 
 def _make_container(path, machine_id="runner-1"):

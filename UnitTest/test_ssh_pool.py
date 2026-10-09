@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from Yuki.kernel.ssh_pool import SshPool, ssh_pool
-from Yuki.kernel.ssh_workflow import _SshConnection
+from Yuki.kernel.runners.ssh_pool import SshPool, ssh_pool
+from Yuki.kernel.workflows.ssh import _SshConnection
 
 
 def connection():

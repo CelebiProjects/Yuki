@@ -1,4 +1,4 @@
-"""Unit tests for Yuki.utils.env_interpreter.EnvInterpreter."""
+"""Unit tests for Yuki.kernel.runners.environments.EnvInterpreter."""
 import os
 import shutil
 import tempfile
@@ -7,7 +7,7 @@ import unittest
 from CelebiChrono.utils import metadata
 
 # Import the module under test
-from Yuki.utils.env_interpreter import EnvInterpreter
+from Yuki.kernel.runners.environments import EnvInterpreter
 
 
 class TestEnvInterpreter(unittest.TestCase):

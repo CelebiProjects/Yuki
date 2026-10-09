@@ -2,7 +2,7 @@
 import json
 from unittest import mock
 
-from Yuki.kernel import runner_inventory
+from Yuki.services import runner_inventory
 
 
 def _write_config(tmp_path, **variables):
@@ -70,7 +70,7 @@ def test_ssh_inventory_lists_cache_and_workflows(monkeypatch, tmp_path):
         json.dumps({"results": {"status": "finished"}}))
 
     ssh = _fake_ssh()
-    with mock.patch("Yuki.kernel.runner_inventory._SshConnection",
+    with mock.patch("Yuki.services.runner_inventory._SshConnection",
                     return_value=ssh):
         result = runner_inventory.inventory_runner("r1", "ssh")
 

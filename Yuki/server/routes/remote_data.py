@@ -7,7 +7,7 @@ GET  /register-remote-data/<job_id>   poll job state
 import os
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
-from ...kernel import remote_data_ops
+from ...kernel.storage import remote as remote_data_ops
 from ...kernel.runners import config as runner_config
 from ...kernel.execution.progress import progress_cache
 from ..config import config

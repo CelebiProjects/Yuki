@@ -5,7 +5,8 @@ import logging
 import os
 from celery import Celery
 from CelebiChrono.utils import metadata
-from ..kernel import remote_data_ops, result_transfer
+from ..kernel.storage import remote as remote_data_ops
+from ..services import result_transfer
 from ..kernel.jobs.base import VJob
 from ..kernel.workflows.base import VWorkflow, _yuki_dir
 from ..kernel.execution.lease import (
@@ -80,7 +81,7 @@ def _exec_impression(project_uuid, impressions, machine_uuid, timeout,
 
     marks = _validate_remote_data_binding(workflow, project_uuid, machine_uuid)
     if marks:
-        from ..kernel.status_constants import DISSONANCE
+        from ..kernel.execution.status import DISSONANCE
         workflow.set_workflow_status("failed")
         for job, message in marks:
             job.set_status(DISSONANCE, message)
@@ -181,7 +182,7 @@ def task_update_workflow_status(project_uuid, workflow_id, token=None):
         workflow = VWorkflow.create(project_uuid, [], workflow_id)
         _debug.debug(f"[task_update_workflow_status] backend={workflow.backend_type()} "
                      f"uuid={workflow.uuid} path={workflow.path}")
-        from ..kernel.status_constants import is_terminal_status
+        from ..kernel.execution.status import is_terminal_status
         current_status = workflow.status()
         if is_terminal_status(current_status):
             _debug.debug(f"[task_update_workflow_status] workflow already terminal "

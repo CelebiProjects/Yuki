@@ -124,6 +124,6 @@ def test_whereabouts_refreshes_distribution_before_reading(monkeypatch,
 
 def test_refresh_distribution_helper_swallows_failures():
     """A broken refresh never raises out of the helper."""
-    with mock.patch("Yuki.kernel.impression_storage.ImpressionStorage",
+    with mock.patch("Yuki.kernel.storage.impressions.ImpressionStorage",
                     side_effect=OSError("boom")):
         status_routes._refresh_distribution("proj", "imp1")  # no raise

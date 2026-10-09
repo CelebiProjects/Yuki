@@ -7,9 +7,9 @@ from flask import Flask
 
 from Yuki.server.routes import execution
 from Yuki.server import tasks
-from Yuki.kernel.ssh_workflow import SshWorkflow, _SshConnection
-from Yuki.kernel.status_constants import SILENCE
-from Yuki.kernel.status_constants import PRELUDE
+from Yuki.kernel.workflows.ssh import SshWorkflow, _SshConnection
+from Yuki.kernel.execution.status import SILENCE
+from Yuki.kernel.execution.status import PRELUDE
 
 
 @pytest.mark.parametrize('timeout', [None, '3000'])

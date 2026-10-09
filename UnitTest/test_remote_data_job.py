@@ -9,8 +9,8 @@ import pytest
 
 from CelebiChrono.utils.file_utils import dir_md5
 from CelebiChrono.utils.metadata import ConfigFile
-from Yuki.kernel import remote_data_ops
-from Yuki.kernel.detached_copy import LAUNCH_SCRIPT, READ_STATE_SCRIPT
+from Yuki.kernel.storage import remote as remote_data_ops
+from Yuki.kernel.execution.detached_copy import LAUNCH_SCRIPT, READ_STATE_SCRIPT
 
 config_module = importlib.import_module("Yuki.server.config")
 
@@ -87,7 +87,7 @@ def test_register_remote_data_job_end_to_end(monkeypatch, tmp_path):
     fake = FakeSsh(md5)
     updates = []
 
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         result = remote_data_ops.register_remote_data_job(
             "job-1", "r1", str(data), "proj", "mydata", updates.append)
@@ -127,7 +127,7 @@ def test_task_register_remote_data_enqueue_failure(monkeypatch, tmp_path):
     md5 = dir_md5(str(data))
     fake = FakeSsh(md5)
 
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake), \
             mock.patch("Yuki.server.tasks.task_copy_remote_data") as copy_task:
         copy_task.apply_async.side_effect = RuntimeError("broker down")
@@ -150,7 +150,7 @@ def test_register_remote_data_job_reuses_unchanged_registration(monkeypatch, tmp
                         source=str(data))
     fake = FakeSsh(md5)
     updates = []
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         result = remote_data_ops.register_remote_data_job(
             "job-1", "r1", str(data), "proj", "mydata", updates.append)
@@ -174,7 +174,7 @@ def test_register_remote_data_job_changed_data_registers_fresh(monkeypatch, tmp_
                         status="archived", source=str(data))
     fake = FakeSsh(md5)
     updates = []
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         result = remote_data_ops.register_remote_data_job(
             "job-1", "r1", str(data), "proj", "mydata", updates.append)
@@ -197,7 +197,7 @@ def test_task_register_remote_data_skips_copy_when_reused(monkeypatch, tmp_path)
     _impression_fixture(tmp_path, imp="imp-old", md5=md5, status="archived",
                         source=str(data))
     fake = FakeSsh(md5)
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake), \
             mock.patch("Yuki.server.tasks.task_copy_remote_data") as copy_task:
         tasks.task_register_remote_data.run(
@@ -213,7 +213,7 @@ def test_copy_remote_data_job_archives_impression(monkeypatch, tmp_path):
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
     _impression_fixture(tmp_path, md5="abc123", descriptor="mydata")
     fake = FakeSsh("")
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         result = remote_data_ops.copy_remote_data_job(
             "job-1", "imp-1", "proj", "r1", "/src/data")
@@ -240,7 +240,7 @@ def test_copy_remote_data_job_failure_marks_failed(monkeypatch, tmp_path):
     fake = FakeSsh("")
 
     fake.copy_state = {"status": "failed", "error": "remote copy failed: disk full"}
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         state = remote_data_ops.copy_remote_data_job(
             "job-1", "imp-1", "proj", "r1", "/src/data")
@@ -264,7 +264,7 @@ def test_register_remote_data_job_hash_failure(monkeypatch, tmp_path):
 
     fake.exec = failing_exec
     updates = []
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         with pytest.raises(RuntimeError) as exc:
             remote_data_ops.register_remote_data_job(
@@ -280,7 +280,7 @@ def test_task_register_remote_data_ends_copying_and_enqueues(monkeypatch, tmp_pa
     data = _fixture_data(tmp_path)
     md5 = dir_md5(str(data))
     fake = FakeSsh(md5)
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake), \
             mock.patch("Yuki.server.tasks.task_copy_remote_data") as copy_task:
         tasks.task_register_remote_data.run(
@@ -303,7 +303,7 @@ def test_task_register_remote_data_state_keeps_runner_fields(monkeypatch, tmp_pa
         {"status": "hashing", "result": None, "error": None,
          "runner_id": "r1", "remote_path": str(data)})
     fake = FakeSsh(md5)
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake), \
             mock.patch("Yuki.server.tasks.task_copy_remote_data"):
         tasks.task_register_remote_data.run(
@@ -320,7 +320,7 @@ def test_task_copy_remote_data_writes_done_and_removes_progress(monkeypatch, tmp
     from Yuki.server import tasks
     _impression_fixture(tmp_path)
     fake = FakeSsh("")
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         tasks.task_copy_remote_data.run(
             "job-1", "imp-1", "proj", "r1", "/src/data")
@@ -349,7 +349,7 @@ def test_task_copy_remote_data_cleanup_failure_is_harmless(monkeypatch, tmp_path
         return orig_exec(command, timeout)
 
     fake.exec = failing_cleanup
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         tasks.task_copy_remote_data.run(
             "job-1", "imp-1", "proj", "r1", "/src/data")
@@ -366,7 +366,7 @@ def test_register_remote_data_job_emits_progress_paths(monkeypatch, tmp_path):
     md5 = dir_md5(str(data))
     fake = FakeSsh(md5)
     updates = []
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         remote_data_ops.register_remote_data_job(
             "job-9", "r1", str(data), "proj", "mydata", updates.append)
@@ -443,7 +443,7 @@ def test_progress_poll_recovers_detached_result_without_worker(
 
 def test_unconfirmed_launch_can_still_recover_completion(monkeypatch, tmp_path):
     """Lack of an SSH start acknowledgement must not hide remote success."""
-    from Yuki.kernel.ssh_workflow import SSHStartNotConfirmed
+    from Yuki.kernel.workflows.ssh import SSHStartNotConfirmed
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
     _impression_fixture(tmp_path)
     fake = FakeSsh("")
@@ -541,7 +541,7 @@ def test_register_remote_data_job_without_project_context(monkeypatch, tmp_path)
     monkeypatch.setattr("CelebiChrono.utils.csys.project_path",
                         lambda: None)
     updates = []
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         result = remote_data_ops.register_remote_data_job(
             "job-1", "r1", str(data), "proj", "mydata", updates.append)
@@ -557,7 +557,7 @@ def test_register_remote_data_job_too_old_celebichrono(monkeypatch, tmp_path):
     data = _fixture_data(tmp_path)
     md5 = dir_md5(str(data))
     fake = FakeSsh(md5)
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection",
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection",
                     return_value=fake):
         monkeypatch.delattr(vimpression.VImpression, "generate_imp_uuid")
         with pytest.raises(RuntimeError) as exc:
@@ -588,7 +588,7 @@ class _StubConfig:
 
 def test_file_status_lists_remote_hosted_files(monkeypatch, tmp_path):
     """file_status lists files over ssh and serves them from cache."""
-    from Yuki.kernel.impression_storage import ImpressionStorage
+    from Yuki.kernel.storage.impressions import ImpressionStorage
 
     job_dir = tmp_path / "Storage" / "proj" / "imp-1"
     job_dir.mkdir(parents=True)
@@ -614,7 +614,7 @@ def test_file_status_lists_remote_hosted_files(monkeypatch, tmp_path):
             yield "a.txt", "/remote/imp/a.txt", 10
             yield "sub/b.root", "/remote/imp/sub/b.root", 20
 
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection",
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection",
                     return_value=_WalkFakeSsh()):
         rows = ImpressionStorage("proj", "imp-1").file_status("stageout")
     assert calls == ["/remote/imp"]
@@ -623,7 +623,7 @@ def test_file_status_lists_remote_hosted_files(monkeypatch, tmp_path):
     assert rows[1]["size"] == 20
 
     # second call served from cache — no ssh round-trip
-    with mock.patch("Yuki.kernel.remote_data_ops._ssh_connection") as patched:
+    with mock.patch("Yuki.kernel.storage.remote._ssh_connection") as patched:
         rows2 = ImpressionStorage("proj", "imp-1").file_status("stageout")
         patched.assert_not_called()
     assert rows2 == rows
@@ -631,7 +631,7 @@ def test_file_status_lists_remote_hosted_files(monkeypatch, tmp_path):
 
 def test_file_status_no_remote_marker_returns_empty(monkeypatch, tmp_path):
     """A job without a remote marker yields an empty listing."""
-    from Yuki.kernel.impression_storage import ImpressionStorage
+    from Yuki.kernel.storage.impressions import ImpressionStorage
     job_dir = tmp_path / "Storage" / "proj" / "imp-1"
     job_dir.mkdir(parents=True)
     monkeypatch.setattr(config_module, "config", _StubConfig(tmp_path))
@@ -652,7 +652,7 @@ def test_registration_does_not_reuse_other_identity(monkeypatch, tmp_path, proje
                               source=str(data))
     old_yaml = (old / "contents" / "celebi.yaml").read_bytes()
     updates = []
-    with mock.patch("Yuki.kernel.ssh_workflow._SshConnection", return_value=FakeSsh(md5)):
+    with mock.patch("Yuki.kernel.workflows.ssh._SshConnection", return_value=FakeSsh(md5)):
         result = remote_data_ops.register_remote_data_job(
             "job-1", "r1", str(data), "proj", "mydata", updates.append)
     assert result["impression_uuid"] != "old-identity"

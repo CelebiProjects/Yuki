@@ -2,7 +2,7 @@
 import os
 from unittest import mock
 
-from Yuki.kernel import native_workflow
+from Yuki.kernel.workflows import native as native_workflow
 
 
 def _make_wf(tmp_path):

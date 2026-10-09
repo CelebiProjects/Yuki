@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from Yuki.kernel.native_workflow import NativeWorkflow
-from Yuki.kernel.status_constants import DISSONANCE
+from Yuki.kernel.workflows.native import NativeWorkflow
+from Yuki.kernel.execution.status import DISSONANCE
 
 
 @pytest.mark.parametrize("object_type", ["", "directory", None])

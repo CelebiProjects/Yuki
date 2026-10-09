@@ -13,8 +13,8 @@ import tempfile
 import time
 
 from CelebiChrono.utils.metadata import ConfigFile
-from Yuki.kernel.status_constants import CODA
-from .storage import liveness
+from ..execution.status import CODA
+from . import liveness
 
 REMOTE_MD5_SCRIPT = r'''
 import hashlib, json, os, stat, sys
@@ -344,7 +344,7 @@ def read_remote_progress(runner_id, job_id):
         state = read_job_state(_yuki_dir(), job_id) or {}
         progress_path = progress_file_path(runner_id, job_id)
         if state.get("copy_detached"):
-            from . import detached_copy
+            from ..execution import detached_copy
             with _ssh_connection(runner_id) as ssh:
                 remote_state = detached_copy.read_state(
                     ssh, progress_path + ".copy", progress_path=progress_path)
@@ -720,8 +720,8 @@ def copy_remote_data_job(job_id, impression_uuid, project_uuid, runner_id,  # py
     Returns None while pending, or the persisted terminal job state. No worker
     or SSH session waits for the actual copy to finish.
     """
-    from . import detached_copy
-    from .workflows.ssh import SSHStartNotConfirmed
+    from ..execution import detached_copy
+    from ..workflows.ssh import SSHStartNotConfirmed
 
     yuki_dir = _yuki_dir()
     state = read_job_state(yuki_dir, job_id) or {}
@@ -786,7 +786,7 @@ def _finish_remote_copy(job_id, state, remote_state):
 
 def reconcile_remote_copy(job_id, runner_id):
     """Recover completion from the runner, including after a worker restart."""
-    from . import detached_copy
+    from ..execution import detached_copy
     state = read_job_state(_yuki_dir(), job_id) or {}
     if not state.get("copy_detached"):
         return None

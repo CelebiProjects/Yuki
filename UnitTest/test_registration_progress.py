@@ -5,8 +5,8 @@ from unittest import mock
 
 import pytest
 
-from Yuki.kernel import remote_data_ops
-from Yuki.kernel.registration_progress import ProgressCache
+from Yuki.kernel.storage import remote as remote_data_ops
+from Yuki.kernel.execution.progress import ProgressCache
 from Yuki.server.routes import remote_data as routes
 
 

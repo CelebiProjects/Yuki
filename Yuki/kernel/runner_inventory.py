@@ -166,7 +166,7 @@ def _inventory_native(runner_id, yuki_dir):
 def inventory_runner(runner_id, backend_type):
     """Return the {cache, workflows} data inventory of a runner."""
     yuki_dir = _yuki_dir()
-    if backend_type == "ssh":
+    if runner_config.is_ssh_backend(backend_type):
         return _inventory_ssh(runner_id, yuki_dir)
     if backend_type == "native":
         return _inventory_native(runner_id, yuki_dir)

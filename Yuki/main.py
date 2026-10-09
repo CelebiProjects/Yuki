@@ -326,7 +326,7 @@ def purge_ssh_runner_cache(runner, project, impression, dry_run, yes):  # pylint
         raise click.ClickException(f"runner '{runner}' not found")
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if backend_types.get(runner_id) != "ssh":
+    if not runner_config.is_ssh_backend(backend_types.get(runner_id)):
         raise click.ClickException(f"runner '{runner}' is not an ssh runner")
 
     if not dry_run and not yes:

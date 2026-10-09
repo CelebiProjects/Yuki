@@ -189,7 +189,7 @@ def runnerconnection(runner):
     backend_types = config_file.read_variable("backend_types", {})
     backend_type = backend_types.get(runner_id, "reana")
 
-    if backend_type == "ssh":
+    if runner_config.is_ssh_backend(backend_type):
         ssh_hosts = config_file.read_variable("ssh_hosts", {})
         ssh_users = config_file.read_variable("ssh_users", {})
         ssh_key_paths = config_file.read_variable("ssh_key_paths", {})
@@ -237,7 +237,7 @@ def registerrunner():
     config_file.write_variable("tokens", tokens)
     config_file.write_variable("backend_types", backend_types)
 
-    if backend_type == "ssh":
+    if runner_config.is_ssh_backend(backend_type):
         _write_ssh_config(config_file, runner_id, request.form)
 
     settings = _collect_settings(request.form)
@@ -253,8 +253,10 @@ def registerrunner():
 
 
 _SETTING_FIELDS = ("workdir", "conda_path", "snakemake_path",
-                   "ssh_host", "ssh_user", "ssh_key_path", "remote_workdir")
-_SETTING_INT_FIELDS = ("cores", "mem_mb", "ssh_port")
+                   "ssh_host", "ssh_user", "ssh_key_path", "remote_workdir",
+                   "hep_sub_path", "hep_q_path", "hep_rm_path", "hep_group")
+_SETTING_INT_FIELDS = ("cores", "mem_mb", "ssh_port", "hep_max_jobs",
+                       "hep_step_memory_mb")
 
 
 def _collect_settings(data):
@@ -438,9 +440,9 @@ def update_runner(runner):  # pylint: disable=too-many-locals
     config_file.write_variable("eos_mount_point", eos_mount_points)
     config_file.write_variable("cvmfs", cvmfs_repos)
 
-    if new_backend_type == "ssh":
+    if runner_config.is_ssh_backend(new_backend_type):
         _write_ssh_config(config_file, runner_id, data)
-    elif old_backend_type == "ssh":
+    elif runner_config.is_ssh_backend(old_backend_type):
         _remove_ssh_config(config_file, runner_id)
 
     return jsonify({"message": f"Runner '{runner}' updated successfully"})
@@ -482,7 +484,7 @@ def runners_config():  # pylint: disable=too-many-locals
             config_file, runner_id)
         runner_cfg["health"] = runner_config.get_runner_health(
             config_file, runner_id)
-        if backend_type == "ssh":
+        if runner_config.is_ssh_backend(backend_type):
             runner_cfg.update({
                 "ssh_host": ssh_hosts.get(runner_id, ""),
                 "ssh_user": ssh_users.get(runner_id, ""),
@@ -503,8 +505,8 @@ def runner_ssh_config(runner):
         return jsonify({"error": f"runner '{runner}' not found"}), 404
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if backend_types.get(runner_id) != "ssh":
-        return jsonify({"error": f"runner '{runner}' is not an ssh runner"}), 400
+    if not runner_config.is_ssh_backend(backend_types.get(runner_id)):
+        return jsonify({"error": f"runner '{runner}' is not an ssh-capable runner"}), 400
     settings = runner_config.get_ssh_settings(config_file, runner_id)
     key_path = settings.get("key_path", "")
     key = ""
@@ -553,10 +555,18 @@ def test_runner(runner):
     settings = runner_config.get_runner_settings(config_file, runner_id)
 
     timeout = request.args.get("timeout", type=int) or runner_probe.PROBE_TIMEOUT
-    if backend_type == "ssh":
+    if runner_config.is_ssh_backend(backend_type):
+        ssh_settings = (runner_config.get_ihep_settings(config_file, runner_id)
+                        if backend_type == "ihep" else
+                        runner_config.get_ssh_settings(config_file, runner_id))
         checks = runner_probe.probe_ssh(
-            runner_config.get_ssh_settings(config_file, runner_id),
-            timeout=timeout)
+            ssh_settings,
+            timeout=timeout,
+            extra_tools=(("hep_sub", "hep_sub_path"),
+                         ("hep_q", "hep_q_path"),
+                         ("hep_rm", "hep_rm_path"))
+            if backend_type == "ihep" else None,
+            require_cluster_executor=backend_type == "ihep")
     elif backend_type == "reana":
         urls = config_file.read_variable("urls", {})
         tokens = config_file.read_variable("tokens", {})
@@ -594,7 +604,7 @@ def runner_envs(runner):
     backend_types = config_file.read_variable("backend_types", {})
     backend_type = backend_types.get(runner_id, "reana")
 
-    if backend_type == "ssh":
+    if runner_config.is_ssh_backend(backend_type):
         result = runner_probe.list_envs_ssh(
             runner_config.get_ssh_settings(config_file, runner_id))
     elif backend_type == "native":
@@ -616,7 +626,8 @@ def runner_data(runner):
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
     backend_type = backend_types.get(runner_id, "reana")
-    if backend_type not in ("ssh", "native"):
+    if not (runner_config.is_ssh_backend(backend_type)
+            or backend_type == "native"):
         return jsonify({"error": f"runner '{runner}' is a {backend_type} "
                                  "runner — no listable data"}), 400
     try:
@@ -631,7 +642,6 @@ def runner_data(runner):
 @bp.route("/yuki-overview", methods=['GET'])
 def yuki_overview():
     """Return an aggregate overview from distribution.json and local mirrors."""
-    config_file = config.get_config_file()
     project_uuid = request.args.get("project_uuid", "").strip()
     yuki_dir = os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki"))
     storage_root = os.path.join(yuki_dir, "Storage", project_uuid) \

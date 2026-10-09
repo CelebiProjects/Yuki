@@ -8,6 +8,7 @@ import os
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
 from ...kernel import remote_data_ops
+from ...kernel import runner_config
 from ...kernel.registration_progress import progress_cache
 from ..config import config
 from ..tasks import task_cache_results, task_register_remote_data
@@ -54,7 +55,8 @@ def register_remote_data():  # pylint: disable=too-many-return-statements
         return jsonify({"error": f"Runner '{runner}' not found"}), 404
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if backend_types.get(runner_id, "reana") != "ssh":
+    if not runner_config.is_ssh_backend(
+            backend_types.get(runner_id, "reana")):
         return jsonify({"error": "register-ssh-data requires an ssh runner; "
                                  "native data should use upload-data"}), 400
 
@@ -124,7 +126,8 @@ def purge_runner_cache_route():
         return jsonify({"error": f"Runner '{runner}' not found"}), 404
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if backend_types.get(runner_id, "reana") != "ssh":
+    if not runner_config.is_ssh_backend(
+            backend_types.get(runner_id, "reana")):
         return jsonify({"error": "purge-ssh-runner-cache requires an ssh "
                                  "runner"}), 400
 
@@ -165,7 +168,8 @@ def cache_results_route():
         return jsonify({"error": f"Runner '{runner}' not found"}), 404
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if backend_types.get(runner_id, "reana") != "ssh":
+    if not runner_config.is_ssh_backend(
+            backend_types.get(runner_id, "reana")):
         return jsonify({"error": "cache-results requires an ssh runner"}), 400
 
     job_id = csys.generate_uuid()

@@ -58,6 +58,18 @@ class TestVWorkflowCreate(unittest.TestCase):
         stored = workflow.config_file.read_variable("backend_type", "")
         self.assertEqual(stored, "native")
 
+    def test_create_persists_backend_type_for_ihep(self):
+        """IHEP workflows resolve to the hep_sub-aware SSH subclass."""
+        self._write_global_config({"runner-1": "ihep"})
+
+        workflow = VWorkflow.create(
+            self.project_uuid, [self._make_job("runner-1")], None, mode="ihep"
+        )
+
+        self.assertEqual(workflow.__class__.__name__, "IhepWorkflow")
+        stored = workflow.config_file.read_variable("backend_type", "")
+        self.assertEqual(stored, "ihep")
+
     def test_reload_uses_stored_backend_type_over_global_lookup(self):
         """A saved SSH workflow must reload as SshWorkflow even if the global
         backend_types mapping is missing or points to a different backend.

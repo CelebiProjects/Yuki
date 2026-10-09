@@ -52,7 +52,7 @@ def _workspace_paths(backend, runner_id, candidates, yuki_dir):
     """Map each candidate (project, workflow) to its workspace path."""
     config_file = runner_config.open_config()
     paths = {}
-    if backend == "ssh":
+    if runner_config.is_ssh_backend(backend):
         settings = runner_config.get_ssh_settings(config_file, runner_id)
         base = settings.get("remote_workdir", "/tmp/yuki-workflows")
         for project, workflow_uuid in candidates:
@@ -169,12 +169,12 @@ def purge_stale_workflows(runner_id, dry_run=False, yuki_dir=None,  # pylint: di
         # are already gone get the purge record retroactively instead of
         # being listed for deletion.
         existing = set()
-        if backend in ("ssh", "native"):
+        if runner_config.is_ssh_backend(backend) or backend == "native":
             paths = _workspace_paths(
                 backend, runner_id,
                 [(e["project"], e["workflow"]) for e, _, _ in candidates],
                 yuki_dir)
-            if backend == "ssh":
+            if runner_config.is_ssh_backend(backend):
                 existing_paths = _existing_ssh_workspaces(
                     runner_id, list(paths.values()))
                 existing = {key for key, path in paths.items()
@@ -186,7 +186,8 @@ def purge_stale_workflows(runner_id, dry_run=False, yuki_dir=None,  # pylint: di
         for entry, workflow_dir, workflow in candidates:
             key = (entry["project"], entry["workflow"])
             try:
-                if backend in ("ssh", "native") and key not in existing:
+                if (runner_config.is_ssh_backend(backend)
+                        or backend == "native") and key not in existing:
                     _record_purged(workflow_dir)
                     already_gone += 1
                     continue

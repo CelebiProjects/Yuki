@@ -60,6 +60,29 @@ def test_register_runner_stores_ssh_config(monkeypatch):
     assert cfg["remote_workdirs"][runner_id] == "/data/yuki"
 
 
+def test_register_runner_stores_ihep_batch_settings(monkeypatch):
+    """IHEP is SSH transport plus configurable HepJob commands/group."""
+    _temp_config(monkeypatch)
+    r = _app(runner_routes.bp).test_client().post("/register-runner", data={
+        "runner": "ihep", "url": "", "token": "", "backend_type": "ihep",
+        "ssh_host": "lxlogin.ihep.ac.cn", "ssh_user": "alice",
+        "remote_workdir": "/publicfs/alice/yuki", "hep_group": "lhaaso",
+        "hep_sub_path": "/opt/hep/bin/hep_sub", "hep_max_jobs": "50",
+        "hep_step_memory_mb": "2048",
+    })
+    assert r.status_code == 200
+    with open(runner_routes.config.config_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    runner_id = cfg["runners_id"]["ihep"]
+    assert cfg["backend_types"][runner_id] == "ihep"
+    assert cfg["ssh_hosts"][runner_id] == "lxlogin.ihep.ac.cn"
+    assert cfg["runner_settings"][runner_id]["hep_group"] == "lhaaso"
+    assert cfg["runner_settings"][runner_id]["hep_sub_path"] == \
+        "/opt/hep/bin/hep_sub"
+    assert cfg["runner_settings"][runner_id]["hep_max_jobs"] == 50
+    assert cfg["runner_settings"][runner_id]["hep_step_memory_mb"] == 2048
+
+
 def test_runners_config_includes_ssh_fields(monkeypatch):
     """runners-config exposes ssh fields for ssh runners."""
     _temp_config(monkeypatch)

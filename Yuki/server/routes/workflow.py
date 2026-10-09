@@ -194,7 +194,7 @@ def purge_runner_workflows():
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
     backend_type = backend_types.get(runner_id, "reana")
-    if backend_type not in ("ssh", "native", "reana"):
+    if backend_type not in ("ssh", "ihep", "native", "reana"):
         return jsonify({"error": f"runner '{runner}' has backend "
                                  f"'{backend_type}'"}), 400
     dry_run = str(data.get("dry_run", "")).lower() in ("1", "true", "yes")

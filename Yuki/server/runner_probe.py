@@ -1,6 +1,7 @@
 """Capability probing for runners (snakemake / conda / workdir)."""
 import datetime
 import os
+import shlex
 import shutil
 import subprocess
 
@@ -60,7 +61,9 @@ def probe_native(settings, timeout=EXEC_TIMEOUT):
     return checks
 
 
-def probe_ssh(ssh_settings, timeout=PROBE_TIMEOUT):  # pylint: disable=too-many-locals
+# pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
+def probe_ssh(ssh_settings, timeout=PROBE_TIMEOUT, extra_tools=None,
+              require_cluster_executor=False):
     """Probe connectivity plus snakemake/conda/workdir on the remote host."""
     try:
         import paramiko
@@ -92,7 +95,10 @@ def probe_ssh(ssh_settings, timeout=PROBE_TIMEOUT):  # pylint: disable=too-many-
         _, stdout, stderr = client.exec_command(cmd, timeout=timeout)
         return stdout.read().decode().strip(), stderr.read().decode().strip()
 
-    check_names = ("snakemake", "conda", "workdir_writable")
+    check_names = ("snakemake", "conda", "workdir_writable") + tuple(
+        name for name, _setting in (extra_tools or ()))
+    if require_cluster_executor:
+        check_names += ("snakemake_cluster",)
     current = check_names[0]
     try:
         for name, setting, binary in (
@@ -106,6 +112,28 @@ def probe_ssh(ssh_settings, timeout=PROBE_TIMEOUT):  # pylint: disable=too-many-
         workdir = ssh_settings.get("remote_workdir", "/tmp/yuki-workflows")
         _, err = remote(f"mkdir -p {workdir} && test -w {workdir}")
         checks["workdir_writable"] = _err(err) if err else _ok(path=workdir)
+        for name, setting in (extra_tools or ()):
+            current = name
+            tool = str(ssh_settings.get(setting) or name)
+            if "/" in tool:
+                out, err = remote(f"test -x {shlex.quote(tool)} && "
+                                  f"printf '%s' {shlex.quote(tool)}")
+            else:
+                out, err = remote(f"command -v {shlex.quote(tool)}")
+            checks[name] = _err(err or f"{tool} not found") \
+                if not out else _ok(path=out)
+        if require_cluster_executor:
+            current = "snakemake_cluster"
+            snakemake = str(
+                ssh_settings.get("snakemake_path") or "snakemake")
+            out, err = remote(f"{shlex.quote(snakemake)} --help")
+            if "--cluster-generic-submit-cmd" in out:
+                checks[current] = _ok(mode="cluster-generic")
+            elif "--cluster CMD" in out:
+                checks[current] = _ok(mode="legacy-cluster")
+            else:
+                checks[current] = _err(
+                    err or "Snakemake lacks cluster-generic/--cluster support")
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # A mid-probe transport failure must fail the record, not drop keys.
         detail = str(exc) or type(exc).__name__

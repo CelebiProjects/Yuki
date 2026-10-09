@@ -99,6 +99,40 @@ def test_test_runner_ssh_failure_marks_failed(monkeypatch):
     assert body["checks"]["connectivity"]["ok"] is False
 
 
+def test_probe_ihep_requires_step_cluster_submission(monkeypatch):  # pylint: disable=unused-argument
+    """IHEP probing verifies Snakemake can dispatch individual rule jobs."""
+    mock_client = mock.MagicMock()
+
+    def exec_command(command, timeout=None):  # pylint: disable=unused-argument
+        if command.endswith("snakemake --help"):
+            output = "--executor --cluster-generic-submit-cmd VALUE"
+        elif "--version" in command:
+            output = "9.0.0"
+        elif command.startswith("command -v"):
+            output = "/afs/ihep/bin/" + command.rsplit(" ", 1)[-1]
+        else:
+            output = ""
+        stdout = mock.MagicMock()
+        stdout.read.return_value = output.encode()
+        stderr = mock.MagicMock()
+        stderr.read.return_value = b""
+        return None, stdout, stderr
+
+    mock_client.exec_command.side_effect = exec_command
+    with mock.patch("paramiko.SSHClient") as ssh_cls:
+        ssh_cls.return_value = mock_client
+        checks = runner_probe.probe_ssh(
+            {"host": "lxlogin.ihep.ac.cn", "user": "alice"},
+            extra_tools=(("hep_sub", "hep_sub_path"),
+                         ("hep_q", "hep_q_path"),
+                         ("hep_rm", "hep_rm_path")),
+            require_cluster_executor=True)
+
+    assert checks["hep_sub"]["ok"] is True
+    assert checks["snakemake_cluster"] == {
+        "ok": True, "mode": "cluster-generic"}
+
+
 def test_test_runner_ssh_mid_probe_failure_marks_failed(monkeypatch):
     """A probe failing mid-run still marks the runner failed with details."""
     config_obj = _temp_config(monkeypatch)

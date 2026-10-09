@@ -11,7 +11,7 @@ from logging import getLogger
 from CelebiChrono.utils import csys
 from flask import Blueprint, request, send_file, jsonify
 
-from ...kernel import result_transfer
+from ...kernel import result_transfer, runner_config
 from ..config import config
 from ..tasks import task_transfer_results
 
@@ -138,14 +138,15 @@ def start_transfer():  # pylint: disable=too-many-locals,too-many-return-stateme
         if name is None:
             continue
         backend = backend_types.get(runners_id[name], "reana")
-        if backend == "ssh":
+        if runner_config.is_ssh_backend(backend):
             continue
         # Only exception: a reana source may transfer to an ssh runner,
         # which pulls the files with its own reana-cli.
         if (role == "source" and backend == "reana"
                 and names["destination"] is not None
-                and backend_types.get(runners_id[names["destination"]],
-                                      "reana") == "ssh"):
+                and runner_config.is_ssh_backend(
+                    backend_types.get(runners_id[names["destination"]],
+                                      "reana"))):
             continue
         return jsonify({
             "error": f"runner '{name}' is not an ssh runner"

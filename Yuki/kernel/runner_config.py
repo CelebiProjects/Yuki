@@ -11,6 +11,12 @@ from CelebiChrono.utils.metadata import ConfigFile
 
 LEGACY_SSH_KEYS = ("ssh_hosts", "ssh_users", "ssh_key_paths",
                    "ssh_ports", "remote_workdirs")
+SSH_BACKENDS = frozenset(("ssh", "ihep"))
+
+
+def is_ssh_backend(backend_type):
+    """Return whether a backend uses the shared SSH storage/transport layer."""
+    return backend_type in SSH_BACKENDS
 
 
 def open_config():
@@ -55,6 +61,17 @@ def get_ssh_settings(config_file, runner_id):
         "conda_path": s.get("conda_path", ""),
         "snakemake_path": s.get("snakemake_path", ""),
     }
+
+
+def get_ihep_settings(config_file, runner_id):
+    """Return SSH transport settings extended with IHEP HepJob options."""
+    settings = get_ssh_settings(config_file, runner_id)
+    runner_settings = get_runner_settings(config_file, runner_id)
+    for key in ("hep_sub_path", "hep_q_path", "hep_rm_path", "hep_group",
+                "hep_max_jobs", "hep_step_memory_mb"):
+        if runner_settings.get(key) is not None:
+            settings[key] = runner_settings[key]
+    return settings
 
 
 def get_runner_health(config_file, runner_id):

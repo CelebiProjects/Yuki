@@ -11,6 +11,7 @@ import tempfile
 from CelebiChrono.utils.metadata import ConfigFile
 from . import file_types
 from . import remote_data_ops
+from . import runner_config
 from .registration_progress import remote_listing_cache
 from .rawdata_collection import collect_rawdata, local_rawdata_files
 from .vjob import VJob
@@ -650,7 +651,7 @@ class ImpressionStorage:
             return (f"runner '{name}' workspace was purged; the collected "
                     f"data is the only copy (pass force to delete anyway)")
         backend = workflow.backend_type()
-        if backend != "ssh":
+        if not runner_config.is_ssh_backend(backend):
             return (f"cannot verify a runner copy for backend "
                     f"'{backend}' (pass force to purge anyway)")
         for kind in ("stageout", "logs"):
@@ -848,7 +849,8 @@ class ImpressionStorage:
         print(f"[_refresh_ssh_cache] impression={self.impression} "
               f"cache_runner_id={cache_runner_id} "
               f"backend={self.backend_types.get(cache_runner_id, 'reana')}")
-        if self.backend_types.get(cache_runner_id, "reana") != "ssh":
+        if not runner_config.is_ssh_backend(
+                self.backend_types.get(cache_runner_id, "reana")):
             print("[_refresh_ssh_cache] early-return: runner is not ssh")
             return
         remote_marker = os.path.join(self.job_path, "remote.json")

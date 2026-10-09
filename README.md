@@ -7,6 +7,9 @@ analysis management toolkit for high energy physics. A Flask web server with a
 Celery task queue manages jobs, workflows (REANA and native), runners, and
 impressions, storing data under `~/.Yuki/Storage/`.
 
+IHEP clusters are supported through the `ihep` runner backend, which stages via
+SSH and submits work through `hep_sub`; see [the IHEP runner guide](docs/ihep-runner.md).
+
 ## Install
 
 ```bash

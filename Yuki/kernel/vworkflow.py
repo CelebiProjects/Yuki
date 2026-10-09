@@ -22,6 +22,7 @@ from CelebiChrono.kernel.chern_cache import ChernCache
 from Yuki.kernel.vjob import VJob
 from Yuki.kernel.container_job import ContainerJob
 from Yuki.kernel.image_job import ImageJob
+from Yuki.kernel.resource_units import memory_to_mb
 from Yuki.kernel.status_constants import (
     PRELUDE, IN_MOVEMENT, DISSONANCE, FAILED,
     CODA, FINAL_NOTE, STOPPED, DELETED,
@@ -130,6 +131,9 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         elif mode == "ssh":
             from .ssh_workflow import SshWorkflow
             workflow = SshWorkflow(project_uuid, jobs, uuid)
+        elif mode == "ihep":
+            from .ihep_workflow import IhepWorkflow
+            workflow = IhepWorkflow(project_uuid, jobs, uuid)
         else:
             from .reana_workflow import ReanaWorkflow
             workflow = ReanaWorkflow(project_uuid, jobs, uuid)
@@ -589,12 +593,12 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         for job in self.jobs:
             if job.object_type() != "task" or not job.is_input:
                 continue
-            if backend_type == "ssh":
+            if backend_type in ("ssh", "ihep"):
                 # ssh inputs are always cached on the runner (auto-cache);
                 # the setup rule copies them from the impressions cache.
                 container = ContainerJob(job.path, job.machine_id)
                 setup_commands.extend(
-                    container.setup_commands("ssh", self.machine_id))
+                    container.setup_commands(backend_type, self.machine_id))
             elif job.cache_on_runner() and job.machine_id == self.machine_id:
                 container = ContainerJob(job.path, job.machine_id)
                 setup_commands.extend(container.setup_commands(backend_type))
@@ -606,10 +610,10 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         for job in self.jobs:
             if job.object_type() != "task" or not job.is_input:
                 continue
-            if backend_type == "ssh":
+            if backend_type in ("ssh", "ihep"):
                 container = ContainerJob(job.path, job.machine_id)
                 finalize_commands.extend(
-                    container.finalize_commands("ssh"))
+                    container.finalize_commands(backend_type))
             elif job.cache_on_runner() and job.machine_id == self.machine_id:
                 container = ContainerJob(job.path, job.machine_id)
                 finalize_commands.extend(
@@ -625,6 +629,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         snake_file.addline("resources:", 1)
         if setup_commands and (use_kerberos or setup_kerberos):
             snake_file.addline('kerberos=True,', 2)
+        snake_file.addline('mem_mb=1024,', 2)
         snake_file.addline('kubernetes_memory_limit="1Gi"', 2)
         snake_file.addline("shell:", 1)
         if setup_commands:
@@ -646,6 +651,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         self._write_environment_directive(
             snake_file, "docker.io/reanahub/reana-env-root6:6.18.04", 1)
         snake_file.addline("resources:", 1)
+        snake_file.addline('mem_mb=1024,', 2)
         snake_file.addline('kubernetes_memory_limit="1Gi"', 2)
         snake_file.addline("shell:", 1)
         if finalize_commands:
@@ -703,6 +709,9 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             snake_file.addline("resources:", 1)
             compute_backend = snakemake_rule["compute_backend"]
             resource_lines = []
+            memory_mb = memory_to_mb(snakemake_rule["memory"])
+            if memory_mb is not None:
+                resource_lines.append(f'mem_mb={memory_mb}')
             if job.use_kerberos(backend_type):
                 resource_lines.append('kerberos=True')
             if compute_backend == "htcondorcern":

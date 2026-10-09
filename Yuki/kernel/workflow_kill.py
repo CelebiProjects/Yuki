@@ -52,7 +52,7 @@ def kill_running_workflows(runner_id, project_uuid, dry_run=True,
             workflow.jobs = [job for job in workflow.jobs
                              if job.is_input or job.job_type() == "algorithm"
                              or job.workflow_id() == name]
-            if workflow.backend_type() == "ssh":
+            if workflow.backend_type() in ("ssh", "ihep"):
                 changed = workflow.force_kill(strict=True)
             else:
                 changed = workflow.force_kill()

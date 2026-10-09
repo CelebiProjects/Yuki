@@ -410,7 +410,7 @@ class ContainerJob(VJob):
         reana -> the EOS mount; ssh -> the runner's managed impressions
         dir; native/dry -> None (no runner-side cache).
         """
-        if backend_type == "ssh":
+        if backend_type in ("ssh", "ihep"):
             from Yuki.kernel import runner_config
             # The cache lives on the runner the WORKFLOW runs on, not on
             # the runner that produced the input.
@@ -436,7 +436,7 @@ class ContainerJob(VJob):
             return []
         commands = [f"mkdir -p {cache_path}",
                     f"cp -r stageout/* {cache_path}"]
-        if backend_type == "ssh":
+        if backend_type in ("ssh", "ihep"):
             # Cached data is read-only once written, so workflows linking
             # it via the setup rule cannot modify the shared cache.
             commands.append(f"chmod -R a-w {cache_path}*")
@@ -448,7 +448,7 @@ class ContainerJob(VJob):
         cache_path = self._cache_source(backend_type, workflow_machine_id)
         commands = [f"mkdir -p imp{self.short_uuid()}/stageout"]
         if cache_path:
-            if backend_type == "ssh":
+            if backend_type in ("ssh", "ihep"):
                 # The cache lives on the same runner as the workflow, so
                 # link each entry into stageout instead of copying. The
                 # cached data was made read-only when written.

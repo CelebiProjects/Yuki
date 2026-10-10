@@ -131,13 +131,17 @@ SSH launch and workflow status use a supervised marker protocol:
 The SSH exec channel is not considered proof that execution started. After the
 detached command is submitted, Yuki waits for either a live wrapper described
 by `yuki.started` or an early `yuki.exit`. If neither appears within the bounded
-startup interval, submission fails instead of leaving the workflow running.
+startup interval, the workflow is recorded as `unknown`: it remains
+non-terminal and status polling continues instead of turning uncertainty into
+a failed or running result.
 
-During later polling, a live wrapper with no exit marker means `running`. A
-nonzero exit means `failed`; exit zero requires every expected `.done` marker,
-otherwise the run is failed as inconsistent. A dead wrapper without
-`yuki.exit` is also failed. Workflows created before `yuki.started` was
-introduced retain legacy `.done`/`yuki.exit` monitoring.
+During later polling, a live marker PID or a process bound to the workflow's
+remote working directory promotes `unknown` to `running`. A nonzero exit means
+`failed`; exit zero requires every expected `.done` marker, otherwise the run
+is failed as inconsistent. Once execution has been positively identified, its
+disappearance without `yuki.exit` is also failed. With no positive launch
+evidence, the workflow remains `unknown`. Workflows created before
+`yuki.started` was introduced retain legacy `.done`/`yuki.exit` monitoring.
 
 ## Snakemake CLI propagation
 

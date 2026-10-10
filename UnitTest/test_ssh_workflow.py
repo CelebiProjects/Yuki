@@ -367,15 +367,19 @@ class TestSshWorkflow(unittest.TestCase):
         confirm.assert_called_once()
 
     def test_confirm_remote_start_requires_marker(self):
-        """Channel completion alone cannot prove that the wrapper started."""
+        """Missing markers leave startup unknown instead of failing it."""
         ssh = MagicMock()
         ssh.exists.return_value = False
+        ssh.exec.return_value = "", "", 1
 
         with patch("Yuki.kernel.workflows.ssh.time.monotonic",
                    side_effect=[0.0, 1.0]), \
                 patch("Yuki.kernel.workflows.ssh.time.sleep"):
-            with self.assertRaisesRegex(RuntimeError, "yuki.started"):
-                self.workflow._confirm_remote_start(ssh, timeout=0.5)
+            status = self.workflow._confirm_remote_start(ssh, timeout=0.5)
+
+        self.assertEqual(status, "unknown")
+        self.assertTrue(self.workflow.config_file.read_variable(
+            "remote_start_uncertain", False))
 
     def test_confirm_remote_start_accepts_live_wrapper(self):
         """A valid startup marker and live supervisor confirm the launch."""
@@ -392,7 +396,65 @@ class TestSshWorkflow(unittest.TestCase):
 
         ssh.exec.side_effect = exec_side_effect
 
+        self.assertEqual(
+            self.workflow._confirm_remote_start(ssh, timeout=0),
+            "running")
+
+    def test_confirm_remote_start_accepts_live_compatibility_pid(self):
+        """A live yuki.pid prevents a false failure if yuki.started lags."""
+        ssh = MagicMock()
+        pid_path = f"{self.workflow.remote_exec_path}/yuki.pid"
+        ssh.exists.side_effect = lambda path: path == pid_path
+
+        def exec_side_effect(command, timeout=300):  # pylint: disable=unused-argument
+            if command.startswith("cat"):
+                return "1235", "", 0
+            if command.startswith("kill -0"):
+                return "", "", 0
+            return "", "", 1
+
+        ssh.exec.side_effect = exec_side_effect
+
         self.workflow._confirm_remote_start(ssh, timeout=0)
+
+    def test_confirm_remote_start_does_not_guess_after_marker_timeout(self):
+        """Initial confirmation stays unknown until a later status refresh."""
+        ssh = MagicMock()
+        ssh.exists.return_value = False
+        ssh.exec.return_value = "4321", "", 0
+
+        with patch("Yuki.kernel.workflows.ssh.time.monotonic",
+                   side_effect=[0.0, 1.0]), \
+                patch("Yuki.kernel.workflows.ssh.time.sleep"), \
+                patch.object(self.workflow, "logger") as workflow_logger:
+            status = self.workflow._confirm_remote_start(ssh, timeout=0.5)
+
+        self.assertEqual(status, "unknown")
+        self.assertIn(
+            "recording unknown",
+            workflow_logger.call_args.args[0])
+
+    def test_confirm_remote_start_logs_diagnostics_while_unknown(self):
+        """Available engine diagnostics do not turn uncertainty into failure."""
+        ssh = MagicMock()
+        log_path = f"{self.workflow.remote_exec_path}/snakemake.log"
+        ssh.exists.side_effect = lambda path: path == log_path
+
+        def exec_side_effect(command, timeout=300):  # pylint: disable=unused-argument
+            if command.startswith("tail -c"):
+                return "MissingInputException", "", 0
+            return "", "", 1
+
+        ssh.exec.side_effect = exec_side_effect
+
+        with patch("Yuki.kernel.workflows.ssh.time.monotonic",
+                   side_effect=[0.0, 1.0]), \
+                patch("Yuki.kernel.workflows.ssh.time.sleep"), \
+                patch.object(self.workflow, "logger") as workflow_logger:
+            status = self.workflow._confirm_remote_start(ssh, timeout=0.5)
+
+        self.assertEqual(status, "unknown")
+        self.assertIn("MissingInputException", workflow_logger.call_args.args[0])
 
     def test_confirm_remote_start_rejects_immediate_failure(self):
         """A nonzero atomic exit marker fails submission immediately."""
@@ -403,6 +465,95 @@ class TestSshWorkflow(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "code 127"):
             self.workflow._confirm_remote_start(ssh, timeout=0)
+
+    def test_remote_state_uses_compatibility_pid_for_reconciliation(self):
+        """Polling remains running when yuki.pid identifies a live process."""
+        ssh = MagicMock()
+        ssh.exists.return_value = False
+
+        with patch.object(self.workflow, "_read_remote_exit", return_value=None), \
+                patch.object(self.workflow, "_read_remote_started", return_value=None), \
+                patch.object(self.workflow, "_read_remote_int", return_value=1235), \
+                patch.object(self.workflow, "_remote_execution_pid", return_value=1235):
+            status, detail, exit_code, completed = \
+                self.workflow._remote_execution_state(ssh, ["aaaaaaa"])
+
+        self.assertEqual(status, "running")
+        self.assertEqual(detail, "")
+        self.assertIsNone(exit_code)
+        self.assertEqual(completed, [])
+
+    def test_remote_state_fails_after_compatibility_pid_dies(self):
+        """Polling corrects an uncertain launch once its process is gone."""
+        ssh = MagicMock()
+        ssh.exists.return_value = False
+
+        with patch.object(self.workflow, "_read_remote_exit", return_value=None), \
+                patch.object(self.workflow, "_read_remote_started", return_value=None), \
+                patch.object(self.workflow, "_read_remote_int", return_value=1235), \
+                patch.object(self.workflow, "_remote_execution_pid", return_value=None):
+            status, detail, _exit_code, _completed = \
+                self.workflow._remote_execution_state(ssh, ["aaaaaaa"])
+
+        self.assertEqual(status, "failed")
+        self.assertIn("without writing yuki.exit", detail)
+
+    def test_remote_state_reconciles_confirmed_markerless_start(self):
+        """A process-confirmed launch remains observable without markers."""
+        ssh = MagicMock()
+        ssh.exists.return_value = False
+        self.workflow.config_file.write_variable(
+            "remote_start_confirmed", True)
+
+        with patch.object(self.workflow, "_read_remote_exit", return_value=None), \
+                patch.object(self.workflow, "_read_remote_started", return_value=None), \
+                patch.object(self.workflow, "_read_remote_int", return_value=None), \
+                patch.object(self.workflow, "_remote_execution_pid", return_value=None) \
+                as execution_pid:
+            status, detail, _exit_code, _completed = \
+                self.workflow._remote_execution_state(ssh, ["aaaaaaa"])
+
+        execution_pid.assert_called_once_with(ssh, discover=True)
+        self.assertEqual(status, "failed")
+        self.assertIn("without writing yuki.exit", detail)
+
+    def test_remote_state_keeps_unconfirmed_markerless_start_unknown(self):
+        """A launch attempt without evidence remains pollable and unknown."""
+        ssh = MagicMock()
+        ssh.exists.return_value = False
+        self.workflow.config_file.write_variable(
+            "remote_launch_attempted", True)
+
+        with patch.object(self.workflow, "_read_remote_exit", return_value=None), \
+                patch.object(self.workflow, "_read_remote_started", return_value=None), \
+                patch.object(self.workflow, "_read_remote_int", return_value=None), \
+                patch.object(self.workflow, "_discover_remote_execution_pid",
+                             return_value=None):
+            status, detail, _exit_code, _completed = \
+                self.workflow._remote_execution_state(ssh, ["aaaaaaa"])
+
+        self.assertEqual(status, "unknown")
+        self.assertIn("waiting for yuki.started", detail)
+
+    def test_remote_state_promotes_unknown_when_process_appears(self):
+        """A later refresh promotes unknown to running from process evidence."""
+        ssh = MagicMock()
+        ssh.exists.return_value = False
+        self.workflow.config_file.write_variable(
+            "remote_launch_attempted", True)
+
+        with patch.object(self.workflow, "_read_remote_exit", return_value=None), \
+                patch.object(self.workflow, "_read_remote_started", return_value=None), \
+                patch.object(self.workflow, "_read_remote_int", return_value=None), \
+                patch.object(self.workflow, "_discover_remote_execution_pid",
+                             return_value=4321):
+            status, detail, _exit_code, _completed = \
+                self.workflow._remote_execution_state(ssh, ["aaaaaaa"])
+
+        self.assertEqual(status, "running")
+        self.assertEqual(detail, "")
+        self.assertTrue(self.workflow.config_file.read_variable(
+            "remote_start_confirmed", False))
 
     def test_terminal_failure_fences_cache_before_local_status(self):
         """A launched SSH workflow writes its remote fence before failing."""
@@ -649,6 +800,41 @@ class TestSshWorkflow(unittest.TestCase):
         self.mock_client.exec_command.assert_called()
         cmd = self.mock_client.exec_command.call_args[0][0]
         self.assertIn("yuki_run.sh", cmd)
+
+    def test_execute_backend_persists_unknown_launch(self):
+        """An unconfirmed detached launch remains non-terminal and pollable."""
+        os.makedirs(self.workflow.path, exist_ok=True)
+
+        with patch.object(self.workflow, "_create_remote_structure"), \
+                patch.object(self.workflow, "_upload_files_remote"), \
+                patch.object(self.workflow, "_start_remote_snakemake",
+                             return_value="unknown"):
+            self.workflow._execute_backend()
+
+        self.assertEqual(self.workflow.status(), "unknown")
+
+    def test_status_refresh_persists_unknown_launch_detail(self):
+        """Polling retains an explanation while launch evidence is absent."""
+        job = self._make_job("a" * 32)
+        self.workflow.jobs = [job]
+        os.makedirs(self.workflow.path, exist_ok=True)
+        detail = "Remote startup is not yet confirmed; waiting for yuki.started"
+
+        with patch.object(self.workflow, "_ssh") as connect, \
+                patch.object(self.workflow, "_remote_execution_state",
+                             return_value=("unknown", detail, None, [])), \
+                patch.object(self.workflow, "_refresh_job_filelists",
+                             return_value=set()), \
+                patch.object(self.workflow, "propagate_job_statuses",
+                             return_value=False):
+            connect.return_value.__enter__.return_value = MagicMock()
+            self.workflow.update_workflow_status()
+
+        with open(os.path.join(self.workflow.path, "results.json"),
+                  encoding="utf-8") as results_file:
+            results = json.load(results_file)["results"]
+        self.assertEqual(results["status"], "unknown")
+        self.assertEqual(results["detail"], detail)
 
     @patch("paramiko.SSHClient")
     def test_update_workflow_status_without_local_workflow_info(self, mock_ssh_cls):

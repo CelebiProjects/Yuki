@@ -93,6 +93,10 @@
   - Coordinate refresh dispatch and execution across web and Celery processes so repeated status reads cannot queue or run overlapping refreshes for the same workflow.
   - Use locked metadata reads for shared status files, preserve terminal job states, and avoid polling terminal workflows.
   - Propagate native Snakemake results to individual jobs and render impressions without an assigned runner as an explicit empty state.
++ Prevent false SSH startup failures when `yuki.started` is delayed.
+  - Record an SSH workflow as `unknown`, rather than `failed` or `running`, when the bounded startup check sees neither `yuki.started` nor `yuki.exit`.
+  - Keep the workflow non-terminal and pollable; later status refreshes promote it to `running` when markers or a workflow-owned process appear, and only record failure after confirmed execution disappears without `yuki.exit`.
+  - Include available `snakemake.log` diagnostics in the startup warning without treating log presence as proof of success or failure.
 + Prevent duplicate workflow execution (YD-13).
   - Atomically claim the complete execution-job set with project-wide leases before publishing workflow ownership or mutating shared job state.
   - Identical active submissions resolve to the existing workflow; partially overlapping DAGs are rejected with structured conflict details.

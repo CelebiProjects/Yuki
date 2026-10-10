@@ -471,9 +471,13 @@ class SshWorkflow(VWorkflow):
 
         try:
             self.logger("[SSH] Starting remote Snakemake")
-            self._start_remote_snakemake()
-            self.set_workflow_status("running")
-            self.logger(f"[SSH] Workflow running remotely in: {self.remote_exec_path}")
+            launch_status = self._start_remote_snakemake()
+            if launch_status not in ("running", "unknown"):
+                launch_status = "running"
+            self.set_workflow_status(launch_status)
+            self.logger(
+                f"[SSH] Workflow remote launch status={launch_status} "
+                f"path={self.remote_exec_path}")
         except Exception as e:
             self.logger(f"[SSH] Failed to start remote Snakemake: {e}")
             self.set_workflow_status("failed")
@@ -713,9 +717,15 @@ wait "$snakemake_pid"
                     )
 
             confirmation_timeout = self.config_file.read_variable("submission_timeout", None)
-            self._confirm_remote_start(
+            launch_status = self._confirm_remote_start(
                 ssh, timeout=max(SSH_START_CONFIRM_TIMEOUT, confirmation_timeout or 0))
-            self.logger("[SSH] Remote Snakemake started")
+            if launch_status == "running":
+                self.logger("[SSH] Remote Snakemake started")
+            else:
+                self.logger(
+                    "[SSH] Remote Snakemake startup is not yet confirmed; "
+                    "workflow status is unknown and will be reconciled")
+            return launch_status
 
     def _build_remote_launch_command(self):
         """Build a detached launch with synchronous preflight checks."""
@@ -763,6 +773,41 @@ wait "$snakemake_pid"
         _out, _err, code = ssh.exec(f"kill -0 {pid} 2>/dev/null")
         return code == 0
 
+    def _discover_remote_execution_pid(self, ssh):
+        """Find a workflow process by its cwd when startup markers lag."""
+        workflow_path = shlex.quote(self.remote_exec_path)
+        command = (
+            "for process_dir in /proc/[0-9]*; do "
+            "process_cwd=$(readlink -f \"$process_dir/cwd\" 2>/dev/null) || continue; "
+            f"[ \"$process_cwd\" = {workflow_path} ] || continue; "
+            "process_command=$(tr '\\0' ' ' < \"$process_dir/cmdline\" "
+            "2>/dev/null) || continue; "
+            "case \"$process_command\" in "
+            "*[y]uki_run.sh*|*[s]nakemake*) basename \"$process_dir\"; exit 0;; "
+            "esac; done; exit 1")
+        out, _err, code = ssh.exec(command)
+        if code != 0:
+            return None
+        try:
+            pid = int(out.strip().splitlines()[0])
+        except (IndexError, TypeError, ValueError):
+            return None
+        return pid if pid > 0 else None
+
+    def _remote_execution_pid(self, ssh, discover=False):
+        """Return a live marker PID, optionally probing the workflow cwd."""
+        started = self._read_remote_started(ssh)
+        candidates = list(started or ())
+        marker_pid = self._read_remote_int(ssh, "yuki.pid")
+        if marker_pid and marker_pid not in candidates:
+            candidates.append(marker_pid)
+        for pid in candidates:
+            if self._remote_pid_alive(ssh, pid):
+                return pid
+        if discover:
+            return self._discover_remote_execution_pid(ssh)
+        return None
+
     def _verified_remote_target(self, ssh):
         """Return a verified (pid, signal target), or None if execution ended."""
         started = self._read_remote_started(ssh)
@@ -793,14 +838,16 @@ wait "$snakemake_pid"
         return None
 
     def _confirm_remote_start(self, ssh, timeout=SSH_START_CONFIRM_TIMEOUT):
-        """Require wrapper markers instead of trusting SSH channel completion."""
+        """Return running, or unknown while startup markers are delayed."""
         deadline = time.monotonic() + timeout
         while True:
             exit_code = self._read_remote_exit(ssh)
             if exit_code is not None:
                 if exit_code == 0:
+                    self.config_file.write_variable(
+                        "remote_start_confirmed", True)
                     self.logger("[SSH] Remote workflow completed during startup")
-                    return
+                    return "running"
                 detail = self._read_remote_snakemake_tail(ssh)
                 if not detail:
                     detail = self._read_remote_wrapper_tail(ssh)
@@ -809,16 +856,23 @@ wait "$snakemake_pid"
                     f"Remote Snakemake exited during startup with code "
                     f"{exit_code}{suffix}")
 
-            started = self._read_remote_started(ssh)
-            if started and self._remote_pid_alive(ssh, started[0]):
-                return
+            live_pid = self._remote_execution_pid(ssh)
+            if live_pid is not None:
+                self.config_file.write_variable(
+                    "remote_start_confirmed", True)
+                return "running"
 
             if time.monotonic() >= deadline:
-                detail = self._read_remote_wrapper_tail(ssh)
+                detail = self._read_remote_snakemake_tail(ssh)
+                if not detail:
+                    detail = self._read_remote_wrapper_tail(ssh)
                 suffix = f": {detail}" if detail else ""
-                raise RuntimeError(
-                    "Remote Snakemake start was not confirmed by yuki.started"
-                    f"{suffix}")
+                self.config_file.write_variable(
+                    "remote_start_uncertain", True)
+                self.logger(
+                    "[SSH] Remote Snakemake start is not yet confirmed; "
+                    f"recording unknown and waiting for status refresh{suffix}")
+                return "unknown"
             time.sleep(SSH_START_CONFIRM_INTERVAL)
 
     def _sync_external_job_status(self, job):
@@ -969,7 +1023,17 @@ wait "$snakemake_pid"
             status = "finished"
         else:
             started = self._read_remote_started(ssh)
-            if started and not self._remote_pid_alive(ssh, started[0]):
+            marker_pid = self._read_remote_int(ssh, "yuki.pid")
+            launch_confirmed = (
+                started is not None or marker_pid is not None or
+                self.config_file.read_variable(
+                    "remote_start_confirmed", False))
+            live_pid = self._remote_execution_pid(
+                ssh, discover=launch_confirmed)
+            if live_pid is not None:
+                self.config_file.write_variable(
+                    "remote_start_confirmed", True)
+            elif launch_confirmed:
                 # record_exit writes atomically before the wrapper exits. Check
                 # once more for the process-exit/marker-observation race.
                 exit_code = self._read_remote_exit(ssh)
@@ -977,10 +1041,24 @@ wait "$snakemake_pid"
                     return self._remote_execution_state(ssh, jobs)
                 status = "failed"
                 detail = (
-                    "Remote workflow supervisor exited without writing "
+                    "Remote workflow process exited without writing "
                     "yuki.exit")
-            # No startup marker identifies workflows launched by older Yuki
-            # versions. They retain legacy marker-only monitoring as running.
+            elif self.config_file.read_variable(
+                    "remote_launch_attempted", False):
+                # A detached SSH launch can precede marker visibility. Probe
+                # once during refresh; absence remains unknown rather than
+                # becoming a false terminal failure.
+                live_pid = self._discover_remote_execution_pid(ssh)
+                if live_pid is not None:
+                    self.config_file.write_variable(
+                        "remote_start_confirmed", True)
+                else:
+                    status = "unknown"
+                    detail = (
+                        "Remote startup is not yet confirmed; waiting for "
+                        "yuki.started")
+            # Workflows created before launch-attempt tracking retain their
+            # legacy marker-only monitoring as running.
 
         return status, detail, exit_code, completed
 
@@ -1024,6 +1102,8 @@ wait "$snakemake_pid"
                 results["failure_detail"] = (
                     failure_detail or
                     f"Remote Snakemake exited with code {exit_code}")
+            elif failure_detail:
+                results["detail"] = failure_detail
 
             self.logger(
                 f"[SSH] Workflow status: {status}, "

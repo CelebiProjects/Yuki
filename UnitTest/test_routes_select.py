@@ -18,7 +18,8 @@ def test_collect_files_route_passes_spec():
         r = c.get("/collect-files/proj/imp?kind=stageout&pattern=*.root")
         assert r.status_code == 200
         assert r.get_json()["*.root"]["runner"]["collected"] == []
-        inst.collect_files.assert_called_once_with("stageout", "*.root")
+        inst.collect_files.assert_called_once_with(
+            "stageout", "*.root", allow_failed=False)
 
 
 def test_collect_files_route_type_keyword():
@@ -27,7 +28,28 @@ def test_collect_files_route_type_keyword():
     with mock.patch.object(wf_routes, "ImpressionStorage") as storage_cls:
         c = app.test_client()
         c.get("/collect-files/proj/imp?type=plots")
-        storage_cls.return_value.collect_files.assert_called_once_with("stageout", "plots")
+        storage_cls.return_value.collect_files.assert_called_once_with(
+            "stageout", "plots", allow_failed=False)
+
+
+def test_collect_files_route_allows_failed_only_when_requested():
+    """The failed-stageout override is an explicit query opt-in."""
+    app = _app(wf_routes.bp)
+    with mock.patch.object(wf_routes, "ImpressionStorage") as storage_cls:
+        app.test_client().get(
+            "/collect-files/proj/imp?type=all&allow_failed=true")
+        storage_cls.return_value.collect_files.assert_called_once_with(
+            "stageout", "all", allow_failed=True)
+
+
+def test_collect_outputs_route_forwards_allow_failed():
+    """Full-stageout collection forwards the failed-workflow opt-in."""
+    app = _app(wf_routes.bp)
+    with mock.patch.object(wf_routes, "ImpressionStorage") as storage_cls:
+        app.test_client().get(
+            "/collect-outputs/proj/imp?allow_failed=1")
+        storage_cls.return_value.collect_outputs.assert_called_once_with(
+            allow_failed=True)
 
 
 def test_file_status_route_returns_json():

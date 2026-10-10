@@ -119,33 +119,60 @@ class ImpressionStorage:
                     merged[key].extend(value)
         return merged
 
-    def collect(self):
+    @staticmethod
+    def _mark_unofficial(report, job_status, workflow_id):
+        """Label files collected from a non-successful workflow attempt."""
+        marked = dict(report or {"collected": [], "skipped": [], "failed": []})
+        marked.update({
+            "unofficial": True,
+            "job_status": job_status,
+            "workflow_id": workflow_id,
+            "notice": "Diagnostic files from a failed workflow; not official results",
+        })
+        return marked
+
+    @staticmethod
+    def _can_collect_stageout(job_status, allow_failed):
+        """Whether stageout collection is permitted for this job state."""
+        return job_status == CODA or (
+            allow_failed and job_status in (FAILED, DISSONANCE))
+
+    def collect(self, allow_failed=False):
         """Light default: plots + logs on success, logs on failure."""
         report = collect_rawdata(self.job_path, self.runners_id, file_types.is_plot)
         for name, job, workflow in self._get_runner_contexts():
             job_status = job.status(musical=True)
             runner_report = {}
-            if job_status == CODA:
+            if self._can_collect_stageout(job_status, allow_failed):
                 print(f"[{name}] Collecting plots + logs...")
                 runner_report = self._merge_reports([
                     workflow.download_selected(self.impression, file_types.is_plot, "stageout"),
                     workflow.download_logs(self.impression),
                 ])
+                if job_status != CODA:
+                    runner_report = self._mark_unofficial(
+                        runner_report, job_status, job.workflow_id())
             elif job_status in (FAILED, DISSONANCE):
                 print(f"[{name}] Collecting logs...")
                 runner_report = workflow.download_logs(self.impression)
             report[name] = runner_report
         return report
 
-    def collect_files(self, kind, spec):
+    def collect_files(self, kind, spec, allow_failed=False):
         """Download a subset of <kind> files matching a selection spec."""
         predicate = file_types.make_predicate(spec)
         report = (collect_rawdata(self.job_path, self.runners_id, predicate)
                   if kind == "stageout" else {})
         for name, job, workflow in self._get_runner_contexts():
-            if job.status(musical=True) == CODA:
+            job_status = job.status(musical=True)
+            if self._can_collect_stageout(job_status, allow_failed):
                 print(f"[{name}] Collecting {kind} matching {spec!r}...")
-                report[name] = workflow.download_selected(self.impression, predicate, kind)
+                runner_report = workflow.download_selected(
+                    self.impression, predicate, kind)
+                if job_status != CODA:
+                    runner_report = self._mark_unofficial(
+                        runner_report, job_status, job.workflow_id())
+                report[name] = runner_report
             else:
                 report[name] = {"collected": [], "skipped": [], "failed": []}
         return report
@@ -489,14 +516,19 @@ class ImpressionStorage:
             report[name] = runner_report
         return report
 
-    def collect_outputs(self):
+    def collect_outputs(self, allow_failed=False):
         """Retrieves only output files from runners."""
         report = collect_rawdata(self.job_path, self.runners_id,
                                  file_types.make_predicate("all"))
         for name, job, workflow in self._get_runner_contexts():
-            if job.status(musical=True) == CODA:
+            job_status = job.status(musical=True)
+            if self._can_collect_stageout(job_status, allow_failed):
                 print(f"[{name}] Collecting outputs...")
-                report[name] = workflow.download_outputs(self.impression)
+                runner_report = workflow.download_outputs(self.impression)
+                if job_status != CODA:
+                    runner_report = self._mark_unofficial(
+                        runner_report, job_status, job.workflow_id())
+                report[name] = runner_report
             else:
                 report[name] = {"collected": [], "skipped": [], "failed": []}
         return report

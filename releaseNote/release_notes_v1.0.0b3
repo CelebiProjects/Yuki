@@ -15,6 +15,7 @@
   - REANA `list_runner_files` and `download_selected` (filtered, idempotent) with bounded retries for transient TLS failures; runner file listings are cached so status skips repeat REANA calls.
   - Selective, logs-inclusive REANA booking via `upload_mode`; book-reana uploads the runner file manifest.
   - Collect reports are structured with skip/failure reasons; stageout/log handling preserves subdirectory structure.
+  - Add explicit failed-workflow stageout collection via `allow_failed` (`celebi-cli collect --allow-failed all`). Default collection still retrieves only logs for failed jobs; opted-in files are labeled with their failed status and workflow ID and marked as unofficial diagnostic results.
 + Add the SSH runner backend to Yuki.
   - Remote workflows execute via SSH/SFTP with status/display pipeline support.
 + Add the IHEP HepJob runner backend.

@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from Yuki.kernel.execution.status import CODA
+from Yuki.kernel.execution.status import CODA, FAILED
 
 
 def _storage(tmp_path):
@@ -70,6 +70,47 @@ def test_collect_files_uses_predicate(tmp_path):
     s.collect_files("stageout", "*.root")
     pred = wf.download_selected.call_args.args[1]
     assert pred("ntuple.root") and not pred("mass.png")
+
+
+def test_collect_files_failed_requires_opt_in_and_marks_results(tmp_path):
+    """Failed stageout is downloadable only as explicitly unofficial data."""
+    s, _ims = _storage(tmp_path)
+    job = mock.Mock()
+    job.status.return_value = FAILED
+    job.workflow_id.return_value = "failed-workflow"
+    wf = mock.Mock()
+    wf.download_selected.return_value = {
+        "collected": ["fit.root"], "skipped": [], "failed": []}
+    s._get_runner_contexts = lambda: [("runner", job, wf)]
+
+    denied = s.collect_files("stageout", "all")
+    wf.download_selected.assert_not_called()
+    assert denied["runner"]["collected"] == []
+
+    allowed = s.collect_files("stageout", "all", allow_failed=True)
+    assert allowed["runner"]["collected"] == ["fit.root"]
+    assert allowed["runner"]["unofficial"] is True
+    assert allowed["runner"]["job_status"] == FAILED
+    assert allowed["runner"]["workflow_id"] == "failed-workflow"
+
+
+def test_collect_outputs_failed_requires_opt_in(tmp_path):
+    """The all-output shortcut applies the same failed-stageout gate."""
+    s, _ims = _storage(tmp_path)
+    job = mock.Mock()
+    job.status.return_value = FAILED
+    job.workflow_id.return_value = "failed-workflow"
+    wf = mock.Mock()
+    wf.download_outputs.return_value = {
+        "collected": ["summary.csv"], "skipped": [], "failed": []}
+    s._get_runner_contexts = lambda: [("runner", job, wf)]
+
+    s.collect_outputs()
+    wf.download_outputs.assert_not_called()
+
+    report = s.collect_outputs(allow_failed=True)
+    assert report["runner"]["collected"] == ["summary.csv"]
+    assert report["runner"]["unofficial"] is True
 
 
 def test_file_status_merges(tmp_path):

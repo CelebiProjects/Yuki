@@ -11,6 +11,12 @@ from ..config import config
 
 bp = Blueprint('workflow', __name__)
 
+
+def _allow_failed():
+    """Read the explicit failed-workflow collection opt-in."""
+    value = request.args.get("allow_failed", request.args.get("allow-failed", ""))
+    return str(value).lower() in ("1", "true", "yes")
+
 @bp.route("/kill/<project_uuid>/<impression>", methods=['GET', 'POST'])
 def kill(project_uuid, impression):
     """Preview an impression's workflow scope, then stop one explicit ID."""
@@ -32,13 +38,13 @@ def kill(project_uuid, impression):
 def collect(project_uuid, impression):
     """Collect workflow results for a specific project and impression."""
     storage = ImpressionStorage(project_uuid, impression)
-    return jsonify(storage.collect())
+    return jsonify(storage.collect(allow_failed=_allow_failed()))
 
 @bp.route("/collect-outputs/<project_uuid>/<impression>", methods=['GET'])
 def collect_outputs(project_uuid, impression):
     """Collect workflow outputs for a specific project and impression."""
     storage = ImpressionStorage(project_uuid, impression)
-    return jsonify(storage.collect_outputs())
+    return jsonify(storage.collect_outputs(allow_failed=_allow_failed()))
 
 @bp.route("/collect-logs/<project_uuid>/<impression>", methods=['GET'])
 def collect_logs(project_uuid, impression):
@@ -80,9 +86,11 @@ def collect_files(project_uuid, impression):
     if request.args.get("names"):
         for one in request.args.get("names").split(","):
             if one:
-                report[one] = storage.collect_files(kind, one)
+                report[one] = storage.collect_files(
+                    kind, one, allow_failed=_allow_failed())
     else:
-        report[spec] = storage.collect_files(kind, spec)
+        report[spec] = storage.collect_files(
+            kind, spec, allow_failed=_allow_failed())
     return jsonify(report)
 
 

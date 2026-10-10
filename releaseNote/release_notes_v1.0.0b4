@@ -1,0 +1,42 @@
+## v1.0.0b4
+
+Changes since v1.0.0b3:
+
++ Add an IHEP HepJob runner backend.
+  - Run the workflow coordinator and every Snakemake rule through `hep_sub`, track and
+    cancel coordinator/child jobs, and retain their jobscripts and logs.
+  - Translate Celebi memory limits to HepJob resources and keep runtime state on the
+    shared workflow filesystem so jobs can move between worker nodes.
+  - Add runner probing, transfer/cache/purge integration, installation documentation,
+    and `scripts/setup-ihep-runner.sh`.
+  - Provide a real `script` Conda environment and fail explicitly when it is unavailable.
++ Make workflow submission lifecycle-aware and idempotent.
+  - Reuse active workflows (including `unknown` SSH launches) and completed results.
+  - Replace failed, dissonant, or stopped workflows while retaining immutable predecessor
+    workflow/status metadata in the submission record.
+  - Initialize job metadata for the requested runner before reading workflow state.
+  - Support guarded unknown-workflow resubmission: refresh first and replace only after
+    failure is confirmed.
++ Add synchronous live status refresh for Celebi's `status --wait`.
+  - `GET /status/<project>/<impression>?wait=true` waits for the shared refresh lock,
+    queries the runner, propagates the new state, and then returns it.
+  - Coordinate live HTTP refreshes with queued Celery refreshes without leaving stale
+    queue markers; return refresh failures explicitly to the client.
++ Keep delayed SSH launches pollable.
+  - Use `unknown` when neither the startup nor exit marker is visible yet, then promote
+    the workflow when later evidence confirms that it started.
++ Harden workflow cache publication and dependency diagnostics.
+  - Fence failed/stopped SSH and IHEP workspaces so stale workflows cannot republish a
+    purged cache; publish completed caches atomically with completion markers.
+  - Persist structured `blocked_by` snapshots limited to each job's submitted ancestry.
++ Allow explicit collection of failed-workflow stageout as clearly marked diagnostic,
+  unofficial output while retaining logs-only collection as the default.
++ Reorganize Yuki by responsibility.
+  - Split kernel code into `jobs`, `workflows`, `runners`, `execution`, and `storage`;
+    move application operations to `Yuki.services`, server-only code to
+    `Yuki.server.services`, and shared helpers to `Yuki.utils`.
+  - Remove the obsolete flat kernel modules after migrating production code and tests.
++ Improve the Conda-based RabbitMQ setup.
+  - Add the setup script, reduce environment-solver memory use, locate the conda-forge
+    binary reliably, and enable Celery-compatible RabbitMQ behavior.
++ Set the Yuki package version to `1.0.0b4`.

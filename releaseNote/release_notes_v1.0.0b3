@@ -1,8 +1,4 @@
 ## v1.0.0b3
-+ Make `submit` lifecycle-aware and idempotent.
-  - Re-submitting an active workflow, including one whose SSH launch status is `unknown`, returns that workflow without creating a duplicate; submitting completed work reuses its existing results.
-  - Re-submitting a failed or dissonant impression creates a replacement workflow and preserves the previous workflow ID and job status in the durable submission record, so clients can distinguish replacement from a first submission.
-  - `submit --with-unknown` synchronously refreshes an `unknown` workflow under the normal status-refresh lock. It creates a replacement only after confirmed failure; an inconclusive, overlapping, or failed refresh never submits new work.
 + Add impression result transfer (`POST /transfer`, `GET /transfer/<job_id>`).
   - Move stageout results between Yuki storage and SSH runner managed caches, and from REANA runners to SSH runners (the destination pulls the REANA workspace with its own reana-cli; nothing crosses the Yuki host).
   - Yuki-side stageout is read as the union of the per-machine `stageout/` directories; runner downloads land under the source runner's machine directory.
@@ -19,20 +15,8 @@
   - REANA `list_runner_files` and `download_selected` (filtered, idempotent) with bounded retries for transient TLS failures; runner file listings are cached so status skips repeat REANA calls.
   - Selective, logs-inclusive REANA booking via `upload_mode`; book-reana uploads the runner file manifest.
   - Collect reports are structured with skip/failure reasons; stageout/log handling preserves subdirectory structure.
-  - Add explicit failed-workflow stageout collection via `allow_failed` (`celebi-cli collect --allow-failed all`). Default collection still retrieves only logs for failed jobs; opted-in files are labeled with their failed status and workflow ID and marked as unofficial diagnostic results.
 + Add the SSH runner backend to Yuki.
   - Remote workflows execute via SSH/SFTP with status/display pipeline support.
-+ Add the IHEP HepJob runner backend.
-  - Reuse SSH/SFTP staging and managed caches while submitting the workflow coordinator through `hep_sub`; Snakemake submits every setup, algorithm, task, and finalize rule through `hep_sub` as well, so neither orchestration nor analysis runs on `lxlogin.ihep.ac.cn`.
-  - Persist the coordinator and child HepJob IDs, query the coordinator with `hep_q -i`, cancel coordinator and children with `hep_rm`, and retain each child jobscript plus stdout/stderr under the workflow's `hep_jobs/` directory.
-  - Convert each Celebi `memory_limit` to the numeric Snakemake `mem_mb` resource in Python and pass it to `hep_sub -m`; use `hep_step_memory_mb` only when the job has no valid memory quantity.
-  - Keep XDG, Conda, Snakemake, and Apptainer state on the shared workflow filesystem so child jobs can move between worker nodes without depending on login-node `/tmp`, worker-local `/scratch`, or an AFS token.
-  - Add runner registration/probing, configuration fields, SSH-compatible transfer/cache/purge support, installation documentation, and `scripts/setup-ihep-runner.sh` for a CEFS-hosted Conda/Snakemake environment. Initial AFS home access is handled interactively with `kinit` and `aklog -d`.
-  - Install and expose a real named `script` Conda environment on IHEP; `environment: script` tasks now activate it and fail when it is unavailable instead of silently using the worker's system Python.
-  - Validate the IHEP transport and scheduling path on `lxlogin.ihep.ac.cn`: outer and per-rule HepJobs, cross-node stageout consumption, final status propagation, and output collection all completed successfully.
-+ Reorganize the Yuki package by responsibility.
-  - Split kernel implementations into `jobs`, `workflows`, `runners`, `execution`, and `storage` packages; move shared application operations to `Yuki.services`, server-only REANA booking to `Yuki.server.services`, and domain-independent helpers to `Yuki.utils`.
-  - Remove all obsolete flat modules after migrating production code and tests to the canonical package paths; the `kernel` root now contains only its package initializer.
 + Docker consolidation.
   - Multi-stage `docker/Dockerfile` (base -> dev -> prod) with a non-root `yuki` runtime.
   - Unified `docker/scripts/build.sh` (dev/prod, version and nightly tagging, tar export).
@@ -68,14 +52,10 @@
   - `POST /cache-results` + `GET /cache-results/<job_id>`: background job that saves a workflow's runner-resident stageout into the runner's managed impressions cache — the manual version of the workflow's own cache rule. Fast-copies with the reflink → hardlink → rsync → copy chain, makes the copy read-only, and records a `transferred` cache entry in `distribution.json`. Impressions whose job never finished, or whose stageout is missing on the runner, are skipped with a reason instead of failing the batch.
   - `GET /whereabouts/<project_uuid>/<impression>`: reports where an impression's data lives — the `yuki` entry, per-runner `workflow`/`cache` states (runner ids mapped to names), and the registration host — read from the persisted distribution registry (no SSH). Missing or corrupt registries degrade to a note, never a 500.
   - `yuki purge-ssh-runner-cache <runner> [--project X] [--impression Y] [--dry-run] [-y]`: server-side CLI for cache purges with a confirmation prompt.
-+ Fence cache publication from failed SSH/IHEP workflows.
-  - Before Yuki records a launched workflow as failed or stopped, it atomically writes `yuki.failed` in the remote workflow workspace; cache rules check this fence before copying and again before publishing, so a still-running stale workflow cannot recreate a purged cache.
-  - Re-publishing an impression removes only that exact previous cache, cleans failed copies, and writes an internal completion marker last before making the payload read-only. Interrupted writes remain marked in progress and are never cache hits; marker-less caches from older Yuki versions remain usable.
 + Failure propagation fixes.
   - `VWorkflow.run` no longer stamps every execution job `failed` when the backend errors: jobs already in a terminal state keep their status, so a failed remote start leaves jobs `dissonance` and never clobbers a previously completed status (fixes spurious downstream "Blocked: upstream input ... is failed" cascades).
   - `DISSONANCE` is now part of `is_terminal_status`.
   - SSH workflow start failures include the tail of the runner's `snakemake.log` ("Remote Snakemake failed: ... (exit N)") instead of an empty detail.
-  - Dependency failures now persist an immutable, structured `blocked_by` snapshot containing each blocking impression, its path, producing workflow, and observed status. Each job records only blockers in its own submitted DAG ancestry; unrelated branches are reported as not launched rather than attributed a false blocker. `/status` exposes the snapshot without polling upstream or reinterpreting the current DAG, and a later submission clears the old blocker metadata.
 + Job-state files can live in per-purpose directories (cache jobs in `$YUKIDIR/cache-jobs/`), generalizing the register-jobs helpers.
 + Record the runner cache at the terminal status write.
   - The status write that first observes a workflow finished (or failed) refreshes every non-algorithm job's distribution registry (`refresh_workflow_distributions`, now in the kernel), so the workflow's own cache rule is recorded as a `cached` entry even when no status poll was in flight at completion — `whereabouts` no longer needs a manual `cache-results` to see the auto-cache.
@@ -97,10 +77,6 @@
   - Coordinate refresh dispatch and execution across web and Celery processes so repeated status reads cannot queue or run overlapping refreshes for the same workflow.
   - Use locked metadata reads for shared status files, preserve terminal job states, and avoid polling terminal workflows.
   - Propagate native Snakemake results to individual jobs and render impressions without an assigned runner as an explicit empty state.
-+ Prevent false SSH startup failures when `yuki.started` is delayed.
-  - Record an SSH workflow as `unknown`, rather than `failed` or `running`, when the bounded startup check sees neither `yuki.started` nor `yuki.exit`.
-  - Keep the workflow non-terminal and pollable; later status refreshes promote it to `running` when markers or a workflow-owned process appear, and only record failure after confirmed execution disappears without `yuki.exit`.
-  - Include available `snakemake.log` diagnostics in the startup warning without treating log presence as proof of success or failure.
 + Prevent duplicate workflow execution (YD-13).
   - Atomically claim the complete execution-job set with project-wide leases before publishing workflow ownership or mutating shared job state.
   - Identical active submissions resolve to the existing workflow; partially overlapping DAGs are rejected with structured conflict details.

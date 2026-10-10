@@ -7,14 +7,16 @@ from flask import Blueprint, jsonify, request
 
 from ...kernel.jobs.base import VJob
 from ...kernel.jobs.container import ContainerJob
+from ...kernel.workflows.base import VWorkflow
 from ...kernel.storage.impressions import ImpressionStorage
 from ...kernel.execution.submissions import SubmissionStore
-from ...kernel.execution.lease import workflow_is_active
+from ...kernel.execution.lease import workflow_is_active, workflow_status
 from ...kernel.execution.status import (
-    SILENCE, TUNING, FAILED, DISSONANCE,
+    SILENCE, TUNING, FAILED, DISSONANCE, CODA, FINAL_NOTE, ARCHIVED,
 )
 from ..config import config
 from ..tasks import task_exec_impression
+from ..workflow_status_refresh import running_refresh
 import shutil  # pylint: disable=wrong-import-order
 import json  # pylint: disable=wrong-import-order
 
@@ -22,8 +24,23 @@ bp = Blueprint('execution', __name__)
 logger = getLogger("YukiLogger")
 _debug = getLogger("Yuki.execution")
 
+
+def _refresh_unknown_workflow(project_uuid, workflow_id):
+    """Synchronously refresh one unknown workflow without overlapping polls."""
+    workflow = VWorkflow.create(project_uuid, [], workflow_id)
+    try:
+        with running_refresh(workflow.path) as acquired:
+            if not acquired:
+                return (workflow_status(project_uuid, workflow_id) or "unknown",
+                        "workflow status refresh is already in progress")
+            workflow.update_workflow_status()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return (workflow_status(project_uuid, workflow_id) or "unknown",
+                f"{type(exc).__name__}: {exc}")
+    return workflow_status(project_uuid, workflow_id) or "unknown", ""
+
 @bp.route('/execute', methods=['GET', 'POST'])
-def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-statements,too-many-return-statements
     """Execute impressions."""
     _debug.debug("# >>> execute")
     if request.method == 'POST':
@@ -38,11 +55,16 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
                 return jsonify({"error": "timeout must be a positive integer in seconds"}), 400
         machine = request.form["machine"]
         project_uuid = request.form['project_uuid']
+        with_unknown = str(request.form.get("with_unknown", "")).lower() \
+            in ("1", "true", "yes")
         cache_dict = request.form["cache_on_runner"]
         cache_dict = json.loads(cache_dict)
         contents = request.files["impressions"].read().decode()
         start_jobs = []
         requested_jobs = []
+        previous_workflows = {}
+        status_refreshed = False
+        refresh_error = ""
         _debug.debug("cache_on_runner: %s", cache_dict)
         _debug.debug("machine: %s", machine)
         _debug.debug("contents: %s", contents.split(" "))
@@ -52,13 +74,21 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
             _debug.debug("impression: %s", impression)
             job_path = config.get_job_path(project_uuid, impression)
             job = VJob(job_path, None)
-            _debug.debug("job %s %s %s", job, job.job_type(), job.status())
+            job_status = job.status()
+            _debug.debug("job %s %s %s", job, job.job_type(), job_status)
 
             if job.job_type() == "task":
                 requested_jobs.append(job)
-                if job.status() not in (SILENCE, FAILED, DISSONANCE):
+                if job_status not in (SILENCE, FAILED, DISSONANCE):
                     _debug.debug("job status is not raw or failed")
                     continue
+                previous_workflow_id = job.workflow_id()
+                if (job_status in (FAILED, DISSONANCE)
+                        and previous_workflow_id):
+                    previous_workflows[job.uuid] = {
+                        "workflow_id": previous_workflow_id,
+                        "job_status": job_status,
+                    }
                 cache_dict.setdefault(impression, False)
                 start_jobs.append(job)
             elif job.job_type() == "algorithm":
@@ -67,19 +97,95 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
                 #     continue
                 # start_jobs.append(job)
 
+        workflow_ids = {job.workflow_id() for job in requested_jobs
+                        if job.workflow_id()}
+        if (with_unknown and requested_jobs
+                and len(workflow_ids) == 1
+                and workflow_status(project_uuid, next(iter(workflow_ids)))
+                in ("", "unknown")):
+            workflow_id = next(iter(workflow_ids))
+            # An unknown workflow is authoritative over a stale per-job
+            # failure. Do not reuse the initially selected retry candidates
+            # unless this explicit refresh confirms workflow failure.
+            start_jobs = []
+            previous_workflows = {}
+            refreshed_status, refresh_error = _refresh_unknown_workflow(
+                project_uuid, workflow_id)
+            status_refreshed = True
+            _debug.debug(
+                "unknown workflow refresh workflow=%s status=%s error=%s",
+                workflow_id, refreshed_status, refresh_error)
+            if not refresh_error and refreshed_status in (FAILED, DISSONANCE):
+                for job in requested_jobs:
+                    job_status = job.status()
+                    if job_status in (CODA, FINAL_NOTE, ARCHIVED):
+                        continue
+                    previous_workflows[job.uuid] = {
+                        "workflow_id": workflow_id,
+                        "job_status": job_status,
+                        "workflow_status": refreshed_status,
+                    }
+                    cache_dict.setdefault(job.uuid, False)
+                    start_jobs.append(job)
+
         if len(start_jobs) == 0:
-            workflow_ids = {job.workflow_id() for job in requested_jobs
-                            if job.workflow_id()}
             if (requested_jobs and len(workflow_ids) == 1
                     and all(job.workflow_id() in workflow_ids
                             for job in requested_jobs)):
                 workflow_id = next(iter(workflow_ids))
-                if workflow_is_active(project_uuid, workflow_id):
+                current_workflow_status = (
+                    workflow_status(project_uuid, workflow_id) or "unknown")
+                if status_refreshed and refresh_error:
                     submission, _ = SubmissionStore.create(
                         project_uuid, [job.uuid for job in requested_jobs], machine)
                     record = submission.update(
                         status="deduplicated", workflow_id=workflow_id,
-                        deduplicated=True)
+                        deduplicated=True, submission_reason="refresh_failed",
+                        workflow_status=current_workflow_status,
+                        status_refreshed=True, refresh_error=refresh_error)
+                    for job in requested_jobs:
+                        VJob(job.path, machine).set_submission_id(
+                            submission.submission_id)
+                    return jsonify(record)
+                if workflow_is_active(project_uuid, workflow_id):
+                    submission, _ = SubmissionStore.create(
+                        project_uuid, [job.uuid for job in requested_jobs], machine)
+                    reason = ("unknown" if with_unknown and status_refreshed
+                              and current_workflow_status == "unknown"
+                              else "active")
+                    record = submission.update(
+                        status="deduplicated", workflow_id=workflow_id,
+                        deduplicated=True, submission_reason=reason,
+                        workflow_status=current_workflow_status,
+                        status_refreshed=status_refreshed,
+                        refresh_error=refresh_error)
+                    for job in requested_jobs:
+                        VJob(job.path, machine).set_submission_id(
+                            submission.submission_id)
+                    return jsonify(record)
+                if all(job.status() in (CODA, FINAL_NOTE, ARCHIVED)
+                       for job in requested_jobs):
+                    submission, _ = SubmissionStore.create(
+                        project_uuid, [job.uuid for job in requested_jobs], machine)
+                    record = submission.update(
+                        status="deduplicated", workflow_id=workflow_id,
+                        deduplicated=True, submission_reason="completed",
+                        workflow_status=current_workflow_status,
+                        status_refreshed=status_refreshed,
+                        refresh_error=refresh_error)
+                    for job in requested_jobs:
+                        VJob(job.path, machine).set_submission_id(
+                            submission.submission_id)
+                    return jsonify(record)
+                if status_refreshed:
+                    submission, _ = SubmissionStore.create(
+                        project_uuid, [job.uuid for job in requested_jobs], machine)
+                    record = submission.update(
+                        status="deduplicated", workflow_id=workflow_id,
+                        deduplicated=True,
+                        submission_reason="not_retryable",
+                        workflow_status=current_workflow_status,
+                        status_refreshed=True)
                     for job in requested_jobs:
                         VJob(job.path, machine).set_submission_id(
                             submission.submission_id)
@@ -92,6 +198,13 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
 
         submission, accepted = SubmissionStore.create(
             project_uuid, contents.split(" "), machine)
+        if previous_workflows or status_refreshed:
+            accepted = submission.update(
+                submission_reason=("replacement" if previous_workflows
+                                   else "new"),
+                previous_workflows=previous_workflows,
+                status_refreshed=status_refreshed,
+                refresh_error=refresh_error)
         try:
             for impression in contents.split(" "):
                 job_path = config.get_job_path(project_uuid, impression)

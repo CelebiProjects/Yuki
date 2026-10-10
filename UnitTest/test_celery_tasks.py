@@ -56,7 +56,12 @@ def test_duplicate_submission_returns_existing_workflow():
         factory.create.return_value = workflow
         result = tasks.task_exec_impression("proj", "imp1", "runner-1")
 
-    assert result == {"workflow_id": "wf-existing", "deduplicated": True}
+    assert result == {
+        "workflow_id": "wf-existing",
+        "workflow_status": "unknown",
+        "deduplicated": True,
+        "submission_reason": "active",
+    }
     workflow.set_workflow_status.assert_called_once_with("stopped")
 
 

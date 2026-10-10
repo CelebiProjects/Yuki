@@ -1,4 +1,8 @@
 ## v1.0.0b3
++ Make `submit` lifecycle-aware and idempotent.
+  - Re-submitting an active workflow, including one whose SSH launch status is `unknown`, returns that workflow without creating a duplicate; submitting completed work reuses its existing results.
+  - Re-submitting a failed or dissonant impression creates a replacement workflow and preserves the previous workflow ID and job status in the durable submission record, so clients can distinguish replacement from a first submission.
+  - `submit --with-unknown` synchronously refreshes an `unknown` workflow under the normal status-refresh lock. It creates a replacement only after confirmed failure; an inconclusive, overlapping, or failed refresh never submits new work.
 + Add impression result transfer (`POST /transfer`, `GET /transfer/<job_id>`).
   - Move stageout results between Yuki storage and SSH runner managed caches, and from REANA runners to SSH runners (the destination pulls the REANA workspace with its own reana-cli; nothing crosses the Yuki host).
   - Yuki-side stageout is read as the union of the per-machine `stageout/` directories; runner downloads land under the source runner's machine directory.

@@ -116,8 +116,13 @@ def _active(entry, project_uuid, yuki_dir=None):
 
 def workflow_is_active(project_uuid, workflow_id, yuki_dir=None):
     """Return whether a recorded workflow has not reached a terminal state."""
-    return _workflow_status(project_uuid, workflow_id, yuki_dir) \
+    return workflow_status(project_uuid, workflow_id, yuki_dir) \
         not in TERMINAL_WORKFLOW_STATUSES
+
+
+def workflow_status(project_uuid, workflow_id, yuki_dir=None):
+    """Return the workflow status recorded in its durable results file."""
+    return _workflow_status(project_uuid, workflow_id, yuki_dir)
 
 
 def active_owners(project_uuid, machine_id, jobs, yuki_dir=None):

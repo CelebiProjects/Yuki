@@ -10,7 +10,7 @@ from ..services import result_transfer
 from ..kernel.jobs.base import VJob
 from ..kernel.workflows.base import VWorkflow, _yuki_dir
 from ..kernel.execution.lease import (
-    WorkflowAlreadyActive, WorkflowLeaseConflict)
+    WorkflowAlreadyActive, WorkflowLeaseConflict, workflow_status)
 from ..kernel.execution.submissions import SubmissionStore
 from .workflow_status_refresh import running_refresh
 from ..utils.logging_config import apply_channel_levels
@@ -99,7 +99,13 @@ def _exec_impression(project_uuid, impressions, machine_uuid, timeout,
         _debug.info(
             "[task_exec_impression] duplicate submission workflow=%s "
             "existing_workflow=%s", workflow.uuid, exc.workflow_id)
-        result = {"workflow_id": exc.workflow_id, "deduplicated": True}
+        result = {
+            "workflow_id": exc.workflow_id,
+            "workflow_status": (
+                workflow_status(project_uuid, exc.workflow_id) or "unknown"),
+            "deduplicated": True,
+            "submission_reason": "active",
+        }
         if submission:
             submission.update(status="deduplicated", **result)
         return result

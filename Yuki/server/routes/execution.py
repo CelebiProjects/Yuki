@@ -13,6 +13,7 @@ from ...kernel.execution.submissions import SubmissionStore
 from ...kernel.execution.lease import workflow_is_active, workflow_status
 from ...kernel.execution.status import (
     SILENCE, TUNING, FAILED, DISSONANCE, CODA, FINAL_NOTE, ARCHIVED,
+    STOPPED,
 )
 from ..config import config
 from ..tasks import task_exec_impression
@@ -73,17 +74,20 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
             _debug.debug("--------------")
             _debug.debug("impression: %s", impression)
             job_path = config.get_job_path(project_uuid, impression)
-            job = VJob(job_path, None)
+            # Workflow metadata is stored per runner.  Use the requested
+            # machine here so a first submission to a new runner has an
+            # initialized run_config_file before workflow_id() is queried.
+            job = VJob(job_path, machine)
             job_status = job.status()
             _debug.debug("job %s %s %s", job, job.job_type(), job_status)
 
             if job.job_type() == "task":
                 requested_jobs.append(job)
-                if job_status not in (SILENCE, FAILED, DISSONANCE):
+                if job_status not in (SILENCE, FAILED, DISSONANCE, STOPPED):
                     _debug.debug("job status is not raw or failed")
                     continue
                 previous_workflow_id = job.workflow_id()
-                if (job_status in (FAILED, DISSONANCE)
+                if (job_status in (FAILED, DISSONANCE, STOPPED)
                         and previous_workflow_id):
                     previous_workflows[job.uuid] = {
                         "workflow_id": previous_workflow_id,

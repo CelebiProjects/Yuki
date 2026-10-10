@@ -4,6 +4,8 @@ The HTTP server and Celery workers share the workflow directory.  A queued
 marker prevents duplicate dispatches; a separate flock prevents overlapping
 refreshes even when a queued marker expires or another caller dispatches one.
 """
+# Pylint cannot prove that the nested locked context is exited after yield.
+# pylint: disable=contextmanager-generator-missing-cleanup
 import fcntl
 import json
 import os
@@ -67,15 +69,12 @@ def enqueue_once(workflow_path, project_uuid, workflow_id, task):
 
 
 @contextmanager
-def running_refresh(workflow_path, token=None):
-    """Allow one worker to refresh; clear only its own queued marker."""
+def running_refresh(workflow_path, token=None, blocking=False):
+    """Allow one refresh; optionally wait for an in-progress refresh."""
     queue_path, running_path = _paths(workflow_path)
-    with _locked(running_path, blocking=False) as running:
-        if running is None:
-            yield False
-            return
+    with _locked(running_path, blocking=blocking) as running:
         try:
-            yield True
+            yield running is not None
         finally:
             if token is not None:
                 with _locked(queue_path) as queue:

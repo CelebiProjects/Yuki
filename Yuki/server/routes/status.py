@@ -18,7 +18,7 @@ from ...kernel.execution.status import (
 from ...kernel.execution.submissions import SubmissionStore
 from ..config import config
 from ..tasks import task_update_workflow_status
-from ..workflow_status_refresh import enqueue_once
+from ..workflow_status_refresh import enqueue_once, running_refresh
 
 bp = Blueprint('status', __name__)
 _debug = getLogger("Yuki.execution")
@@ -77,7 +77,7 @@ def set_detailed_status(project_uuid, impression_name, message):
 
 
 @bp.route("/status/<project_uuid>/<impression_name>", methods=['GET'])
-def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
+def status(project_uuid, impression_name):  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Get status for an impression.
 
     Returns JSON with musical status name and detailed status message.
@@ -90,6 +90,8 @@ def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
         f"ua={request.headers.get('User-Agent', '')!r} "
         f"referer={request.headers.get('Referer', '')!r}"
     )
+    wait_for_refresh = str(request.args.get("wait", "")).lower() \
+        in ("1", "true", "yes")
     job_path = config.get_job_path(project_uuid, impression_name)
     config_file = config.get_config_file()
     runners_list = config_file.read_variable("runners", [])
@@ -160,30 +162,54 @@ def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
         results = read_locked_variable(os.path.join(workflow_path, "results.json"),
                                        "results", {})
         workflow_status = results.get("status", "unknown")
+        refresh_error = ""
 
         _debug.debug("Path: %s", workflow_path)
-        job.update_status_from_workflow(workflow_path)
         # Update workflow status check to use musical names
         workflow_musical = translate_to_musical(workflow_status)
         _debug.debug("The status is: %s", workflow_musical)
         if not is_terminal_status(workflow_musical):
-            if enqueue_once(workflow_path, project_uuid, job.workflow_id(),
-                            task_update_workflow_status):
-                _debug.debug("[status] scheduled workflow refresh for %s",
-                             job.workflow_id())
+            if wait_for_refresh:
+                try:
+                    with running_refresh(workflow_path, blocking=True) as acquired:
+                        if acquired:
+                            workflow = VWorkflow.create(
+                                project_uuid, [], job.workflow_id())
+                            if not is_terminal_status(workflow.status()):
+                                workflow.update_workflow_status()
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    refresh_error = f"{type(exc).__name__}: {exc}"
+                    _debug.warning(
+                        "[status] synchronous refresh failed workflow=%s: %s",
+                        job.workflow_id(), refresh_error)
+                results = read_locked_variable(
+                    os.path.join(workflow_path, "results.json"), "results", {})
+                workflow_status = results.get("status", "unknown")
+                workflow_musical = translate_to_musical(workflow_status)
             else:
-                _debug.debug("[status] workflow refresh already pending for %s",
-                             job.workflow_id())
+                if enqueue_once(workflow_path, project_uuid, job.workflow_id(),
+                                task_update_workflow_status):
+                    _debug.debug("[status] scheduled workflow refresh for %s",
+                                 job.workflow_id())
+                else:
+                    _debug.debug(
+                        "[status] workflow refresh already pending for %s",
+                        job.workflow_id())
         else:
             _debug.debug(f"[status] not scheduling task_update_workflow_status for "
                          f"workflow={job.workflow_id()}: already terminal ({workflow_musical})")
 
+        job.update_status_from_workflow(workflow_path)
         job_status = job.status()
         detailed_status = job.detailed_status()
 
         if job_status != "unknown":
-            return jsonify(_job_status_response(
-                job_path, job_status, detailed_status))
+            payload = _job_status_response(job_path, job_status, detailed_status)
+            if wait_for_refresh:
+                payload["live_refresh"] = not bool(refresh_error)
+                if refresh_error:
+                    payload["refresh_error"] = refresh_error
+            return jsonify(payload)
 
         if os.path.exists(job_path):
             return jsonify({

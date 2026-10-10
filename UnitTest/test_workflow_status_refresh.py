@@ -31,6 +31,22 @@ def test_enqueue_once_and_running_lock(tmp_path):
     assert not enqueue_once(workflow_path, "project", "workflow", task)
 
 
+def test_losing_queued_refresh_clears_its_marker(tmp_path):
+    """A live refresh may win the lock without leaving Celery queued forever."""
+    workflow_path = str(tmp_path / "workflow")
+    task = mock.Mock()
+    assert enqueue_once(workflow_path, "project", "workflow", task)
+    token = task.apply_async.call_args.kwargs["args"][2]
+
+    with running_refresh(workflow_path) as live_acquired:
+        assert live_acquired
+        with running_refresh(workflow_path, token) as worker_acquired:
+            assert not worker_acquired
+
+    queue_path = tmp_path / "workflow" / ".status-refresh-queue.lock"
+    assert json.loads(queue_path.read_text(encoding="utf-8"))["state"] == "done"
+
+
 def test_enqueue_failure_allows_retry(tmp_path):
     """A broker error must not leave a stale queued marker."""
     task = mock.Mock()
@@ -80,6 +96,49 @@ def test_status_reads_snapshot_without_reconstructing_workflow(tmp_path, monkeyp
     assert first.json["status"] == "running"
     dispatch.assert_called_once()
     workflow_cls.create.assert_not_called()
+
+
+def test_status_wait_refreshes_workflow_before_responding(tmp_path, monkeypatch):
+    """The wait query performs a locked live refresh instead of queueing one."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    workflow_path = tmp_path / "Workflows" / "project" / "workflow"
+    workflow_path.mkdir(parents=True)
+    (workflow_path / "results.json").write_text(
+        json.dumps({"results": {"status": "running"}}), encoding="utf-8")
+
+    app = Flask(__name__)
+    app.register_blueprint(status_routes.bp)
+    job = mock.Mock()
+    job.workflow_id.return_value = "workflow"
+    job.status.return_value = "running"
+    job.detailed_status.return_value = "Working"
+    config_file = mock.Mock()
+    config_file.read_variable.side_effect = lambda key, default=None: {
+        "runners": ["runner"], "runners_id": {"runner": "runner-id"},
+        "object_type": "task",
+    }.get(key, default)
+    workflow = mock.Mock()
+    workflow.status.return_value = "running"
+    refresh_lock = mock.MagicMock()
+    refresh_lock.__enter__.return_value = True
+    with mock.patch.object(status_routes.config, "get_config_file",
+                           return_value=config_file), \
+         mock.patch.object(status_routes, "ConfigFile", return_value=config_file), \
+         mock.patch.object(status_routes, "VJob", return_value=job), \
+         mock.patch.object(status_routes.VWorkflow, "create",
+                           return_value=workflow), \
+         mock.patch.object(status_routes, "running_refresh",
+                           return_value=refresh_lock) as locked, \
+         mock.patch.object(status_routes.task_update_workflow_status,
+                           "apply_async") as dispatch:
+        response = app.test_client().get(
+            "/status/project/impression?wait=true")
+
+    assert response.status_code == 200
+    assert response.json["live_refresh"] is True
+    locked.assert_called_once_with(str(workflow_path), blocking=True)
+    workflow.update_workflow_status.assert_called_once_with()
+    dispatch.assert_not_called()
 
 
 def test_status_read_waits_for_json_writer(tmp_path):

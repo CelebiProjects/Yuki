@@ -8,7 +8,7 @@ from flask import Flask
 from Yuki.server.routes import execution
 from Yuki.server import tasks
 from Yuki.kernel.workflows.ssh import SshWorkflow, _SshConnection
-from Yuki.kernel.execution.status import SILENCE, PRELUDE, FAILED, CODA
+from Yuki.kernel.execution.status import SILENCE, PRELUDE, FAILED, CODA, STOPPED
 
 
 @pytest.mark.parametrize('timeout', [None, '3000'])
@@ -91,8 +91,10 @@ def test_execute_reuses_completed_workflow(tmp_path, monkeypatch):
     task.apply_async.assert_not_called()
 
 
-def test_execute_failed_job_records_replacement_workflow(tmp_path, monkeypatch):
-    """A failed attempt is submitted again with immutable predecessor metadata."""
+@pytest.mark.parametrize('retry_status', [FAILED, STOPPED])
+def test_execute_retryable_job_records_replacement_workflow(
+        retry_status, tmp_path, monkeypatch):
+    """A failed or stopped attempt is submitted again with predecessor metadata."""
     monkeypatch.setenv('YUKIDIR', str(tmp_path))
     app = Flask(__name__)
     app.register_blueprint(execution.bp)
@@ -101,7 +103,7 @@ def test_execute_failed_job_records_replacement_workflow(tmp_path, monkeypatch):
     with patch.object(execution, 'VJob') as job, \
          patch.object(execution, 'task_exec_impression') as task:
         job.return_value.job_type.return_value = 'task'
-        job.return_value.status.return_value = FAILED
+        job.return_value.status.return_value = retry_status
         job.return_value.uuid = 'imp'
         job.return_value.workflow_id.return_value = 'wf-failed'
         task.apply_async.return_value.id = 'task-id'
@@ -111,7 +113,7 @@ def test_execute_failed_job_records_replacement_workflow(tmp_path, monkeypatch):
     payload = response.get_json()
     assert payload['submission_reason'] == 'replacement'
     assert payload['previous_workflows'] == {
-        'imp': {'workflow_id': 'wf-failed', 'job_status': FAILED}}
+        'imp': {'workflow_id': 'wf-failed', 'job_status': retry_status}}
     task.apply_async.assert_called_once()
 
 

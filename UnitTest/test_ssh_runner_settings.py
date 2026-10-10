@@ -1,11 +1,23 @@
 """Tests for ssh runner settings consumption."""
 # pylint: disable=protected-access
 import json
+import subprocess
 from unittest import mock
 
 import pytest
 
 from Yuki.kernel.workflows.ssh import SshWorkflow
+
+
+class _LocalShell:
+    """Execute cache probes locally so their full shell semantics are tested."""
+
+    @staticmethod
+    def exec(command, timeout=None):
+        result = subprocess.run(
+            ["bash", "-c", command], capture_output=True, text=True,
+            timeout=timeout, check=False)
+        return result.stdout, result.stderr, result.returncode
 
 
 def _workflow(tmp_path, monkeypatch, config_data):
@@ -279,7 +291,7 @@ def _wf_with_input(tmp_path, monkeypatch, fake_job):
 
 
 def test_input_cache_hit_skips_sftp(tmp_path, monkeypatch):
-    """A non-empty impressions cache stages via remote cp, no SFTP upload."""
+    """A completed impressions cache stages via remote cp, no SFTP upload."""
     yuki_dir = tmp_path / ".Yuki"
     (yuki_dir / "Storage" / "proj-123").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -306,6 +318,8 @@ def test_input_cache_hit_skips_sftp(tmp_path, monkeypatch):
             """Record the command; probe answers as a cache hit."""
             commands.append(("exec", command))
             if command.startswith("test -d"):
+                assert ".yuki-cache-complete" in command
+                assert ".yuki-cache-in-progress" in command
                 return "", "", 0  # cache hit
             return "", "", 0
 
@@ -325,6 +339,23 @@ def test_input_cache_hit_skips_sftp(tmp_path, monkeypatch):
     # no SFTP put of data files (only the Snakefile put is allowed)
     data_puts = [p for p in puts if "impressions" in p[1] or "stageout" in p[1]]
     assert data_puts == []
+
+
+def test_cache_hit_accepts_complete_and_legacy_but_not_partial(tmp_path):
+    """Upgrade caches remain usable while interrupted new writes do not."""
+    workflow = SshWorkflow.__new__(SshWorkflow)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "payload.txt").write_text("payload", encoding="utf-8")
+
+    assert workflow._cache_hit(_LocalShell(), str(cache))
+
+    (cache / ".yuki-cache-in-progress").touch()
+    assert not workflow._cache_hit(_LocalShell(), str(cache))
+
+    (cache / ".yuki-cache-in-progress").unlink()
+    (cache / ".yuki-cache-complete").touch()
+    assert workflow._cache_hit(_LocalShell(), str(cache))
 
 
 def test_input_cache_miss_writes_through(tmp_path, monkeypatch):

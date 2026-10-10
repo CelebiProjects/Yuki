@@ -15,6 +15,9 @@ import time
 from CelebiChrono.utils.metadata import ConfigFile
 from ..execution.status import CODA
 from . import liveness
+from .cache import (
+    CACHE_COMPLETE_MARKER, CACHE_IN_PROGRESS_MARKER, is_cache_marker,
+)
 
 REMOTE_MD5_SCRIPT = r'''
 import hashlib, json, os, stat, sys
@@ -104,16 +107,25 @@ def build_remote_fast_copy_command(src, dst, progress_path=None):
         f"rsync -a {shlex.quote(src)}/ {shlex.quote(dst)}/ || "
         f"cp -r {shlex.quote(src)}/. {shlex.quote(dst)}/)"
     )
-    chmod_ro = (f"find {shlex.quote(dst)} -mindepth 1 -maxdepth 1 "
+    dst_q = shlex.quote(dst)
+    prepare = (f"if [ -e {dst_q} ]; then "
+               f"chmod -R u+w {dst_q} 2>/dev/null || true; "
+               f"rm -rf -- {dst_q}; fi; mkdir -p {dst_q}")
+    complete = shlex.quote(posixpath.join(dst, CACHE_COMPLETE_MARKER))
+    in_progress = shlex.quote(posixpath.join(
+        dst, CACHE_IN_PROGRESS_MARKER))
+    chmod_ro = (f"rm -f {in_progress} && touch {complete} && "
+                f"find {dst_q} -mindepth 1 -maxdepth 1 "
                 f"-exec chmod -R a-w -- {{}} +")
+    prepare = f"{prepare} && touch {in_progress}"
     if not progress_path:
-        return f"mkdir -p {shlex.quote(dst)} && {chain} && {chmod_ro}"
+        return f"{prepare} && {chain} && {chmod_ro}"
     progress_reader = (
         "python3 -c 'import json,sys;"
         "print(json.load(open(sys.argv[1]))[\"bytes_total\"])'"
     )
     return (
-        f"mkdir -p {shlex.quote(dst)} && "
+        f"{prepare} && "
         f"{chain} && {chmod_ro} & "
         f"_pid=$!; "
         f"_total=$({progress_reader} {shlex.quote(progress_path)}); "
@@ -315,7 +327,8 @@ def list_cache_files(runner_id, project_uuid, impression):
     cache_dir = (f"{settings.get('remote_workdir', '/tmp/yuki-workflows')}"
                  f"/impressions/{project_uuid}/{impression}")
     print(f"[list_cache_files] runner_id={runner_id} cache_dir={cache_dir}")
-    return list_managed_files(runner_id, cache_dir)
+    return [item for item in list_managed_files(runner_id, cache_dir)
+            if not is_cache_marker(item["name"])]
 
 
 def _runner_name(runner_id, yuki_dir=None):
@@ -513,7 +526,8 @@ def cache_results_job(runner_id, project_uuid, impression,  # pylint: disable=to
         if code != 0:
             raise RuntimeError(f"remote copy failed: {err or out}")
         files = [{"name": rel, "size": size}
-                 for rel, _rpath, size in ssh.walk_files(cache_dir)]
+                 for rel, _rpath, size in ssh.walk_files(cache_dir)
+                 if not is_cache_marker(rel)]
     _record_cache_distribution(imp_dir, runner_id, files, yuki_dir)
     result = {"cached": len(files),
               "bytes": sum(f.get("size", 0) for f in files)}

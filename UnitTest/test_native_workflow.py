@@ -321,6 +321,7 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
 
         input_job = self._make_job("a" * 32, status_value="failed", is_input=True)
         exec_job = self._make_job("b" * 32)
+        exec_job.dependencies.return_value = [input_job.uuid]
         self.workflow.jobs = [input_job, exec_job]
 
         # Polling dependency workflows would be pointless: fail fast must not
@@ -331,10 +332,61 @@ class TestWaitForDependenciesFailFast(unittest.TestCase):
 
         self.assertIs(result, False)
         self.assertEqual(self._workflow_results()["results"]["status"], "failed")
-        status_arg, detail_arg = exec_job.set_status.call_args.args
-        self.assertEqual(status_arg, FAILED)
-        self.assertIn("Blocked", detail_arg)
-        self.assertIn(input_job.short_uuid(), detail_arg)
+        exec_job.set_blocked.assert_called_once()
+        blockers, blocked_workflow = exec_job.set_blocked.call_args.args
+        self.assertEqual(blocked_workflow, self.workflow_uuid)
+        self.assertEqual(blockers, [{
+            "impression": input_job.uuid,
+            "path": "",
+            "workflow_id": "",
+            "observed_status": "failed",
+        }])
+        results = self._workflow_results()["results"]
+        self.assertEqual(results["failure_kind"], "blocked")
+        self.assertEqual(results["blocked_by"], blockers)
+
+    def test_blocker_snapshot_uses_latest_producing_runner_workflow(self):
+        """The blocker records its producer, not the downstream runner."""
+        input_job = self._make_job("a" * 32, status_value="failed", is_input=True)
+        input_job.path = os.path.join(self.tmpdir, "input")
+        producer_dir = os.path.join(input_job.path, "producer")
+        os.makedirs(producer_dir)
+        with open(os.path.join(input_job.path, "status.json"),
+                  "w", encoding="utf-8") as status_file:
+            json.dump({"status": "failed", "machine_id": "producer"}, status_file)
+        with open(os.path.join(producer_dir, "config.json"),
+                  "w", encoding="utf-8") as run_config:
+            json.dump({"workflow": "upstream-workflow"}, run_config)
+        input_job.workflow_id.return_value = "wrong-runner-workflow"
+        exec_job = self._make_job("b" * 32)
+        exec_job.dependencies.return_value = [input_job.uuid]
+        self.workflow.jobs = [input_job, exec_job]
+
+        self.assertIs(self.workflow._wait_for_dependencies(), False)
+
+        blockers, _workflow = exec_job.set_blocked.call_args.args
+        self.assertEqual(blockers[0]["workflow_id"], "upstream-workflow")
+
+    def test_blocker_is_not_attributed_to_an_unrelated_branch(self):
+        """Each job snapshots only failed inputs in its own ancestry."""
+        from Yuki.kernel.execution.status import DISSONANCE
+
+        failed_input = self._make_job(
+            "a" * 32, status_value="failed", is_input=True)
+        blocked_job = self._make_job("b" * 32)
+        blocked_job.dependencies.return_value = [failed_input.uuid]
+        unrelated_job = self._make_job("c" * 32)
+        unrelated_job.dependencies.return_value = []
+        self.workflow.jobs = [failed_input, blocked_job, unrelated_job]
+
+        self.assertIs(self.workflow._wait_for_dependencies(), False)
+
+        blocked_job.set_blocked.assert_called_once()
+        unrelated_job.set_blocked.assert_not_called()
+        unrelated_job.set_status.assert_called_once_with(
+            DISSONANCE,
+            "Workflow was not launched because another requested DAG branch "
+            "was blocked")
 
     def test_dependency_wait_timeout_fails_loudly(self):
         """Exhausting the wait window marks the workflow and jobs failed with

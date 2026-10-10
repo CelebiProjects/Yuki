@@ -25,6 +25,7 @@ CANONICAL_MODULES = (
     "Yuki.kernel.execution.monitor",
     "Yuki.kernel.execution.local",
     "Yuki.kernel.storage.liveness",
+    "Yuki.kernel.storage.cache",
     "Yuki.kernel.storage.file_types",
     "Yuki.kernel.storage.staging",
     "Yuki.kernel.storage.remote",

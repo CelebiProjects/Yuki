@@ -9,7 +9,7 @@ import pytest
 from CelebiChrono.utils.file_utils import dir_md5
 from Yuki.kernel.storage.remote import (
     REMOTE_MD5_SCRIPT, remote_md5_command, build_remote_fast_copy_command,
-    read_remote_progress, _yuki_dir,
+    read_remote_progress, list_cache_files, _yuki_dir,
 )
 
 
@@ -237,6 +237,21 @@ def test_fast_copy_command_empty_src_succeeds(tmp_path):
     assert result.returncode == 0, result.stderr
     assert dst.is_dir()
     assert not progress.exists()
+
+
+def test_list_cache_files_hides_publication_markers():
+    """Internal cache state is not exposed as impression output."""
+    listing = [
+        {"name": "result.txt", "size": 7},
+        {"name": ".yuki-cache-complete", "size": 0},
+        {"name": ".yuki-cache-in-progress", "size": 0},
+    ]
+    with mock.patch("Yuki.kernel.storage.remote._ssh_settings",
+                    return_value={"remote_workdir": "/remote"}), \
+            mock.patch("Yuki.kernel.storage.remote.list_managed_files",
+                       return_value=listing):
+        assert list_cache_files("runner", "project", "impression") == [
+            {"name": "result.txt", "size": 7}]
 
 
 def test_remote_md5_command_executes_end_to_end(tmp_path):

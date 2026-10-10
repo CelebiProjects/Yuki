@@ -79,6 +79,8 @@ def test_cache_results_copies_stageout_into_cache(tmp_path):
     assert ("cp -a --reflink=auto "
             "/remote/work/workflows/proj/wf-1/impabc1234/stageout/.") in cmd
     assert "chmod -R a-w" in cmd
+    assert ".yuki-cache-in-progress" in cmd
+    assert ".yuki-cache-complete" in cmd
     assert updates[-1]["status"] == "done"
     assert updates[-1]["result"]["cached"] == 2
 

@@ -9,10 +9,15 @@ environment management, command execution, and input/output handling.
 # pylint: disable=cyclic-import
 import logging
 import os
+import shlex
 import time
 from CelebiChrono.utils import metadata
 from .base import VJob
 from .image import ImageJob
+from ..storage.cache import (
+    CACHE_COMPLETE_MARKER, CACHE_IN_PROGRESS_MARKER,
+    WORKFLOW_FAILED_MARKER,
+)
 from ..storage.staging import walk_files
 
 _debug = logging.getLogger("Yuki.kernel")
@@ -434,13 +439,38 @@ class ContainerJob(VJob):
         cache_path = self._cache_source(backend_type)
         if not cache_path:
             return []
-        commands = [f"mkdir -p {cache_path}",
+        if backend_type not in ("ssh", "ihep"):
+            return [f"mkdir -p {cache_path}",
                     f"cp -r stageout/* {cache_path}"]
-        if backend_type in ("ssh", "ihep"):
-            # Cached data is read-only once written, so workflows linking
-            # it via the setup rule cannot modify the shared cache.
-            commands.append(f"chmod -R a-w {cache_path}*")
-        return commands
+
+        # A workflow may still be executing on the runner after Yuki has
+        # fenced it as failed.  Such a zombie must never publish its output
+        # into the shared impression cache.  Rebuild the exact cache path,
+        # write the completion marker last, and clean up every failed copy.
+        cache_path = cache_path.rstrip("/")
+        cache = shlex.quote(cache_path)
+        complete = shlex.quote(os.path.join(cache_path,
+                                             CACHE_COMPLETE_MARKER))
+        in_progress = shlex.quote(os.path.join(
+            cache_path, CACHE_IN_PROGRESS_MARKER))
+        failed = shlex.quote(f"../{WORKFLOW_FAILED_MARKER}")
+        cleanup = (f"chmod -R u+w {cache} 2>/dev/null || true; "
+                   f"rm -rf -- {cache}")
+        publish = (
+            f"if [ -e {failed} ]; then "
+            f"echo 'Skipping cache publication: workflow is failed'; "
+            f"else "
+            f"if [ -e {cache} ]; then {cleanup}; fi; "
+            f"mkdir -p {cache}; : > {in_progress}; "
+            f"if cp -r stageout/. {cache}/; then "
+            f"if [ -e {failed} ]; then {cleanup}; "
+            f"echo 'Discarded cache publication: workflow became failed'; "
+            f"else rm -f {in_progress}; : > {complete}; "
+            f"chmod -R a-w {cache}; fi; "
+            f"else {cleanup}; exit 1; fi; "
+            f"fi"
+        )
+        return [publish]
 
     def setup_commands(self, backend_type="reana", workflow_machine_id=None):
         """Generate commands to set up the container environment from the

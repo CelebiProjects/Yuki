@@ -404,6 +404,39 @@ class TestSshWorkflow(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "code 127"):
             self.workflow._confirm_remote_start(ssh, timeout=0)
 
+    def test_terminal_failure_fences_cache_before_local_status(self):
+        """A launched SSH workflow writes its remote fence before failing."""
+        self.workflow.config_file.write_variable(
+            "remote_launch_attempted", True)
+        events = []
+        with patch.object(
+                self.workflow, "_fence_cache_publication",
+                side_effect=lambda _status: events.append("fence")), \
+                patch.object(
+                    self.workflow, "_update_results_if_active",
+                    side_effect=lambda *_a, **_k: events.append("status") or True):
+            self.workflow.set_workflow_status("failed")
+        self.assertEqual(events, ["fence", "status"])
+
+    @patch("paramiko.SSHClient")
+    def test_cache_fence_is_written_atomically(self, mock_ssh_cls):
+        """The remote failed marker is written through a temporary file."""
+        mock_ssh_cls.return_value = self.mock_client
+        self.mock_sftp.dirs.add(self.workflow.remote_exec_path)
+        self.workflow.config_file.write_variable(
+            "remote_launch_attempted", True)
+        self.mock_client.exec_command.return_value = (
+            MagicMock(), _MockStdout(""), _MockStderr(""))
+
+        self.workflow._fence_cache_publication("failed")
+
+        commands = [call[0][0]
+                    for call in self.mock_client.exec_command.call_args_list]
+        fence = next(command for command in commands
+                     if "yuki.failed.tmp" in command)
+        self.assertIn("mv -f", fence)
+        self.assertIn(self.workflow_uuid, fence)
+
     def test_exec_start_detached_raises_on_silent_remote(self):
         """A silent remote raises SSHStartNotConfirmed.
 

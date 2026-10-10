@@ -23,6 +23,25 @@ from ..workflow_status_refresh import enqueue_once
 bp = Blueprint('status', __name__)
 _debug = getLogger("Yuki.execution")
 
+
+def _job_status_response(job_path, job_status, detailed_status):
+    """Build status JSON, including an immutable blocker snapshot if present."""
+    payload = {
+        "status": job_status,
+        "detailed_status": detailed_status,
+        "status_legacy": translate_to_legacy(job_status),
+        "status_musical": translate_to_musical(job_status),
+    }
+    status_path = os.path.join(job_path, "status.json")
+    if (translate_to_musical(job_status) == "failed" and
+            read_locked_variable(status_path, "failure_kind", "") == "blocked"):
+        payload["failure_kind"] = "blocked"
+        payload["blocked_by"] = read_locked_variable(
+            status_path, "blocked_by", [])
+        payload["blocked_workflow_id"] = read_locked_variable(
+            status_path, "blocked_workflow_id", "")
+    return payload
+
 @bp.route('/set-job-status/<project_uuid>/<impression_name>/<job_status>', methods=['GET'])
 def setjobstatus(project_uuid, impression_name, job_status):
     """Set job status for an impression.
@@ -163,12 +182,8 @@ def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
         detailed_status = job.detailed_status()
 
         if job_status != "unknown":
-            return jsonify({
-                "status": job_status,
-                "detailed_status": detailed_status,
-                "status_legacy": translate_to_legacy(job_status),
-                "status_musical": translate_to_musical(job_status)
-            })
+            return jsonify(_job_status_response(
+                job_path, job_status, detailed_status))
 
         if os.path.exists(job_path):
             return jsonify({
@@ -182,12 +197,7 @@ def status(project_uuid, impression_name):  # pylint: disable=too-many-locals
     job_status = job.status()
     detailed_status = job.detailed_status()
 
-    return jsonify({
-        "status": job_status,
-        "detailed_status": detailed_status,
-        "status_legacy": translate_to_legacy(job_status),
-        "status_musical": translate_to_musical(job_status)
-    })
+    return jsonify(_job_status_response(job_path, job_status, detailed_status))
 
 
 @bp.route("/run-status/<project_uuid>/<impression_name>/<machine>", methods=['GET'])

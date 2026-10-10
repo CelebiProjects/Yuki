@@ -20,6 +20,10 @@ from .base import VWorkflow
 from ..runners.ssh_pool import ssh_pool
 from ..execution.status import (FAILED, DISSONANCE,
                                translate_to_musical, is_terminal_status)
+from ..storage.cache import (
+    CACHE_COMPLETE_MARKER, CACHE_IN_PROGRESS_MARKER,
+    WORKFLOW_FAILED_MARKER,
+)
 from ..storage.staging import walk_files
 
 logger = getLogger("YukiLogger")
@@ -363,19 +367,75 @@ class SshWorkflow(VWorkflow):
         return f"{base}/impressions/{self.project_uuid}/{impression}"
 
     def _cache_hit(self, ssh, cache_dir):
-        """True when the runner-side rawdata cache holds files."""
+        """True for completed caches and marker-less legacy caches."""
+        marker = f"{cache_dir.rstrip('/')}/{CACHE_COMPLETE_MARKER}"
+        in_progress = (f"{cache_dir.rstrip('/')}/"
+                       f"{CACHE_IN_PROGRESS_MARKER}")
+        # Marker-less, non-empty directories predate the publication
+        # protocol and remain valid for upgrade compatibility.  New writes
+        # create the in-progress marker before their first payload byte, so
+        # a killed copy can never be mistaken for a legacy cache.
         _, _, code = ssh.exec(
             f"test -d {shlex.quote(cache_dir)} && "
-            f"test -n \"$(ls -A {shlex.quote(cache_dir)})\"")
+            f"(test -f {shlex.quote(marker)} || "
+            f"(test ! -e {shlex.quote(in_progress)} && "
+            f"test -n \"$(find {shlex.quote(cache_dir)} -mindepth 1 "
+            f"-maxdepth 1 ! -name '.yuki-cache-*' -print -quit)\"))")
         return code == 0
 
-    def _chmod_cache_ro(self, ssh, cache_dir):
-        """Make runner-side cached data read-only after write-through."""
+    def _prepare_cache_write(self, ssh, cache_dir):
+        """Remove an incomplete cache and mark a new SFTP write in progress."""
+        cache = shlex.quote(cache_dir)
+        marker = shlex.quote(
+            f"{cache_dir.rstrip('/')}/{CACHE_IN_PROGRESS_MARKER}")
         out, err, code = ssh.exec(
-            f"chmod -R a-w {shlex.quote(cache_dir)}/*", timeout=3600)
+            f"if [ -e {cache} ]; then "
+            f"chmod -R u+w {cache} 2>/dev/null || true; "
+            f"rm -rf -- {cache}; fi; "
+            f"mkdir -p {cache} && touch {marker}", timeout=3600)
         if code != 0:
-            self.logger(f"[SSH] chmod cache read-only failed for "
-                        f"{cache_dir}: {err or out}")
+            raise RuntimeError(
+                f"Could not prepare runner cache {cache_dir}: {err or out}")
+
+    def _chmod_cache_ro(self, ssh, cache_dir):
+        """Complete and make runner-side cached data read-only."""
+        marker = f"{cache_dir.rstrip('/')}/{CACHE_COMPLETE_MARKER}"
+        in_progress = (f"{cache_dir.rstrip('/')}/"
+                       f"{CACHE_IN_PROGRESS_MARKER}")
+        out, err, code = ssh.exec(
+            f"rm -f {shlex.quote(in_progress)} && "
+            f"touch {shlex.quote(marker)} && "
+            f"find {shlex.quote(cache_dir)} -mindepth 1 -maxdepth 1 "
+            f"-exec chmod -R a-w -- {{}} +", timeout=3600)
+        if code != 0:
+            raise RuntimeError(
+                f"Could not finalize runner cache {cache_dir}: {err or out}")
+
+    def _fence_cache_publication(self, status):
+        """Make a terminal failure visible to Snakemake before recording it."""
+        config_file = getattr(self, "config_file", None)
+        if config_file is None or not config_file.read_variable(
+                "remote_launch_attempted", False):
+            return
+        payload = json.dumps({
+            "workflow": self.uuid,
+            "status": translate_to_musical(status),
+            "timestamp": time.time(),
+        }, sort_keys=True)
+        marker = f"{self.remote_exec_path}/{WORKFLOW_FAILED_MARKER}"
+        temporary = f"{marker}.tmp"
+        command = (
+            f"printf '%s\\n' {shlex.quote(payload)} > "
+            f"{shlex.quote(temporary)} && "
+            f"mv -f {shlex.quote(temporary)} {shlex.quote(marker)}")
+        with self._ssh() as ssh:
+            if not ssh.exists(self.remote_exec_path):
+                return
+            out, err, code = ssh.exec(command)
+            if code != 0:
+                raise RuntimeError(
+                    "Could not fence cache publication before setting "
+                    f"workflow {self.uuid} {status}: {err or out}")
 
     def _execute_backend(self):
         """Execute workflow using a remote SSH backend."""
@@ -509,6 +569,8 @@ class SshWorkflow(VWorkflow):
                     if os.path.exists(rawdata_path):
                         filelist = list(walk_files(rawdata_path))
                         total_raw = len(filelist)
+                        if total_raw:
+                            self._prepare_cache_write(ssh, cache_dir)
                         for f_idx, (rel_path, src_path) in enumerate(filelist):
                             # Upload into the runner cache; the Snakefile
                             # setup rule links it into imp<short>/stageout.
@@ -534,6 +596,8 @@ class SshWorkflow(VWorkflow):
                     if os.path.exists(src_stageout):
                         filelist = list(walk_files(src_stageout))
                         total_input = len(filelist)
+                        if total_input:
+                            self._prepare_cache_write(ssh, cache_dir)
                         for f_idx, (rel_path, src_path) in enumerate(filelist):
                             # Upload into the runner cache; the Snakefile
                             # setup rule links it into imp<short>/stageout.
@@ -619,8 +683,10 @@ wait "$snakemake_pid"
             # or sshd keeps the channel open and recv_exit_status blocks.
             # The polling path reads yuki.pid/yuki.exit.
             self.logger("[SSH] Starting remote Snakemake in background")
-            for name in ("yuki.started", "yuki.pid", "yuki.exit"):
+            for name in ("yuki.started", "yuki.pid", "yuki.exit",
+                         WORKFLOW_FAILED_MARKER):
                 ssh.remove(f"{self.remote_exec_path}/{name}")
+            self.config_file.write_variable("remote_launch_attempted", True)
             try:
                 result = ssh.exec_start_detached(
                     self._build_remote_launch_command(),
@@ -969,6 +1035,8 @@ wait "$snakemake_pid"
             entered_terminal = self._entered_terminal_state(status)
 
             workflow_terminal = status in ("finished", "failed")
+            if status == "failed":
+                self._fence_cache_publication(status)
 
             # Refresh listings before propagating per-job statuses: a job
             # that just finished must be listed one final time while it is

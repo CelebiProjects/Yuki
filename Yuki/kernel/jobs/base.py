@@ -227,6 +227,11 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
         musical_status = translate_to_musical(status)
 
         config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
+        # Block information describes one immutable failed attempt. Any later
+        # status write belongs to a new state/attempt and must not inherit it.
+        config_file.write_variable("failure_kind", "")
+        config_file.write_variable("blocked_by", [])
+        config_file.write_variable("blocked_workflow_id", "")
         config_file.write_variable("status", status)
 
         # Store legacy name for backward compatibility
@@ -237,6 +242,25 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
         if detailed_message is None:
             detailed_message = get_detailed_status_message(musical_status)
         config_file.write_variable("detailed_status", detailed_message)
+
+    def set_blocked(self, blockers, workflow_id):
+        """Record an immutable snapshot of the impressions blocking a run."""
+        descriptions = []
+        for blocker in blockers:
+            impression = blocker.get("impression", "")
+            path = blocker.get("path", "")
+            label = f"{impression[:7]}"
+            if path:
+                label += f" ({path})"
+            descriptions.append(label)
+        detail = (
+            f"Blocked by impression{'' if len(descriptions) == 1 else 's'} "
+            f"{', '.join(descriptions)}; resubmit to retry")
+        self.set_status(FAILED, detail)
+        config_file = metadata.ConfigFile(os.path.join(self.path, "status.json"))
+        config_file.write_variable("failure_kind", "blocked")
+        config_file.write_variable("blocked_by", blockers)
+        config_file.write_variable("blocked_workflow_id", workflow_id)
 
     def detailed_status(self):
         """Get the detailed status message for the job.

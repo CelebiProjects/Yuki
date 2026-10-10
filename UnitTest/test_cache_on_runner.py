@@ -47,17 +47,86 @@ def test_cache_commands_reana_uses_eos(monkeypatch, tmp_path):
 
 
 def test_cache_commands_ssh_uses_impressions_dir(monkeypatch, tmp_path):
-    """SSH cache commands copy stageout into the remote impressions dir
-    and make the cached data read-only."""
+    """SSH publication is fenced, cleaned on failure, and marked last."""
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
     _ssh_settings(tmp_path)
     job = _job()
     commands = job._cache_commands("m1", "ssh")
-    assert commands == [
-        "mkdir -p /remote/work/impressions/proj/imp123456/",
-        "cp -r stageout/* /remote/work/impressions/proj/imp123456/",
-        "chmod -R a-w /remote/work/impressions/proj/imp123456/*",
-    ]
+    assert len(commands) == 1
+    command = commands[0]
+    assert command.count("[ -e ../yuki.failed ]") == 2
+    assert "cp -r stageout/. /remote/work/impressions/proj/imp123456/" in command
+    assert "rm -rf -- /remote/work/impressions/proj/imp123456" in command
+    assert "/imp123456/.yuki-cache-in-progress" in command
+    assert "/imp123456/.yuki-cache-complete" in command
+    assert command.index("cp -r stageout/.") < command.index(
+        "/imp123456/.yuki-cache-complete")
+    assert "chmod -R a-w /remote/work/impressions/proj/imp123456" in command
+
+
+def test_cache_commands_ssh_execute_successfully(monkeypatch, tmp_path):
+    """A successful copy replaces a read-only cache and marks completion."""
+    remote = tmp_path / "remote"
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _ssh_settings(tmp_path, str(remote))
+    job = _job()
+    command = job._cache_commands("m1", "ssh")[0]
+    work = tmp_path / "workflow" / "impabc1234"
+    (work / "stageout").mkdir(parents=True)
+    (work / "stageout" / "new.txt").write_text("new", encoding="utf-8")
+    cache = remote / "impressions" / "proj" / "imp123456"
+    cache.mkdir(parents=True)
+    (cache / "old.txt").write_text("old", encoding="utf-8")
+    os.chmod(cache / "old.txt", 0o444)
+
+    import subprocess
+    subprocess.run(["bash", "-c", command], cwd=work, check=True)
+
+    assert not (cache / "old.txt").exists()
+    assert (cache / "new.txt").read_text(encoding="utf-8") == "new"
+    assert (cache / ".yuki-cache-complete").is_file()
+
+
+def test_cache_commands_ssh_skip_failed_workflow(monkeypatch, tmp_path):
+    """A fenced zombie workflow leaves the existing cache untouched."""
+    remote = tmp_path / "remote"
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _ssh_settings(tmp_path, str(remote))
+    job = _job()
+    command = job._cache_commands("m1", "ssh")[0]
+    workflow = tmp_path / "workflow"
+    work = workflow / "impabc1234"
+    (work / "stageout").mkdir(parents=True)
+    (work / "stageout" / "new.txt").write_text("new", encoding="utf-8")
+    (workflow / "yuki.failed").write_text("failed", encoding="utf-8")
+    cache = remote / "impressions" / "proj" / "imp123456"
+    cache.mkdir(parents=True)
+    (cache / "old.txt").write_text("old", encoding="utf-8")
+
+    import subprocess
+    subprocess.run(["bash", "-c", command], cwd=work, check=True)
+
+    assert (cache / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (cache / "new.txt").exists()
+
+
+def test_cache_commands_ssh_remove_failed_copy(monkeypatch, tmp_path):
+    """A copy error leaves no directory that could be treated as cache."""
+    remote = tmp_path / "remote"
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _ssh_settings(tmp_path, str(remote))
+    command = _job()._cache_commands("m1", "ssh")[0]
+    work = tmp_path / "workflow" / "impabc1234"
+    work.mkdir(parents=True)
+    cache = remote / "impressions" / "proj" / "imp123456"
+
+    import subprocess
+    result = subprocess.run(
+        ["bash", "-c", command], cwd=work, check=False,
+        capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert not cache.exists()
 
 
 def test_cache_commands_native_noop(monkeypatch, tmp_path):

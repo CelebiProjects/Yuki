@@ -266,6 +266,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
 
     def _finalize_stop(self, detail):
         """Stop only owned, non-terminal jobs and preserve completed work."""
+        self._fence_cache_publication(STOPPED)
         # Claim the terminal transition first. Concurrent refreshes use the
         # same conditional write and therefore cannot resurrect this workflow.
         if not self._update_results_if_active({"status": STOPPED}):
@@ -460,6 +461,36 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 pass
             return name
 
+        def _blocker_snapshot(job):
+            path = ""
+            try:
+                value = job.config_file.read_variable("current_path", "")
+                path = value if isinstance(value, str) else ""
+            except Exception:
+                pass
+            # Input jobs are bound to the downstream runner while the latest
+            # producing attempt may belong to another runner. Resolve the
+            # producer recorded in the shared status first, then fall back to
+            # the input object's runner-specific index for legacy metadata.
+            upstream_workflow = ""
+            producer = read_locked_variable(
+                os.path.join(job.path, "status.json"), "machine_id", "")
+            if producer:
+                upstream_workflow = metadata.ConfigFile(os.path.join(
+                    job.path, producer, "config.json")).read_variable(
+                        "workflow", "")
+            if not upstream_workflow:
+                try:
+                    upstream_workflow = job.workflow_id()
+                except Exception:
+                    pass
+            return {
+                "impression": job.uuid,
+                "path": path,
+                "workflow_id": upstream_workflow,
+                "observed_status": job.status(musical=False),
+            }
+
         def _fail(message):
             self.set_workflow_status("failed")
             for job in self.jobs:
@@ -472,6 +503,58 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 self._set_owned_job_status(job, FAILED, message)
             self.logger(message)
 
+        def _fail_blocked(failed_inputs):
+            blockers = [_blocker_snapshot(job) for job in failed_inputs]
+            blockers_by_impression = {
+                blocker["impression"]: blocker for blocker in blockers}
+            jobs_by_impression = {job.uuid: job for job in self.jobs}
+
+            def _job_blockers(job):
+                """Blockers reachable through this job's saved DAG branch."""
+                found = set()
+                visited = set()
+                stack = list(job.dependencies())
+                while stack:
+                    impression = stack.pop()
+                    if impression in visited:
+                        continue
+                    visited.add(impression)
+                    if impression in blockers_by_impression:
+                        found.add(impression)
+                        continue
+                    predecessor = jobs_by_impression.get(impression)
+                    if predecessor is not None:
+                        stack.extend(predecessor.dependencies())
+                return [blockers_by_impression[blocker["impression"]]
+                        for blocker in blockers
+                        if blocker["impression"] in found]
+
+            names = ", ".join(_describe(job) for job in failed_inputs)
+            message = (f"Blocked by impression{'' if len(blockers) == 1 else 's'} "
+                       f"{names}; resubmit to retry")
+            self._fence_cache_publication(FAILED)
+            if not self._update_results_if_active({
+                    "status": FAILED,
+                    "failure_kind": "blocked",
+                    "blocked_by": blockers,
+                    "detailed_status": message,
+            }):
+                return
+            for job in self.jobs:
+                if job.is_input or job.status(musical=True) == "archived":
+                    continue
+                if job.job_type() == "algorithm" or not self._owns_job(job):
+                    continue
+                job_blockers = _job_blockers(job)
+                if job_blockers:
+                    job.set_blocked(job_blockers, self.uuid)
+                else:
+                    job.set_status(
+                        DISSONANCE,
+                        "Workflow was not launched because another requested "
+                        "DAG branch was blocked")
+            self.logger(message)
+
         all_finished = False
         # First, check whether the dependencies are satisfied
         for i_tries in range(60):
@@ -479,9 +562,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             input_jobs = _pending_input_jobs()
             failed_inputs = _failed_inputs(input_jobs)
             if failed_inputs:
-                names = ", ".join(_describe(j) for j in failed_inputs)
-                _fail(f"Blocked: upstream input {names} is failed "
-                      f"- fix the upstream task and resubmit")
+                _fail_blocked(failed_inputs)
                 return False
 
             all_finished = True
@@ -817,7 +898,14 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
 
     def set_workflow_status(self, status):
         """Set status without allowing a terminal workflow to transition."""
+        musical_status = translate_to_musical(status)
+        if musical_status in (FAILED, STOPPED, DELETED):
+            self._fence_cache_publication(musical_status)
         return self._update_results_if_active({"status": status})
+
+    def _fence_cache_publication(self, status):
+        """Backend hook invoked before recording a terminal failure state."""
+        del status
 
     def _entered_terminal_state(self, new_status):
         """True when new_status is terminal but the recorded status isn't.

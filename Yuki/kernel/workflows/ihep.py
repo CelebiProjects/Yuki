@@ -9,6 +9,7 @@ import shlex
 import time
 
 from ..runners import config as runner_config
+from ..storage.cache import WORKFLOW_FAILED_MARKER
 from .ssh import SshWorkflow
 
 
@@ -202,9 +203,11 @@ atomic_write "$$ $$" yuki.started
                     f"Failed to make yuki_run.sh executable: "
                     f"{err or out} (exit {code})")
             for name in ("yuki.started", "yuki.pid", "yuki.exit",
-                         "yuki.hep_job_id", "yuki.hep_children"):
+                         "yuki.hep_job_id", "yuki.hep_children",
+                         WORKFLOW_FAILED_MARKER):
                 ssh.remove(f"{self.remote_exec_path}/{name}")
 
+            self.config_file.write_variable("remote_launch_attempted", True)
             out, err, code = ssh.exec(
                 self._build_hep_submit_command(remote_wrapper), timeout=30)
             if code != 0:

@@ -783,9 +783,15 @@ class ImpressionStorage:
         if refresh_cache and cache_runner_id:
             self._refresh_ssh_cache(locations, cache_runner_id)
 
-        # yuki: union of local stageout dirs across machines
+        # yuki: uploaded rawdata plus the union of local stageout dirs across
+        # machines.  Rawdata impressions have no runner workflow, so their
+        # files live directly under <job_path>/rawdata rather than a runner's
+        # stageout directory.
         if "yuki" not in locations:
-            yuki_files = []
+            yuki_files = [
+                {"name": row["name"], "size": row["size"]}
+                for row in local_rawdata_files(self.job_path)
+            ]
             if os.path.isdir(self.job_path):
                 for machine in sorted(os.listdir(self.job_path)):
                     root = os.path.join(self.job_path, machine, "stageout")

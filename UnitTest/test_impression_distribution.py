@@ -52,6 +52,24 @@ def test_update_distribution_computes_yuki_collected(tmp_path):
     assert "updated" in dist["locations"]["yuki"]
 
 
+def test_update_distribution_computes_yuki_uploaded_rawdata(tmp_path):
+    """Uploaded rawdata files produce a yuki 'collected' entry."""
+    storage = _storage(tmp_path)
+    rawdata = tmp_path / "job" / "rawdata" / "nested"
+    rawdata.mkdir(parents=True)
+    (rawdata / "sample.root").write_bytes(b"data")
+    storage._get_runner_contexts = lambda: []
+    storage._remote_hosted_files = lambda kind: ([], None)
+
+    storage.update_distribution()
+
+    dist = _read_dist(storage)
+    assert dist["produced_on"] is None
+    assert dist["locations"]["yuki"]["origin"] == "collected"
+    assert dist["locations"]["yuki"]["files"] == 1
+    assert dist["locations"]["yuki"]["bytes"] == 4
+
+
 def test_update_distribution_records_workflow_state(tmp_path):
     """Runner filelists produce produced_on and a 'workflow' state."""
     storage = _storage(tmp_path)

@@ -6,6 +6,7 @@ by copying files to a remote host over SFTP and running Snakemake there over SSH
 # pylint: disable=cyclic-import,too-many-lines
 import json
 import os
+import posixpath
 import re
 import shlex
 import socket
@@ -44,12 +45,13 @@ class SSHStartNotConfirmed(RuntimeError):
     """The remote never confirmed a detached start within the grace period."""
 
 
-def resolve_conda_environment(environment, config_path):
+def resolve_conda_environment(environment, config_path, project_uuid="",
+                              ssh_settings=None):
     """Map an environment string to a conda environment name.
 
-    Resolution order: the server's ``conda_env_map``, then the same lookup
-    after stripping docker:// prefixes, then a name mangled from the raw
-    string (docker image names become valid-ish env names).
+    Resolution order: the server's ``conda_env_map``, a project-scoped prefix
+    for simple logical names, the same mapping lookup after stripping Docker
+    prefixes, then a name mangled from the raw string.
     """
     if not environment:
         environment = DEFAULT_ENVIRONMENT
@@ -57,6 +59,12 @@ def resolve_conda_environment(environment, config_path):
     resolved = EnvInterpreter.resolve(environment, config_path)
     if resolved is not None:
         return resolved
+
+    if (project_uuid and ssh_settings and environment != "script"
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", environment)):
+        return posixpath.join(
+            ssh_settings.get("remote_workdir", "/tmp/yuki-workflows"),
+            "environments", project_uuid, environment)
 
     stripped = environment
     for prefix in ("docker://", "docker.io/", "docker:"):
@@ -1460,4 +1468,30 @@ wait "$snakemake_pid"
             os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki")),
             "config.json"
         )
-        return resolve_conda_environment(environment, config_path)
+        project_uuid = getattr(self, "project_uuid", "")
+        ssh_config = getattr(self, "ssh_config", {})
+        resolved = resolve_conda_environment(
+            environment, config_path, project_uuid, ssh_config)
+        if not (project_uuid and ssh_config):
+            return resolved
+        project_root = posixpath.join(
+            ssh_config.get("remote_workdir", "/tmp/yuki-workflows"),
+            "environments", project_uuid)
+        if resolved.startswith(project_root.rstrip("/") + "/"):
+            checked = getattr(self, "_checked_project_environments", set())
+            if resolved not in checked:
+                with self._ssh() as ssh:
+                    installed = ssh.exists(posixpath.join(resolved, "conda-meta"))
+                if not installed:
+                    runner_ids = metadata.ConfigFile(config_path).read_variable(
+                        "runners_id", {})
+                    runner = next(
+                        (name for name, runner_id in runner_ids.items()
+                         if runner_id == getattr(self, "machine_id", "")), "RUNNER")
+                    raise RuntimeError(
+                        f"Environment '{environment}' is not installed for project "
+                        f"'{project_uuid}' on runner '{runner}'. Run: "
+                        f"celebi-cli install-environment {runner} {environment}")
+                checked.add(resolved)
+                self._checked_project_environments = checked
+        return resolved

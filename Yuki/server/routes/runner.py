@@ -7,7 +7,9 @@ from logging import getLogger
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
 from ...kernel.storage import liveness
+from ...kernel.storage import remote as remote_data_ops
 from ...kernel.runners import config as runner_config
+from ...kernel.runners import project_environments
 from ...services import runner_inventory
 from ...kernel.workflows.ssh import (
     environment_needs_conda, resolve_conda_environment)
@@ -524,11 +526,21 @@ def runner_ssh_config(runner):
         "key": key,
         "key_path": key_path,
         "remote_workdir": settings.get("remote_workdir", "/tmp/yuki-workflows"),
+        "conda_path": settings.get("conda_path", ""),
     }
     environment = request.args.get("environment", "")
     if environment_needs_conda(environment):
-        payload["conda_env"] = resolve_conda_environment(
-            environment, config.config_path)
+        project_uuid = request.args.get("project_uuid", "")
+        if project_uuid:
+            try:
+                project_environments.validate_segment(project_uuid, "project UUID")
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            payload["conda_env"] = resolve_conda_environment(
+                environment, config.config_path, project_uuid, settings)
+        else:
+            payload["conda_env"] = resolve_conda_environment(
+                environment, config.config_path)
     return jsonify(payload)
 
 
@@ -604,7 +616,20 @@ def runner_envs(runner):
     backend_types = config_file.read_variable("backend_types", {})
     backend_type = backend_types.get(runner_id, "reana")
 
-    if runner_config.is_ssh_backend(backend_type):
+    project_uuid = request.args.get("project_uuid", "").strip()
+    if project_uuid and runner_config.is_ssh_backend(backend_type):
+        try:
+            result = project_environments.list_project_environments(
+                runner_config.get_ssh_settings(config_file, runner_id),
+                project_uuid)
+        except ValueError as exc:
+            return jsonify({"error": str(exc), "envs": []}), 400
+    elif project_uuid:
+        return jsonify({
+            "envs": [],
+            "error": f"backend '{backend_type}' does not support project environments",
+        }), 400
+    elif runner_config.is_ssh_backend(backend_type):
         result = runner_probe.list_envs_ssh(
             runner_config.get_ssh_settings(config_file, runner_id))
     elif backend_type == "native":
@@ -614,6 +639,70 @@ def runner_envs(runner):
         result = {"envs": [],
                   "error": f"backend '{backend_type}' has no conda environments"}
     return jsonify(result)
+
+
+@bp.route("/runner-environments/<runner>/install", methods=["POST"])
+def install_runner_environment(runner):
+    """Start installation of a project-scoped Conda environment."""
+    data = request.get_json(silent=True) or {}
+    project_uuid = data.get("project_uuid", "")
+    name = data.get("name", "")
+    yaml_text = data.get("yaml", "")
+    if not (project_uuid and name and yaml_text):
+        return jsonify({
+            "error": "missing required field: project_uuid/name/yaml"
+        }), 400
+    if not isinstance(yaml_text, str) or len(yaml_text.encode("utf-8")) > 1024 * 1024:
+        return jsonify({"error": "environment YAML must be at most 1 MiB"}), 400
+
+    config_file = config.get_config_file()
+    runners_id = config_file.read_variable("runners_id", {})
+    if runner not in runners_id:
+        return jsonify({"error": f"Runner '{runner}' not found"}), 404
+    runner_id = runners_id[runner]
+    try:
+        project_environments.validate_segment(project_uuid, "project UUID")
+        project_environments.validate_environment_name(name)
+        project_environments.settings_for_runner(config_file, runner_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    job_id = csys.generate_uuid()
+    yuki_dir = project_environments.yuki_dir()
+    state = {
+        "status": "queued", "result": None, "error": None,
+        "runner_id": runner_id, "runner": runner,
+        "project_uuid": project_uuid, "environment": name,
+    }
+    remote_data_ops.write_job_state(
+        yuki_dir, job_id, state,
+        jobs_dir_name=project_environments.ENVIRONMENT_JOBS_DIR)
+    try:
+        from ..tasks import task_install_environment
+        task_install_environment.apply_async(
+            args=[job_id, runner_id, project_uuid, name, yaml_text])
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        state.update({"status": "failed", "error": str(exc)})
+        remote_data_ops.write_job_state(
+            yuki_dir, job_id, state,
+            jobs_dir_name=project_environments.ENVIRONMENT_JOBS_DIR)
+        return jsonify({"job_id": job_id, "error": str(exc)}), 500
+    return jsonify({"job_id": job_id}), 202
+
+
+@bp.route("/environment-jobs/<job_id>", methods=["GET"])
+def environment_job(job_id):
+    """Poll an environment installation job."""
+    try:
+        project_environments.validate_segment(job_id, "job ID")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    state = remote_data_ops.read_job_state(
+        project_environments.yuki_dir(), job_id,
+        jobs_dir_name=project_environments.ENVIRONMENT_JOBS_DIR)
+    if state is None:
+        return jsonify({"error": "job not found"}), 404
+    return jsonify(state)
 
 
 @bp.route("/runner-data/<runner>", methods=['GET'])

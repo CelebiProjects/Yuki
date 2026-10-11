@@ -543,6 +543,24 @@ def test_runner_ssh_config_resolves_script_as_named_environment(monkeypatch):
     assert r.get_json()["conda_env"] == "script"
 
 
+def test_runner_ssh_config_resolves_project_environment_prefix(monkeypatch):
+    """Direct SSH tests receive the same project prefix as workflows."""
+    _temp_config(monkeypatch)
+    c = _app(runner_routes.bp).test_client()
+    c.post("/register-runner", data={
+        "runner": "cluster", "url": "", "token": "", "backend_type": "ssh",
+        "ssh_host": "h", "ssh_user": "u", "remote_workdir": "/work/yuki",
+    })
+
+    response = c.get(
+        "/runner-ssh-config/cluster",
+        query_string={"environment": "analysis", "project_uuid": "project-1"})
+
+    assert response.status_code == 200
+    assert response.get_json()["conda_env"] == \
+        "/work/yuki/environments/project-1/analysis"
+
+
 def test_runner_ssh_config_without_environment_param(monkeypatch):
     """Without the environment param, no conda_env is returned."""
     _temp_config(monkeypatch)

@@ -6,6 +6,8 @@ import os
 from celery import Celery
 from CelebiChrono.utils import metadata
 from ..kernel.storage import remote as remote_data_ops
+from ..kernel.runners import config as runner_config
+from ..kernel.runners import project_environments
 from ..services import result_transfer
 from ..kernel.jobs.base import VJob
 from ..kernel.workflows.base import VWorkflow, _yuki_dir
@@ -35,6 +37,33 @@ def create_celery_app():
 
 # Create celery app instance
 celeryapp = create_celery_app()
+
+
+@celeryapp.task
+def task_install_environment(job_id, runner_id, project_uuid, name, yaml_text):
+    """Install or update one project-scoped environment on an SSH runner."""
+    yuki_dir = project_environments.yuki_dir()
+
+    def update(values):
+        current = remote_data_ops.read_job_state(
+            yuki_dir, job_id,
+            jobs_dir_name=project_environments.ENVIRONMENT_JOBS_DIR) or {}
+        current.update(values)
+        remote_data_ops.write_job_state(
+            yuki_dir, job_id, current,
+            jobs_dir_name=project_environments.ENVIRONMENT_JOBS_DIR)
+
+    update({"status": "running"})
+    try:
+        settings = project_environments.settings_for_runner(
+            runner_config.open_config(), runner_id)
+        result = project_environments.install_project_environment(
+            settings, project_uuid, name, yaml_text)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        update({"status": "failed", "result": None,
+                "error": str(exc) or type(exc).__name__})
+        return
+    update({"status": "done", "result": result, "error": None})
 
 
 @celeryapp.task

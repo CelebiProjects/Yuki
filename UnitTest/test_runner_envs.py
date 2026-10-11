@@ -8,6 +8,7 @@ from unittest import mock
 from CelebiChrono.utils.metadata import ConfigFile
 from Yuki.server import runner_probe
 from Yuki.server.routes import runner as runner_routes
+from Yuki.server import tasks
 
 
 def _app(bp):
@@ -133,3 +134,47 @@ def test_runner_envs_unknown_404(monkeypatch):
     r = _app(runner_routes.bp).test_client().get("/runner-envs/ghost")
     assert r.status_code == 404
     assert "error" in r.get_json()
+
+
+def test_runner_envs_project_scope(monkeypatch):
+    """A project query lists only that project's managed prefixes."""
+    config_obj = _temp_config(monkeypatch)
+    _write_runner(config_obj, name="cluster", backend="ihep",
+                  settings={"ssh_host": "h", "ssh_user": "u",
+                            "remote_workdir": "/work"})
+    listing = {"envs": [{"name": "analysis", "path": "/work/env", "active": False}],
+               "error": None, "scope": "project", "project_uuid": "project-1"}
+    monkeypatch.setattr(
+        runner_routes.project_environments, "list_project_environments",
+        lambda settings, project_uuid: listing)
+
+    response = _app(runner_routes.bp).test_client().get(
+        "/runner-envs/cluster?project_uuid=project-1")
+
+    assert response.status_code == 200
+    assert response.get_json() == listing
+
+
+def test_install_environment_starts_background_job(monkeypatch, tmp_path):
+    """The install endpoint validates input, persists state, and dispatches work."""
+    config_obj = _temp_config(monkeypatch)
+    _write_runner(config_obj, name="cluster", backend="ssh",
+                  settings={"ssh_host": "h", "ssh_user": "u"})
+    monkeypatch.setenv("YUKIDIR", str(tmp_path / ".Yuki"))
+    dispatch = mock.Mock()
+    monkeypatch.setattr(tasks.task_install_environment, "apply_async", dispatch)
+
+    response = _app(runner_routes.bp).test_client().post(
+        "/runner-environments/cluster/install",
+        json={"project_uuid": "project-1", "name": "analysis",
+              "yaml": "dependencies:\n  - python\n"})
+
+    assert response.status_code == 202
+    job_id = response.get_json()["job_id"]
+    dispatch.assert_called_once_with(
+        args=[job_id, "r-uuid", "project-1", "analysis",
+              "dependencies:\n  - python\n"])
+    state = _app(runner_routes.bp).test_client().get(
+        f"/environment-jobs/{job_id}").get_json()
+    assert state["status"] == "queued"
+    assert state["environment"] == "analysis"

@@ -42,6 +42,31 @@ cancellation removes both the coordinator and recorded children with `hep_rm`.
 File staging, result collection, runner cache operations, and conda environment
 discovery use the same SSH transport as an `ssh` runner.
 
+## Project analysis environments
+
+From a Celebi project, users can install a standard Conda YAML through Yuki:
+
+```bash
+mkdir -p .celebi-env
+# Write .celebi-env/analysis.yaml, then:
+celebi-cli install-environment ihep analysis
+celebi-cli set-environment analysis
+```
+
+Yuki installs the environment at
+`<remote_workdir>/environments/<project_uuid>/analysis`. A project UUID is part
+of every prefix, so separate projects do not share an environment merely
+because they use the same name. Re-running the command executes `conda env
+update --prefix ... --file ... --prune`; the YAML `name` field is ignored.
+The specification is trusted mutable state and Yuki does not store a content
+digest. An installation lock prevents two updates to the same prefix at once.
+
+`celebi-cli runner-environments ihep` lists the current project's installed
+prefixes. Explicit server-side `conda_env_map` entries remain a compatibility
+fallback, while `script` and the data-only environment names retain their
+existing behavior. A workflow that names an uninstalled project environment
+fails before launch with the corresponding `install-environment` command.
+
 ## Installing the remote environment
 
 IHEP AFS home access normally requires a Kerberos ticket and an AFS token.
@@ -65,7 +90,7 @@ absolute paths when registering the runner. Its Conda wrapper sets
 to update `~/.conda/environments.txt`. The wrapper also redirects XDG and
 Conda caches away from AFS home, so workflow execution stays entirely on CEFS.
 It creates a named `script` analysis environment under `conda-envs/script`;
-`runner-envs ihep` must list that environment. IHEP tasks declaring
+the global Conda environment list must contain that environment. IHEP tasks declaring
 `environment: script` are run through this Conda environment, never through
 the worker node's system Python.
 

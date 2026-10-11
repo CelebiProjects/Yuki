@@ -271,6 +271,28 @@ class TestNativeWorkflowPropagation(unittest.TestCase):
             report["skipped"],
             [{"file": "celebi_user_step0.log", "reason": "already in Yuki"}])
 
+    def test_collect_artifacts_honors_custom_yukidir(self):
+        """Collected artifacts belong under YUKIDIR, not HOME/.Yuki."""
+        impression = "i" * 32
+        self.workflow.machine_id = "runner-uuid"
+        src_logs = os.path.join(
+            self.workflow.local_exec_path, f"imp{impression[:7]}", "logs")
+        os.makedirs(src_logs, exist_ok=True)
+        with open(os.path.join(src_logs, "celebi_user_step0.log"),
+                  "w", encoding="utf-8") as f:
+            f.write("custom root")
+
+        custom_yuki = os.path.join(self.tmpdir, "custom-yuki")
+        with patch.dict(os.environ, {"YUKIDIR": custom_yuki}):
+            report = self.workflow._collect_artifacts(
+                impression, "logs", "logs.downloaded", "log")
+
+        collected = os.path.join(
+            custom_yuki, "Storage", self.project_uuid, impression,
+            "runner-uuid", "logs", "celebi_user_step0.log")
+        self.assertTrue(os.path.isfile(collected))
+        self.assertEqual(report["collected"], ["celebi_user_step0.log"])
+
 
 class TestWaitForDependenciesFailFast(unittest.TestCase):
     """_wait_for_dependencies must fail fast (and loudly) on terminal failures."""

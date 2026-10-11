@@ -40,6 +40,34 @@ def test_task_exec_impression_logs_submit_finished():
                for msg in records)
 
 
+@pytest.mark.parametrize("failed_status", ["failed", "dissonance", "stopped"])
+def test_replacement_submission_resets_failed_root_before_dag_construction(
+        failed_status):
+    """A retried root must not be mistaken for its own failed dependency."""
+    from Yuki.server import tasks
+    from Yuki.kernel.execution.status import SILENCE
+    job = mock.Mock()
+    job.status.return_value = failed_status
+    workflow = mock.Mock(uuid="wf-retry")
+
+    with mock.patch.object(tasks, "metadata") as meta, \
+         mock.patch.object(tasks, "VJob", return_value=job), \
+         mock.patch.object(tasks, "VWorkflow") as factory, \
+         mock.patch.object(tasks, "_validate_remote_data_binding",
+                           return_value=[]):
+        meta.ConfigFile.return_value.read_variable.return_value = {}
+        factory.create.return_value = workflow
+        result = tasks.task_exec_impression("proj", "imp1", "runner-1")
+
+    job.status.assert_called_once_with(musical=True)
+    job.set_status.assert_called_once_with(
+        SILENCE, "Retry requested; preparing replacement workflow")
+    factory.create.assert_called_once_with(
+        "proj", [job], None, mode="reana")
+    workflow.run.assert_called_once_with()
+    assert result["workflow_id"] == "wf-retry"
+
+
 def test_duplicate_submission_returns_existing_workflow():
     """An identical active job set is idempotent instead of launching again."""
     from Yuki.server import tasks

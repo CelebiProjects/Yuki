@@ -89,6 +89,20 @@ def test_restart_waits_for_orphaned_process(monkeypatch, tmp_path):
     assert (path / "native-runner.claim").exists()
 
 
+def test_restart_waits_for_orphaned_process_after_terminal_state(monkeypatch,
+                                                                 tmp_path):
+    """A terminal state must not hide a still-running orphaned process."""
+    root, path = _prepared(tmp_path, "stopped")
+    monkeypatch.setenv("YUKIDIR", str(root))
+    (path / "native-runner.claim").write_text("1234")
+    pid_file = root / "LocalWorkflows" / "workflow" / "native-runner.snakemake.pid"
+    pid_file.write_text("4321")
+    with mock.patch.object(native_runner, "_pid_alive", return_value=True):
+        assert native_runner._recover_interrupted(str(root))
+    assert _status(path) == "stopped"
+    assert (path / "native-runner.claim").exists()
+
+
 def test_runner_foreground_and_status(monkeypatch, tmp_path):
     root, _path = _prepared(tmp_path, "finished")
     monkeypatch.setenv("YUKIDIR", str(root))
@@ -97,6 +111,38 @@ def test_runner_foreground_and_status(monkeypatch, tmp_path):
     with mock.patch.object(native_runner, "_run_ready", return_value=False):
         native_runner._serve(str(root), once=True)
     assert cli.invoke(native_runner.cli, ["status"]).output.strip() == "stopped"
+
+
+def test_native_runner_is_available_from_main_cli(monkeypatch, tmp_path):
+    """The main yuki CLI exposes the complete native runner command group."""
+    root, _path = _prepared(tmp_path, "finished")
+    monkeypatch.setenv("YUKIDIR", str(root))
+    from Yuki.main import cli as main_cli
+
+    runner = CliRunner()
+    help_result = runner.invoke(main_cli, ["native-runner", "--help"])
+    assert help_result.exit_code == 0, help_result.output
+    for command in ("start", "stop", "status", "logs"):
+        assert command in help_result.output
+
+    status_result = runner.invoke(main_cli, ["native-runner", "status"])
+    assert status_result.exit_code == 0, status_result.output
+    assert status_result.output.strip() == "stopped"
+
+
+def test_main_cli_starts_native_runner_in_foreground(monkeypatch, tmp_path):
+    """Nested start forwards its options to the existing native agent."""
+    root, _path = _prepared(tmp_path, "finished")
+    monkeypatch.setenv("YUKIDIR", str(root))
+    from Yuki.main import cli as main_cli
+
+    with mock.patch.object(native_runner, "_serve") as serve:
+        result = CliRunner().invoke(
+            main_cli,
+            ["native-runner", "start", "--foreground", "--yuki-dir", str(root)],
+        )
+    assert result.exit_code == 0, result.output
+    serve.assert_called_once_with(str(root))
 
 
 def test_output_collection_failure_is_not_success(monkeypatch, tmp_path):

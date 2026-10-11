@@ -5,6 +5,7 @@ import subprocess
 import click
 
 from Yuki.kernel.runners.environments import EnvInterpreter
+from .native_runner import cli as native_runner_cli
 from .server_main import server_start
 from .server_main import stop as server_stop
 from .server_main import status as server_status
@@ -14,6 +15,13 @@ from .server_main import status as server_status
 def cli(_ctx):
     """ Chern command only is equal to `Chern ipython`
     """
+
+
+# Keep native runner management available through the main ``yuki`` command.
+# The standalone ``yuki-native-runner`` entry point remains as a compatibility
+# alias for existing service definitions and scripts.
+cli.add_command(native_runner_cli, name="native-runner")
+
 
 # ------ Server ------ #
 @cli.group()

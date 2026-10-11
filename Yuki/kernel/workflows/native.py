@@ -441,9 +441,11 @@ class NativeWorkflow(VWorkflow):
             f"imp{impression[0:7]}",
             artifact_dir
         )
+        yuki_dir = os.path.expanduser(
+            os.environ.get("YUKIDIR", "~/.Yuki")
+        )
         dst_path = os.path.join(
-            os.environ["HOME"],
-            ".Yuki",
+            yuki_dir,
             "Storage",
             self.project_uuid,
             impression,

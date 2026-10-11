@@ -1072,6 +1072,11 @@ wait "$snakemake_pid"
 
     def update_workflow_status(self):
         """Update workflow status from remote execution."""
+        if self.status() == "constructing":
+            self.logger(
+                f"[SSH] Not refreshing workflow {self.uuid} while it is "
+                "still being constructed")
+            return
         if self._workflow_is_terminal():
             self.logger(
                 f"[SSH] Not refreshing terminal workflow {self.uuid}")

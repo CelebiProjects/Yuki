@@ -275,6 +275,9 @@ atomic_write "$$ $$" yuki.started
 
         job_id = self._read_hep_job_id(ssh)
         if not job_id:
+            if self.config_file.read_variable("remote_launch_attempted", False):
+                return ("unknown", "IHEP submission is still in progress",
+                        None, completed)
             return "failed", "IHEP submission has no recorded HepJob id", None, completed
         if self._hep_job_is_queued(ssh, job_id):
             return "running", "", None, completed

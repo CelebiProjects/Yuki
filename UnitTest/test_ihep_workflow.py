@@ -201,6 +201,32 @@ def test_recent_submission_gets_queue_visibility_grace(tmp_path):
     assert "visible" in detail
 
 
+def test_submission_in_progress_without_job_id_is_not_failed(tmp_path):
+    workflow = _workflow(tmp_path)
+    workflow.config_file.write_variable("remote_launch_attempted", True)
+    ssh = FakeSsh()
+
+    status, detail, exit_code, completed = workflow._remote_execution_state(
+        ssh, ["aaaaaaa"])
+
+    assert (status, exit_code, completed) == ("unknown", None, [])
+    assert "in progress" in detail
+
+
+def test_status_refresh_skips_workflow_still_being_constructed(tmp_path):
+    """Polling cannot fail a workflow before its backend has launched."""
+    workflow = _workflow(tmp_path)
+    workflow.uuid = "wf-constructing"
+    workflow.status = mock.MagicMock(return_value="constructing")
+    workflow._workflow_is_terminal = mock.MagicMock()
+    workflow._ssh = mock.MagicMock()
+
+    workflow.update_workflow_status()
+
+    workflow._workflow_is_terminal.assert_not_called()
+    workflow._ssh.assert_not_called()
+
+
 def test_kill_uses_hep_rm(tmp_path):
     workflow = _workflow(tmp_path)
     workflow.config_file.write_variable("hep_job_id", "42")

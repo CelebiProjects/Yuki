@@ -92,13 +92,17 @@ def _recover_interrupted(root):
             if not acquired:
                 continue
             state = _state(path).read_variable("results", {}).get("status")
+            pid_path = os.path.join(
+                _execution_dir(root, path, workflow_uuid),
+                "native-runner.snakemake.pid")
+            # The workflow state can already be terminal when cancellation or
+            # another server-side action races with an interrupted agent.  A
+            # live Snakemake process still owns the workspace in that case, so
+            # keep its claim and prevent this agent from starting more work.
+            if _pid_alive(pid_path):
+                orphan_alive = True
+                continue
             if state in ("running", "collecting"):
-                pid_path = os.path.join(
-                    _execution_dir(root, path, workflow_uuid),
-                    "native-runner.snakemake.pid")
-                if _pid_alive(pid_path):
-                    orphan_alive = True
-                    continue
                 _set_state(path, "failed",
                            "Native runner was interrupted; inspect workflow logs before retrying")
             os.unlink(claim)

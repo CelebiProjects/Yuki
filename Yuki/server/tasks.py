@@ -13,6 +13,7 @@ from ..kernel.jobs.base import VJob
 from ..kernel.workflows.base import VWorkflow, _yuki_dir
 from ..kernel.execution.lease import (
     WorkflowAlreadyActive, WorkflowLeaseConflict, workflow_status)
+from ..kernel.execution.status import SILENCE, FAILED, DISSONANCE, STOPPED
 from ..kernel.execution.submissions import SubmissionStore
 from .workflow_status_refresh import running_refresh
 from ..utils.logging_config import apply_channel_levels
@@ -101,6 +102,13 @@ def _exec_impression(project_uuid, impressions, machine_uuid, timeout,
              machine_uuid)
         for imp in impressions.split(" ")
     ]
+    # A replacement submission starts a fresh attempt for each requested root.
+    # Leaving the previous terminal failure on the root makes DAG construction
+    # classify that root as an already-resolved input, so the new workflow is
+    # immediately blocked by the very task it is supposed to retry.
+    for job in jobs:
+        if job.status(musical=True) in (FAILED, DISSONANCE, STOPPED):
+            job.set_status(SILENCE, "Retry requested; preparing replacement workflow")
     _debug.debug("jobs %s", jobs)
     workflow = VWorkflow.create(project_uuid, jobs, None, mode=backend_type)
     workflow.cache_on_runner_requests = dict(cache_on_runner or {})
@@ -110,7 +118,6 @@ def _exec_impression(project_uuid, impressions, machine_uuid, timeout,
 
     marks = _validate_remote_data_binding(workflow, project_uuid, machine_uuid)
     if marks:
-        from ..kernel.execution.status import DISSONANCE
         workflow.set_workflow_status("failed")
         for job, message in marks:
             job.set_status(DISSONANCE, message)

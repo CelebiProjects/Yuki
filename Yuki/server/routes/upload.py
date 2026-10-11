@@ -13,7 +13,7 @@ from CelebiChrono.utils import metadata
 from ..config import config
 from ..resumable_upload_handler import get_upload_manager
 from ...kernel.storage.impressions import ImpressionStorage
-from ...kernel.workflows.base import VWorkflow
+from ...kernel.workflows.ssh import SshWorkflow
 
 bp = Blueprint('upload', __name__)
 logger = getLogger("YukiLogger")
@@ -124,7 +124,10 @@ def remote_export(project_uuid, impression, filename):
     """Stream a file directly from an SSH runner without copying it to Yuki storage."""
     storage = ImpressionStorage(project_uuid, impression)
     for name, job, workflow in storage._get_runner_contexts():  # pylint: disable=protected-access
-        if workflow.__class__.__name__ != "SshWorkflow":
+        # IHEP uses the same SSH/SFTP transport and subclasses SshWorkflow.
+        # Checking the exact class name made remote files from IHEP runners
+        # appear in /file-status but return NOTFOUND from this route.
+        if not isinstance(workflow, SshWorkflow):
             continue
         src_path = f"{workflow.remote_exec_path}/imp{impression[0:7]}/stageout/{filename}"
         try:

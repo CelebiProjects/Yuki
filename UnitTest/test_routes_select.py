@@ -1,6 +1,8 @@
 """Tests for select route handlers."""
+import io
 from unittest import mock
 
+from Yuki.kernel.workflows.ihep import IhepWorkflow
 from Yuki.server.routes import workflow as wf_routes
 from Yuki.server.routes import execution as ex_routes
 from Yuki.server.routes import upload as up_routes
@@ -126,6 +128,32 @@ def test_export_blocks_path_traversal(tmp_path):
         r = c.get("/export/proj/imp/..%2F..%2Frawdata%2Fsafe.txt")
         assert r.status_code == 200
         assert r.get_data(as_text=True) == "NOTFOUND"
+
+
+def test_remote_export_streams_from_ihep_workflow():
+    """IHEP workflows share the SSH transport used by remote-export."""
+    app = _app(up_routes.bp)
+    workflow = object.__new__(IhepWorkflow)
+    workflow.remote_exec_path = "/remote/workflow"
+
+    remote_file = io.BytesIO(b"root-data")
+    ssh = mock.MagicMock()
+    ssh.__enter__.return_value = ssh
+    ssh.isfile.return_value = True
+    ssh._sftp.stat.return_value.st_size = len(remote_file.getvalue())
+    ssh._sftp.file.return_value = remote_file
+    workflow._ssh = mock.Mock(return_value=ssh)
+
+    with mock.patch.object(up_routes, "ImpressionStorage") as storage_cls:
+        storage_cls.return_value._get_runner_contexts.return_value = [
+            ("ihep", mock.Mock(), workflow)]
+        response = app.test_client().get(
+            "/remote-export/proj/123456789/output.root")
+
+    assert response.status_code == 200
+    assert response.data == b"root-data"
+    ssh.isfile.assert_called_once_with(
+        "/remote/workflow/imp1234567/stageout/output.root")
 
 
 def test_refresh_filelists_route_returns_report():

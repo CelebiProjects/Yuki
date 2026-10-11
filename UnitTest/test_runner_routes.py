@@ -204,6 +204,30 @@ def test_runner_connection_ssh_uses_paramiko_ping(monkeypatch):
         assert r.get_json()["status"] == "Connected"
 
 
+def test_runner_connection_native_checks_agent(monkeypatch):
+    """Native connectivity reflects the host agent lock."""
+    _temp_config(monkeypatch)
+    runner_id = "r-native"
+    with open(runner_routes.config.config_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "runners": ["local"],
+            "runners_id": {"local": runner_id},
+            "backend_types": {runner_id: "native"},
+        }, f)
+    client = _app(runner_routes.bp).test_client()
+    monkeypatch.setattr(runner_routes.runner_probe, "native_agent_running",
+                        lambda: (False, "/tmp/agent.lock"))
+    stopped = client.get("/runner-connection/local")
+    assert stopped.status_code == 503
+    assert stopped.get_json()["status"] == "Failed"
+
+    monkeypatch.setattr(runner_routes.runner_probe, "native_agent_running",
+                        lambda: (True, "/tmp/agent.lock"))
+    running = client.get("/runner-connection/local")
+    assert running.status_code == 200
+    assert running.get_json()["status"] == "Connected"
+
+
 def test_register_runner_stores_native_settings(monkeypatch):
     """Registering a native runner persists its runner_settings."""
     _temp_config(monkeypatch)

@@ -6,6 +6,7 @@ from click.testing import CliRunner
 
 from Yuki import native_runner
 from Yuki.kernel.execution.local import execute_workflow
+from Yuki.kernel.runners import project_environments
 
 
 def _prepared(tmp_path, status="ready_for_local_execution"):
@@ -203,3 +204,29 @@ def test_host_agent_stages_runs_and_collects(monkeypatch, tmp_path):
     assert _status(path) == "coda"
     assert (root / "Storage" / "project" / job / "machine" / "stageout" /
             "result.txt").read_text() == "output"
+
+
+def test_host_agent_executes_environment_request(monkeypatch, tmp_path):
+    """Conda installation runs in the native agent, not the server worker."""
+    root = tmp_path / ".Yuki"
+    requests = root / project_environments.NATIVE_REQUESTS_DIR
+    requests.mkdir(parents=True)
+    request_path = requests / "request.json"
+    request_path.write_text(json.dumps({
+        "status": "queued", "project_uuid": "project", "name": "analysis",
+        "yaml": "dependencies:\n  - python\n",
+        "settings": {"workdir": str(tmp_path / "native")},
+    }), encoding="utf-8")
+    result = {"name": "analysis", "path": "/native/analysis", "output": "ok"}
+    monkeypatch.setattr(
+        project_environments, "install_native_environment_local",
+        lambda *args: result)
+
+    assert native_runner._run_environment_request(str(root)) is True
+
+    state = json.loads(request_path.read_text(encoding="utf-8"))
+    assert state == {
+        "project_uuid": "project", "name": "analysis",
+        "yaml": "dependencies:\n  - python\n",
+        "settings": {"workdir": str(tmp_path / "native")},
+        "status": "finished", "result": result, "error": None}

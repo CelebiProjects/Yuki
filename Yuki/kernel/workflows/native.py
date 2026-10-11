@@ -5,11 +5,13 @@ This module prepares workflows in shared storage for the host native runner.
 """
 # pylint: disable=cyclic-import
 import os
+import re
 import shutil
 import json
 from CelebiChrono.utils import metadata
 from ..runners.environments import EnvInterpreter
 from ..runners import config as runner_config
+from ..runners import project_environments
 from .base import VWorkflow
 from ..execution.status import (
     FAILED, DISSONANCE, translate_to_musical, is_terminal_status)
@@ -28,10 +30,9 @@ class NativeWorkflow(VWorkflow):
         # Create a local execution directory, honoring a per-runner workdir
         settings = runner_config.get_runner_settings(
             runner_config.open_config(), self.machine_id or "")
-        base_dir = settings.get("workdir") or os.path.join(
-            os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki")),
-            "LocalWorkflows")
-        self.local_exec_path = os.path.join(base_dir, self.uuid)
+        self.native_settings = dict(settings, backend_type="native")
+        self.local_exec_path = runner_config.native_workflow_path(
+            settings, self.project_uuid, self.uuid)
         os.makedirs(self.local_exec_path, exist_ok=True)
 
     def _execute_backend(self):
@@ -193,7 +194,8 @@ class NativeWorkflow(VWorkflow):
         Skips writing the directive for data-only procedures that do not need
         a conda environment. ``script`` is a real named environment.
         """
-        if environment in ("rawdata", "datalist", "lhcb_ap_datalist"):
+        if not environment or environment in (
+                "rawdata", "datalist", "lhcb_ap_datalist"):
             return
         if environment == DEFAULT_ENVIRONMENT:
             return
@@ -204,10 +206,10 @@ class NativeWorkflow(VWorkflow):
     def _resolve_conda_environment(self, environment):
         """Map a job environment string to a conda environment name.
 
-        Resolution order:
-        1. ``conda_env_map`` from ~/.Yuki/config.json (structured or plain)
-        2. Strip common Docker prefixes and try lookup again
-        3. Sanitise the image name for use as a conda env name
+        Explicit ``conda_env_map`` entries remain the compatibility override.
+        Otherwise a simple logical name resolves to this project's isolated
+        native prefix. Docker-style identifiers retain the legacy mapping and
+        sanitisation behavior.
         """
         if not environment:
             environment = DEFAULT_ENVIRONMENT
@@ -220,6 +222,27 @@ class NativeWorkflow(VWorkflow):
         # 1. Exact match
         resolved = EnvInterpreter.resolve(environment, config_path)
         if resolved is not None:
+            return resolved
+
+        settings = getattr(self, "native_settings", None)
+        if settings is None:
+            settings = runner_config.get_runner_settings(
+                runner_config.open_config(), self.machine_id or "")
+            settings = dict(settings, backend_type="native")
+        if (environment != "script"
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", environment)):
+            resolved = project_environments.environment_path(
+                settings, self.project_uuid, environment)
+            if not os.path.isdir(os.path.join(resolved, "conda-meta")):
+                runner_ids = metadata.ConfigFile(config_path).read_variable(
+                    "runners_id", {})
+                runner = next(
+                    (name for name, runner_id in runner_ids.items()
+                     if runner_id == self.machine_id), "RUNNER")
+                raise RuntimeError(
+                    f"Environment '{environment}' is not installed for project "
+                    f"'{self.project_uuid}' on runner '{runner}'. Run: "
+                    f"celebi-cli install-environment {runner} {environment}")
             return resolved
 
         # 2. Strip Docker prefixes and try again

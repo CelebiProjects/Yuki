@@ -542,7 +542,7 @@ def test_purge_runner_cache_route_non_ssh_runner(monkeypatch, tmp_path):
     r = _app(remote_data_routes.bp).test_client().post(
         "/purge-runner-cache", json={"runner": "local"})
     assert r.status_code == 400
-    assert "ssh" in r.get_json()["error"]
+    assert "no separate native runner cache" in r.get_json()["error"]
 
 
 def test_purge_runner_cache_route_ssh_failure(monkeypatch, tmp_path):
@@ -605,14 +605,14 @@ def test_cache_results_unknown_runner(monkeypatch, tmp_path):
 
 
 def test_cache_results_non_ssh_runner(monkeypatch, tmp_path):
-    """A non-ssh runner is rejected."""
+    """Native cache requests explain that results already enter Storage."""
     config_obj = _temp_config(monkeypatch, tmp_path)
     _register_runner(config_obj, name="local", backend="native")
     r = _app(remote_data_routes.bp).test_client().post(
         "/cache-results",
         json={"runner": "local", "project_uuid": "proj", "impression": "i"})
     assert r.status_code == 400
-    assert "ssh" in r.get_json()["error"]
+    assert "directly into Yuki Storage" in r.get_json()["error"]
 
 
 def test_cache_results_missing_field(monkeypatch, tmp_path):

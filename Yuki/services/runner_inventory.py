@@ -135,29 +135,48 @@ def _inventory_native(runner_id, yuki_dir):
     """Walk a native runner's LocalWorkflows directory."""
     settings = runner_config.get_runner_settings(
         runner_config.open_config(), runner_id)
-    base = settings.get("workdir") or os.path.join(
-        yuki_dir, "LocalWorkflows")
+    base = runner_config.native_root(settings, yuki_dir)
 
     entries = []
+    workflow_dirs = []
+    indexed = set()
+    projects_root = os.path.join(base, "workflows")
+    if os.path.isdir(projects_root):
+        for project in sorted(os.listdir(projects_root)):
+            project_dir = os.path.join(projects_root, project)
+            if not os.path.isdir(project_dir):
+                continue
+            for workflow in sorted(os.listdir(project_dir)):
+                indexed.add((project, workflow))
+                workflow_dirs.append(
+                    (project, workflow, os.path.join(project_dir, workflow)))
     if os.path.isdir(base):
         for workflow in sorted(os.listdir(base)):
-            wf_dir = os.path.join(base, workflow)
-            if not os.path.isdir(wf_dir):
+            if workflow in ("workflows", "environments"):
                 continue
-            files = list(walk_files(wf_dir))
             project = _find_project(yuki_dir, workflow)
-            known, status = False, None
-            if project:
-                known, status = _workflow_record(
-                    yuki_dir, project, workflow)
-            entries.append({
-                "project": project,
-                "workflow": workflow,
-                "files": len(files),
-                "bytes": sum(os.path.getsize(path) for _, path in files),
-                "status": status,
-                "known": known,
-            })
+            if (project, workflow) not in indexed:
+                workflow_dirs.append(
+                    (project, workflow, os.path.join(base, workflow)))
+
+    for project, workflow, wf_dir in workflow_dirs:
+        if not os.path.isdir(wf_dir):
+            continue
+        files = list(walk_files(wf_dir))
+        if project is None:
+            project = _find_project(yuki_dir, workflow)
+        known, status = False, None
+        if project:
+            known, status = _workflow_record(
+                yuki_dir, project, workflow)
+        entries.append({
+            "project": project,
+            "workflow": workflow,
+            "files": len(files),
+            "bytes": sum(os.path.getsize(path) for _, path in files),
+            "status": status,
+            "known": known,
+        })
     # Native runners have no managed cache.
     return {"cache": _summarize([]),
             "workflows": _summarize(entries)}

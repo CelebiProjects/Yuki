@@ -126,8 +126,13 @@ def purge_runner_cache_route():
         return jsonify({"error": f"Runner '{runner}' not found"}), 404
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if not runner_config.is_ssh_backend(
-            backend_types.get(runner_id, "reana")):
+    backend = backend_types.get(runner_id, "reana")
+    if backend == "native":
+        return jsonify({
+            "error": "native results are collected directly into Yuki Storage; "
+                     "there is no separate native runner cache"
+        }), 400
+    if not runner_config.is_ssh_backend(backend):
         return jsonify({"error": "purge-ssh-runner-cache requires an ssh "
                                  "runner"}), 400
 
@@ -168,8 +173,13 @@ def cache_results_route():
         return jsonify({"error": f"Runner '{runner}' not found"}), 404
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if not runner_config.is_ssh_backend(
-            backend_types.get(runner_id, "reana")):
+    backend = backend_types.get(runner_id, "reana")
+    if backend == "native":
+        return jsonify({
+            "error": "native results are collected directly into Yuki Storage; "
+                     "there is no separate native runner cache"
+        }), 400
+    if not runner_config.is_ssh_backend(backend):
         return jsonify({"error": "cache-results requires an ssh runner"}), 400
 
     job_id = csys.generate_uuid()

@@ -155,6 +155,22 @@ def test_runner_envs_project_scope(monkeypatch):
     assert response.get_json() == listing
 
 
+def test_runner_envs_native_project_scope(monkeypatch, tmp_path):
+    """Native project queries list only installed managed prefixes."""
+    config_obj = _temp_config(monkeypatch)
+    _write_runner(config_obj, settings={"workdir": str(tmp_path)})
+    (tmp_path / "environments" / "project-1" / "analysis" /
+     "conda-meta").mkdir(parents=True)
+
+    response = _app(runner_routes.bp).test_client().get(
+        "/runner-envs/local?project_uuid=project-1")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["scope"] == "project"
+    assert [entry["name"] for entry in body["envs"]] == ["analysis"]
+
+
 def test_install_environment_starts_background_job(monkeypatch, tmp_path):
     """The install endpoint validates input, persists state, and dispatches work."""
     config_obj = _temp_config(monkeypatch)

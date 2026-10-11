@@ -62,7 +62,7 @@ def test_run_workflow_resolves_custom_workdir(monkeypatch, tmp_path):
     with open(wf_dir / "config.json", "w", encoding="utf-8") as f:
         json.dump({"machine_id": "m1"}, f)
     custom = tmp_path / "custom"
-    exec_dir = custom / wf_uuid
+    exec_dir = custom / "workflows" / proj / wf_uuid
     exec_dir.mkdir(parents=True)
     (exec_dir / "Snakefile").write_text("rule all:\n    shell: 'true'\n")
     with open(yuki_dir / "config.json", "w", encoding="utf-8") as f:

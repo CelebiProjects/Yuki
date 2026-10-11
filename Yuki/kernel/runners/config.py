@@ -5,6 +5,7 @@ maps keyed by runner id. Legacy ssh fields live in the flat ``ssh_*`` maps;
 ``get_ssh_settings`` reads new-map-first and falls back to the legacy maps so
 old runners keep working without migration.
 """
+import fcntl
 import os
 
 from CelebiChrono.utils.metadata import ConfigFile
@@ -72,6 +73,51 @@ def get_ihep_settings(config_file, runner_id):
         if runner_settings.get(key) is not None:
             settings[key] = runner_settings[key]
     return settings
+
+
+def native_root(settings, yuki_dir=None):
+    """Return the configured storage root for a native runner."""
+    if settings.get("workdir"):
+        return os.path.abspath(os.path.expanduser(settings["workdir"]))
+    yuki_dir = yuki_dir or os.path.expanduser(
+        os.environ.get("YUKIDIR", "~/.Yuki"))
+    return os.path.join(yuki_dir, "LocalWorkflows")
+
+
+def native_workflow_path(settings, project_uuid, workflow_uuid,
+                         yuki_dir=None, prefer_legacy=True):
+    """Return a project-scoped native workspace, with legacy lookup support."""
+    root = native_root(settings, yuki_dir)
+    current = os.path.join(root, "workflows", project_uuid, workflow_uuid)
+    legacy = os.path.join(root, workflow_uuid)
+    if prefer_legacy and os.path.isdir(legacy) and not os.path.exists(current):
+        return legacy
+    return current
+
+
+def native_environment_root(settings, project_uuid, yuki_dir=None):
+    """Return the project-scoped Conda environment root for a native runner."""
+    return os.path.join(
+        native_root(settings, yuki_dir), "environments", project_uuid)
+
+
+def native_agent_running(yuki_dir=None):
+    """Return whether the native runner currently owns its agent lock."""
+    root = os.path.abspath(os.path.expanduser(
+        yuki_dir or os.environ.get("YUKIDIR", "~/.Yuki")))
+    lock_path = os.path.join(root, "NativeRunner", "agent.lock")
+    if not os.path.isfile(lock_path):
+        return False, lock_path
+    try:
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True, lock_path
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+    except OSError:
+        return False, lock_path
+    return False, lock_path
 
 
 def get_runner_health(config_file, runner_id):

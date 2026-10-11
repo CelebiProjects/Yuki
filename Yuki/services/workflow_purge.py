@@ -60,11 +60,10 @@ def _workspace_paths(backend, runner_id, candidates, yuki_dir):
                 f"{base}/workflows/{project}/{workflow_uuid}"
     elif backend == "native":
         settings = runner_config.get_runner_settings(config_file, runner_id)
-        base = settings.get("workdir") or os.path.join(
-            yuki_dir, "LocalWorkflows")
         for project, workflow_uuid in candidates:
-            paths[(project, workflow_uuid)] = os.path.join(
-                base, workflow_uuid)
+            paths[(project, workflow_uuid)] = \
+                runner_config.native_workflow_path(
+                    settings, project, workflow_uuid, yuki_dir=yuki_dir)
     return paths
 
 

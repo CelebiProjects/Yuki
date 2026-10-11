@@ -107,7 +107,23 @@ the agent claims them and runs Snakemake and Conda on the host. No API address
 or published Docker port is needed. Set `YUKIDIR` or `--yuki-dir` if the host
 storage directory is not `~/.Yuki`. A custom native runner workdir must be a
 path available with the same absolute name inside Docker and on the host;
-the default `LocalWorkflows` directory needs no extra setup.
+the default `LocalWorkflows` directory needs no extra setup. Native execution
+state is project-scoped below
+`<workdir>/workflows/<project_uuid>/<workflow_uuid>`, while managed Conda
+environments live below `<workdir>/environments/<project_uuid>/<name>`.
+Existing flat `<workdir>/<workflow_uuid>` workspaces remain readable during
+migration.
+
+Install a project's `.celebi-env/NAME.yaml` with
+`celebi-cli install-environment <native-runner> NAME`; workflow construction
+resolves the logical name to that project prefix and fails before queueing when
+it is missing. Celebi's `test-runner` also verifies that the host agent owns its
+lock, rather than reporting a stopped native runner healthy.
+
+Native execution shares Yuki's storage domain: successful stage-out is copied
+directly into Yuki Storage. Native therefore has no separate managed runner
+cache and is not a transfer source/destination; use `yuki` as the location.
+`cache-on-runner` has no additional effect for native workflows.
 The standalone `yuki-native-runner` command remains available as a backwards-
 compatible alias.
 If the agent is interrupted during execution, a restart waits for the host

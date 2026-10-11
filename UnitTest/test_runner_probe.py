@@ -49,21 +49,28 @@ def test_probe_native_all_ok(monkeypatch, tmp_path):
                         lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(runner_probe.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a, 0, "8.1.0\n", ""))
+    monkeypatch.setattr(runner_probe, "native_agent_running",
+                        lambda: (True, "/tmp/agent.lock"))
     checks = runner_probe.probe_native({"workdir": str(tmp_path)})
     assert checks["snakemake"]["ok"] is True
     assert checks["snakemake"]["version"] == "8.1.0"
     assert checks["conda"]["ok"] is True
     assert checks["workdir_writable"]["ok"] is True
+    assert checks["native_agent"]["ok"] is True
 
 
 def test_probe_native_missing_tools(monkeypatch, tmp_path):
     """A native runner without tools reports not-found errors."""
     monkeypatch.setattr(runner_probe.shutil, "which", lambda name: None)
+    monkeypatch.setattr(runner_probe, "native_agent_running",
+                        lambda: (False, "/tmp/agent.lock"))
     checks = runner_probe.probe_native({"workdir": str(tmp_path)})
     assert checks["snakemake"]["ok"] is False
     assert "not found" in checks["snakemake"]["error"]
     assert checks["conda"]["ok"] is False
     assert checks["workdir_writable"]["ok"] is True
+    assert checks["native_agent"]["ok"] is False
+    assert "yuki native-runner start" in checks["native_agent"]["error"]
 
 
 def test_test_runner_native_persists_health(monkeypatch, tmp_path):
@@ -74,6 +81,8 @@ def test_test_runner_native_persists_health(monkeypatch, tmp_path):
                         lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(runner_probe.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a, 0, "1.0\n", ""))
+    monkeypatch.setattr(runner_probe, "native_agent_running",
+                        lambda: (True, "/tmp/agent.lock"))
 
     r = _app(runner_routes.bp).test_client().get("/test-runner/local")
     assert r.status_code == 200
@@ -84,6 +93,24 @@ def test_test_runner_native_persists_health(monkeypatch, tmp_path):
     with open(config_obj.config_path, encoding="utf-8") as f:
         cfg = json.load(f)
     assert cfg["runner_health"][runner_id]["status"] == "ok"
+
+
+def test_test_runner_native_stopped_agent_marks_failed(monkeypatch, tmp_path):
+    """Tool availability is insufficient when the native agent is stopped."""
+    config_obj = _temp_config(monkeypatch)
+    _write_runner(config_obj, settings={"workdir": str(tmp_path)})
+    monkeypatch.setattr(runner_probe.shutil, "which",
+                        lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(runner_probe.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 0, "1.0\n", ""))
+    monkeypatch.setattr(runner_probe, "native_agent_running",
+                        lambda: (False, "/tmp/agent.lock"))
+
+    body = _app(runner_routes.bp).test_client().get(
+        "/test-runner/local").get_json()
+
+    assert body["status"] == "failed"
+    assert body["checks"]["native_agent"]["ok"] is False
 
 
 def test_test_runner_ssh_failure_marks_failed(monkeypatch):

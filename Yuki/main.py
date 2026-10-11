@@ -334,7 +334,12 @@ def purge_ssh_runner_cache(runner, project, impression, dry_run, yes):  # pylint
         raise click.ClickException(f"runner '{runner}' not found")
     runner_id = runners_id[runner]
     backend_types = config_file.read_variable("backend_types", {})
-    if not runner_config.is_ssh_backend(backend_types.get(runner_id)):
+    backend = backend_types.get(runner_id)
+    if backend == "native":
+        raise click.ClickException(
+            "native results are collected directly into Yuki Storage; "
+            "there is no separate native runner cache")
+    if not runner_config.is_ssh_backend(backend):
         raise click.ClickException(f"runner '{runner}' is not an ssh runner")
 
     if not dry_run and not yes:

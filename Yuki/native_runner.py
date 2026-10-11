@@ -1,5 +1,6 @@
 """Host agent for native workflows in the shared Yuki directory."""
 import fcntl
+import json
 import os
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import click
 from CelebiChrono.utils.metadata import ConfigFile
 
 from Yuki.kernel.runners import config as runner_config
+from Yuki.kernel.runners import project_environments
 from Yuki.kernel.execution.local import execute_workflow, timestamp_logger
 
 
@@ -73,12 +75,13 @@ def _pid_alive(pid_path):
 
 
 def _execution_dir(root, workflow_path, workflow_uuid):
+    project_uuid = os.path.basename(os.path.dirname(workflow_path))
     machine_id = ConfigFile(os.path.join(workflow_path, "config.json")) \
         .read_variable("machine_id", "")
     settings = runner_config.get_runner_settings(
         ConfigFile(os.path.join(root, "config.json")), machine_id)
-    return os.path.join(settings.get("workdir") or
-                        os.path.join(root, "LocalWorkflows"), workflow_uuid)
+    return runner_config.native_workflow_path(
+        settings, project_uuid, workflow_uuid, yuki_dir=root)
 
 
 def _recover_interrupted(root):
@@ -144,6 +147,42 @@ def _run_ready(root):
     return False
 
 
+def _run_environment_request(root):
+    """Run at most one queued native environment installation."""
+    request_dir = os.path.join(
+        root, project_environments.NATIVE_REQUESTS_DIR)
+    if not os.path.isdir(request_dir):
+        return False
+    for filename in sorted(os.listdir(request_dir)):
+        if not filename.endswith(".json"):
+            continue
+        path = os.path.join(request_dir, filename)
+        try:
+            with open(path, encoding="utf-8") as request_file:
+                request = json.load(request_file)
+            if request.get("status") != "queued":
+                continue
+            request["status"] = "running"
+            project_environments._write_json_atomic(  # pylint: disable=protected-access
+                path, request)
+            try:
+                settings = dict(request.get("settings") or {},
+                                backend_type="native")
+                result = project_environments.install_native_environment_local(
+                    settings, request["project_uuid"], request["name"],
+                    request["yaml"])
+                request.update(status="finished", result=result, error=None)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                request.update(status="failed", result=None,
+                               error=str(exc) or type(exc).__name__)
+            project_environments._write_json_atomic(  # pylint: disable=protected-access
+                path, request)
+            return True
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            timestamp_logger(f"[LOCAL] Invalid environment request {path}: {exc}")
+    return False
+
+
 def _agent_paths(root):
     directory = os.path.join(root, "NativeRunner")
     os.makedirs(directory, exist_ok=True)
@@ -168,7 +207,9 @@ def _serve(root, once=False):
                 os.unlink(stop_path)
                 break
             orphan_alive = _recover_interrupted(root)
-            did_work = False if orphan_alive else _run_ready(root)
+            did_work = False if orphan_alive else _run_environment_request(root)
+            if not orphan_alive and not did_work:
+                did_work = _run_ready(root)
             if once:
                 break
             if not did_work:

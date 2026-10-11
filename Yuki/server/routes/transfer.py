@@ -141,6 +141,11 @@ def start_transfer():  # pylint: disable=too-many-locals,too-many-return-stateme
         backend = backend_types.get(runners_id[name], "reana")
         if runner_config.is_ssh_backend(backend):
             continue
+        if backend == "native":
+            return jsonify({
+                "error": f"native runner '{name}' shares Yuki Storage and is "
+                         "not a transfer location; use 'yuki'"
+            }), 400
         # Only exception: a reana source may transfer to an ssh runner,
         # which pulls the files with its own reana-cli.
         if (role == "source" and backend == "reana"

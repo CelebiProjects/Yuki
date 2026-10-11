@@ -220,7 +220,7 @@ def test_cli_rejects_non_ssh_runner(monkeypatch, tmp_path):
     result = _invoke(monkeypatch, tmp_path,
                      ["purge-ssh-runner-cache", "farm", "--yes"])
     assert result.exit_code == 1
-    assert "not an ssh runner" in result.output
+    assert "no separate native runner cache" in result.output
 
 
 def test_cli_purges_with_resolved_runner_id(monkeypatch, tmp_path):

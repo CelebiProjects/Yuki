@@ -5,6 +5,8 @@ import shlex
 import shutil
 import subprocess
 
+from ..kernel.runners import config as runner_config
+
 PROBE_TIMEOUT = 10
 ENV_LIST_TIMEOUT = 30
 EXEC_TIMEOUT = 30
@@ -42,6 +44,11 @@ def _default_workdir():
     return os.path.join(yuki_dir, "LocalWorkflows")
 
 
+def native_agent_running(yuki_dir=None):
+    """Compatibility wrapper for the shared native-agent lock check."""
+    return runner_config.native_agent_running(yuki_dir)
+
+
 def probe_native(settings, timeout=EXEC_TIMEOUT):
     """Probe snakemake/conda/workdir on the Yuki host."""
     checks = {
@@ -50,6 +57,10 @@ def probe_native(settings, timeout=EXEC_TIMEOUT):
         "conda": _probe_tool(settings.get("conda_path", ""),
                              "conda", timeout),
     }
+    agent_running, lock_path = native_agent_running()
+    checks["native_agent"] = (_ok(lock=lock_path) if agent_running else
+                              _err("native runner agent is not running; "
+                                   "run: yuki native-runner start"))
     workdir = settings.get("workdir") or _default_workdir()
     try:
         os.makedirs(workdir, exist_ok=True)

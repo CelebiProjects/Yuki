@@ -202,6 +202,12 @@ def runnerconnection(runner):
             key_path=ssh_key_paths.get(runner_id, ""),
             port=ssh_ports.get(runner_id, 22),
         )
+    if backend_type == "native":
+        running, _lock_path = runner_probe.native_agent_running()
+        if running:
+            return {'status': 'Connected'}
+        return {'status': 'Failed',
+                'error': 'native runner agent is not running'}, 503
     if backend_type != "reana":
         return {'status': 'Connected'}
     return ping(url, token)
@@ -617,11 +623,13 @@ def runner_envs(runner):
     backend_type = backend_types.get(runner_id, "reana")
 
     project_uuid = request.args.get("project_uuid", "").strip()
-    if project_uuid and runner_config.is_ssh_backend(backend_type):
+    if project_uuid and (runner_config.is_ssh_backend(backend_type)
+                         or backend_type == "native"):
         try:
+            settings = project_environments.settings_for_runner(
+                config_file, runner_id)
             result = project_environments.list_project_environments(
-                runner_config.get_ssh_settings(config_file, runner_id),
-                project_uuid)
+                settings, project_uuid)
         except ValueError as exc:
             return jsonify({"error": str(exc), "envs": []}), 400
     elif project_uuid:
@@ -643,7 +651,7 @@ def runner_envs(runner):
 
 @bp.route("/runner-environments/<runner>/install", methods=["POST"])
 def install_runner_environment(runner):
-    """Start installation of a project-scoped Conda environment."""
+    """Start installation of a project environment on SSH/IHEP/native."""
     data = request.get_json(silent=True) or {}
     project_uuid = data.get("project_uuid", "")
     name = data.get("name", "")

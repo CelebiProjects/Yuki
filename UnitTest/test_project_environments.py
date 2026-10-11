@@ -6,6 +6,7 @@ from unittest import mock
 import pytest
 
 from Yuki.kernel.runners import project_environments
+from Yuki.kernel.workflows.native import NativeWorkflow
 from Yuki.kernel.workflows.ssh import SshWorkflow, resolve_conda_environment
 
 
@@ -18,6 +19,18 @@ def test_environment_path_isolated_by_project():
     assert first == "/work/yuki/environments/project-a/analysis"
     assert second == "/work/yuki/environments/project-b/analysis"
     assert first != second
+
+
+def test_native_environment_path_isolated_by_project(tmp_path):
+    settings = {"backend_type": "native", "workdir": str(tmp_path)}
+
+    first = project_environments.environment_path(
+        settings, "project-a", "analysis")
+    second = project_environments.environment_path(
+        settings, "project-b", "analysis")
+
+    assert first == str(tmp_path / "environments" / "project-a" / "analysis")
+    assert second == str(tmp_path / "environments" / "project-b" / "analysis")
 
 
 def test_reserved_and_unsafe_names_are_rejected():
@@ -66,6 +79,49 @@ def test_install_uses_prefix_update_and_prune(monkeypatch):
     assert result["path"] == "/work/environments/project-a/analysis"
 
 
+def test_native_install_uses_prefix_update_and_prune(monkeypatch, tmp_path):
+    completed = mock.Mock(returncode=0, stdout="updated\n", stderr="")
+    run = mock.Mock(return_value=completed)
+    monkeypatch.setattr(project_environments.subprocess, "run", run)
+    settings = {"backend_type": "native", "workdir": str(tmp_path),
+                "conda_path": "/opt/conda/bin/conda"}
+
+    result = project_environments.install_native_environment_local(
+        settings, "project-a", "analysis", "dependencies:\n  - python\n")
+
+    prefix = tmp_path / "environments" / "project-a" / "analysis"
+    spec = tmp_path / "environments" / "project-a" / ".specs" / "analysis.yaml"
+    assert spec.read_text(encoding="utf-8") == "dependencies:\n  - python\n"
+    assert run.call_args.args[0] == [
+        "/opt/conda/bin/conda", "env", "update", "--prefix", str(prefix),
+        "--file", str(spec), "--prune"]
+    assert result["path"] == str(prefix)
+
+
+def test_native_project_environment_listing(tmp_path):
+    root = tmp_path / "environments" / "project-a"
+    (root / "analysis" / "conda-meta").mkdir(parents=True)
+    (root / "incomplete").mkdir()
+
+    result = project_environments.list_project_environments(
+        {"backend_type": "native", "workdir": str(tmp_path)}, "project-a")
+
+    assert result["envs"] == [{
+        "name": "analysis", "path": str(root / "analysis"), "active": False}]
+
+
+def test_native_install_requires_live_agent(monkeypatch, tmp_path):
+    monkeypatch.setattr(project_environments, "yuki_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        project_environments.runner_config, "native_agent_running",
+        lambda _root: (False, str(tmp_path / "agent.lock")))
+
+    with pytest.raises(RuntimeError, match="yuki native-runner start"):
+        project_environments.install_project_environment(
+            {"backend_type": "native", "workdir": str(tmp_path)},
+            "project-a", "analysis", "dependencies:\n  - python\n")
+
+
 def test_missing_project_environment_fails_with_install_command(monkeypatch, tmp_path):
     """Workflow construction names the corrective command before remote launch."""
     monkeypatch.setenv("YUKIDIR", str(tmp_path))
@@ -85,3 +141,33 @@ def test_missing_project_environment_fails_with_install_command(monkeypatch, tmp
     with pytest.raises(RuntimeError, match=(
             "celebi-cli install-environment cluster analysis")):
         workflow._resolve_conda_environment("analysis")
+
+
+def test_native_missing_project_environment_fails_before_queue(monkeypatch, tmp_path):
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    (tmp_path / "config.json").write_text(json.dumps({
+        "runners_id": {"local": "runner-1"}
+    }), encoding="utf-8")
+    workflow = NativeWorkflow.__new__(NativeWorkflow)
+    workflow.project_uuid = "project-a"
+    workflow.machine_id = "runner-1"
+    workflow.native_settings = {
+        "backend_type": "native", "workdir": str(tmp_path / "native")}
+
+    with pytest.raises(RuntimeError, match=(
+            "celebi-cli install-environment local analysis")):
+        workflow._resolve_conda_environment("analysis")
+
+
+def test_native_resolves_installed_project_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    prefix = tmp_path / "native" / "environments" / "project-a" / "analysis"
+    (prefix / "conda-meta").mkdir(parents=True)
+    workflow = NativeWorkflow.__new__(NativeWorkflow)
+    workflow.project_uuid = "project-a"
+    workflow.machine_id = "runner-1"
+    workflow.native_settings = {
+        "backend_type": "native", "workdir": str(tmp_path / "native")}
+
+    assert workflow._resolve_conda_environment("analysis") == str(prefix)

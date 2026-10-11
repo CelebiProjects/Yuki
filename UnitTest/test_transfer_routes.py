@@ -64,6 +64,24 @@ def test_start_transfer_non_ssh_runner():
     assert "not an ssh runner" in r.get_json()["error"]
 
 
+def test_start_transfer_native_explains_shared_storage():
+    client = _app().test_client()
+    with mock.patch("Yuki.server.routes.transfer.config",
+                    _mock_config(
+                        runners_id={"local": "runner-uuid"},
+                        backend_types={"runner-uuid": "native"},
+                    )):
+        response = client.post("/transfer", json={
+            "project_uuid": "proj",
+            "impression": "imp",
+            "source": "runner:local",
+            "destination": "yuki",
+        })
+    assert response.status_code == 400
+    assert "shares Yuki Storage" in response.get_json()["error"]
+    assert "use 'yuki'" in response.get_json()["error"]
+
+
 def test_start_transfer_reana_to_ssh_allowed():
     """A reana source is allowed when the destination is an ssh runner."""
     client = _app().test_client()

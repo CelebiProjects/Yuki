@@ -39,7 +39,7 @@ Changes since v1.0.0b3:
 + Improve the Conda-based RabbitMQ setup.
   - Add the setup script, reduce environment-solver memory use, locate the conda-forge
     binary reliably, and enable Celery-compatible RabbitMQ behavior.
-+ Add trusted, project-scoped Conda environment management for SSH and IHEP runners.
++ Add trusted, project-scoped Conda environment management for SSH, IHEP, and native runners.
   - Accept asynchronous installation jobs from a Conda YAML and update prefixes with
     ``conda env update --prune``.
   - Isolate environments below each runner's
@@ -49,4 +49,13 @@ Changes since v1.0.0b3:
     global mappings, and fail clearly before launch when a prefix is missing.
   - Deliberately omit environment-specification hashes: these environments are trusted
     mutable runner state.
+  - Resolve native logical names to project prefixes and fail workflow construction
+    with the corrective install command before queueing when a prefix is missing.
++ Move new native workspaces to
+  ``<workdir>/workflows/<project_uuid>/<workflow_uuid>`` while retaining lookup
+  compatibility for flat legacy workspaces.
++ Include native host-agent liveness in runner probing and connectivity checks.
++ Formalize native data semantics: successful stage-out enters Yuki Storage directly;
+  native has no separate managed cache, is not a transfer endpoint, and
+  ``cache-on-runner`` has no additional effect.
 + Set the Yuki package version to `1.0.0b4`.

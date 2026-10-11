@@ -106,9 +106,10 @@ def test_native_inventory_lists_local_workflows(monkeypatch, tmp_path):
                   runner_settings={"r1": {
                       "workdir": str(tmp_path / "localwf")}})
 
-    wf1 = tmp_path / "localwf" / "wf1"
+    wf1 = tmp_path / "localwf" / "workflows" / "p1" / "wf1"
     wf1.mkdir(parents=True)
     (wf1 / "a.done").write_bytes(b"xx")
+    # Legacy flat workspaces remain visible during migration.
     (tmp_path / "localwf" / "wf2").mkdir(parents=True)
     mirror = tmp_path / "Workflows" / "p1" / "wf1"
     mirror.mkdir(parents=True)

@@ -169,5 +169,31 @@ def test_native_resolves_installed_project_environment(monkeypatch, tmp_path):
     workflow.machine_id = "runner-1"
     workflow.native_settings = {
         "backend_type": "native", "workdir": str(tmp_path / "native")}
+    workflow.local_exec_path = str(
+        tmp_path / "native" / "workflows" / "project-a" / "workflow-a")
 
-    assert workflow._resolve_conda_environment("analysis") == str(prefix)
+    assert workflow._resolve_conda_environment("analysis") == (
+        "../../../environments/project-a/analysis")
+
+
+def test_native_activates_project_environment_in_rule_shell(monkeypatch, tmp_path):
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    prefix = tmp_path / "native" / "environments" / "project-a" / "analysis"
+    (prefix / "conda-meta").mkdir(parents=True)
+    workflow = NativeWorkflow.__new__(NativeWorkflow)
+    workflow.project_uuid = "project-a"
+    workflow.machine_id = "runner-1"
+    workflow.native_settings = {
+        "backend_type": "native", "workdir": str(tmp_path / "native")}
+    workflow.local_exec_path = str(
+        tmp_path / "native" / "workflows" / "project-a" / "workflow-a")
+
+    snake_file = mock.Mock()
+    workflow._write_environment_directive(snake_file, "analysis")
+    snake_file.addline.assert_not_called()
+    assert workflow._wrap_environment_commands("analysis", ["python run.py"]) == [
+        'source \\"$(conda info --base)/etc/profile.d/conda.sh\\"',
+        "conda activate ../../../environments/project-a/analysis",
+        "python run.py",
+    ]

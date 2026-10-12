@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 
@@ -196,25 +197,52 @@ def _is_running(lock_path):
         return not acquired
 
 
+@contextmanager
+def _heartbeat(root):
+    """Publish liveness where cross-filesystem advisory locks are invisible."""
+    path = os.path.join(root, "NativeRunner", "agent.heartbeat")
+    stopped = threading.Event()
+
+    def beat():
+        while not stopped.is_set():
+            with open(path, "a", encoding="utf-8"):
+                os.utime(path, None)
+            stopped.wait(2)
+
+    thread = threading.Thread(target=beat, name="native-runner-heartbeat",
+                              daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join(timeout=3)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
 def _serve(root, once=False):
     lock_path, stop_path, _log_path = _agent_paths(root)
     with _lock(lock_path) as acquired:
         if not acquired:
             raise click.ClickException("Native runner is already running")
-        timestamp_logger(f"[LOCAL] Native runner started; storage={root}")
-        while True:
-            if os.path.exists(stop_path):
-                os.unlink(stop_path)
-                break
-            orphan_alive = _recover_interrupted(root)
-            did_work = False if orphan_alive else _run_environment_request(root)
-            if not orphan_alive and not did_work:
-                did_work = _run_ready(root)
-            if once:
-                break
-            if not did_work:
-                time.sleep(2)
-        timestamp_logger("[LOCAL] Native runner stopped")
+        with _heartbeat(root):
+            timestamp_logger(f"[LOCAL] Native runner started; storage={root}")
+            while True:
+                if os.path.exists(stop_path):
+                    os.unlink(stop_path)
+                    break
+                orphan_alive = _recover_interrupted(root)
+                did_work = False if orphan_alive else _run_environment_request(root)
+                if not orphan_alive and not did_work:
+                    did_work = _run_ready(root)
+                if once:
+                    break
+                if not did_work:
+                    time.sleep(2)
+            timestamp_logger("[LOCAL] Native runner stopped")
 
 
 @click.group()

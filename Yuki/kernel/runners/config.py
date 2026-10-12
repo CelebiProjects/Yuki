@@ -7,12 +7,14 @@ old runners keep working without migration.
 """
 import fcntl
 import os
+import time
 
 from CelebiChrono.utils.metadata import ConfigFile
 
 LEGACY_SSH_KEYS = ("ssh_hosts", "ssh_users", "ssh_key_paths",
                    "ssh_ports", "remote_workdirs")
 SSH_BACKENDS = frozenset(("ssh", "ihep"))
+NATIVE_AGENT_HEARTBEAT_MAX_AGE = 10
 
 
 def is_ssh_backend(backend_type):
@@ -102,21 +104,30 @@ def native_environment_root(settings, project_uuid, yuki_dir=None):
 
 
 def native_agent_running(yuki_dir=None):
-    """Return whether the native runner currently owns its agent lock."""
+    """Return whether the native runner is live locally or across a bind mount."""
     root = os.path.abspath(os.path.expanduser(
         yuki_dir or os.environ.get("YUKIDIR", "~/.Yuki")))
     lock_path = os.path.join(root, "NativeRunner", "agent.lock")
-    if not os.path.isfile(lock_path):
-        return False, lock_path
+    if os.path.isfile(lock_path):
+        try:
+            with open(lock_path, "a+", encoding="utf-8") as lock_file:
+                try:
+                    fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return True, lock_path
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+        except OSError:
+            pass
+    # Advisory locks are not propagated from a macOS host through Docker bind
+    # mounts. The host agent maintains this heartbeat so the server container
+    # can still distinguish a live agent from a stale lock file.
+    heartbeat_path = os.path.join(root, "NativeRunner", "agent.heartbeat")
     try:
-        with open(lock_path, "a+", encoding="utf-8") as lock_file:
-            try:
-                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return True, lock_path
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+        age = time.time() - os.path.getmtime(heartbeat_path)
+        if age <= NATIVE_AGENT_HEARTBEAT_MAX_AGE:
+            return True, lock_path
     except OSError:
-        return False, lock_path
+        pass
     return False, lock_path
 
 

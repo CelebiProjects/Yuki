@@ -6,6 +6,7 @@ This module prepares workflows in shared storage for the host native runner.
 # pylint: disable=cyclic-import
 import os
 import re
+import shlex
 import shutil
 import json
 from CelebiChrono.utils import metadata
@@ -200,8 +201,39 @@ class NativeWorkflow(VWorkflow):
         if environment == DEFAULT_ENVIRONMENT:
             return
         conda_env = self._resolve_conda_environment(environment)
+        if self._is_project_environment(environment):
+            # A pre-installed prefix is not a Snakemake environment name or a
+            # YAML specification. Activate it in the rule shell instead; using
+            # ``conda:`` here makes Snakemake export it with ``--name`` after
+            # the rule and fail during metadata persistence.
+            return
         snake_file.addline("conda:", indent)
         snake_file.addline(f'"{conda_env}"', indent + 1)
+
+    def _wrap_environment_commands(self, environment, commands):
+        """Activate a project-scoped prefix without Snakemake misclassifying it."""
+        if not self._is_project_environment(environment):
+            return commands
+        prefix = self._resolve_conda_environment(environment)
+        activate = (
+            'source \\"$(conda info --base)/etc/profile.d/conda.sh\\"',
+            f"conda activate {shlex.quote(prefix)}",
+        )
+        return [*activate, *commands]
+
+    def _is_project_environment(self, environment):
+        """Return whether *environment* names this project's installed prefix."""
+        if not environment or environment == "script":
+            return False
+        config_path = os.path.join(
+            os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki")),
+            "config.json"
+        )
+        return (
+            EnvInterpreter.resolve(environment, config_path) is None
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", environment)
+            is not None
+        )
 
     def _resolve_conda_environment(self, environment):
         """Map a job environment string to a conda environment name.
@@ -243,7 +275,12 @@ class NativeWorkflow(VWorkflow):
                     f"Environment '{environment}' is not installed for project "
                     f"'{self.project_uuid}' on runner '{runner}'. Run: "
                     f"celebi-cli install-environment {runner} {environment}")
-            return resolved
+            # The workflow is assembled in the Yuki container but executed by
+            # the native runner on the host. Those processes may mount the
+            # same native root at different absolute paths, so keep the Conda
+            # prefix relative to the workflow directory. Both directories
+            # live below the native root and therefore share this layout.
+            return os.path.relpath(resolved, self.local_exec_path)
 
         # 2. Strip Docker prefixes and try again
         stripped = environment

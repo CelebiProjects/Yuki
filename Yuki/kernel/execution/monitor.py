@@ -15,6 +15,26 @@ from .status import (
     IN_MOVEMENT, CODA, FAILED, translate_to_musical, is_terminal_status)
 
 
+def _snakemake_environment(conda_path=None):
+    """Build an environment that makes Conda activation failures fatal.
+
+    Snakemake 7.x wraps a rule as ``source activate ENV; <command>``.  Its
+    normal ``set -e`` prefix is part of ``<command>``, so a failed activation
+    can otherwise fall through and execute the rule in the runner's ambient
+    environment.  Exporting ``errexit`` through ``SHELLOPTS`` enables it when
+    Bash starts, before Snakemake's activation wrapper runs.
+    """
+    env = dict(os.environ)
+    shellopts = {option for option in env.get("SHELLOPTS", "").split(":")
+                 if option}
+    shellopts.add("errexit")
+    env["SHELLOPTS"] = ":".join(sorted(shellopts))
+    if conda_path:
+        env["PATH"] = (os.path.dirname(conda_path) + os.pathsep
+                       + env.get("PATH", ""))
+    return env
+
+
 class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
     """Monitor snakemake execution and update workflow status."""
 
@@ -82,11 +102,7 @@ class SnakemakeMonitor:  # pylint: disable=too-many-instance-attributes,too-few-
         ]
         if mem_mb:
             cmd += ["--resources", f"mem_mb={int(mem_mb)}"]
-        env = None
-        if conda_path:
-            env = dict(os.environ)
-            env["PATH"] = (os.path.dirname(conda_path) + os.pathsep
-                           + env.get("PATH", ""))
+        env = _snakemake_environment(conda_path)
 
         try:
             # Execute snakemake with output capture

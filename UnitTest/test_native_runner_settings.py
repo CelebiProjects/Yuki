@@ -1,9 +1,12 @@
 """Tests for native runner settings consumption."""
 import json
 import os
+import time
+import subprocess
 from unittest import mock
 
-from Yuki.kernel.execution.monitor import SnakemakeMonitor
+from Yuki.kernel.execution.monitor import SnakemakeMonitor, _snakemake_environment
+from Yuki.kernel.runners import config as runner_config
 
 
 def _monitor(tmp):
@@ -32,6 +35,20 @@ def test_execute_snakemake_settings(tmp_path):
     assert "-j" in cmd and "8" in cmd
     env = popen.call_args[1].get("env")
     assert env["PATH"].startswith("/opt/conda/bin" + os.pathsep)
+    assert "errexit" in env["SHELLOPTS"].split(":")
+
+
+def test_snakemake_environment_stops_after_activation_failure(tmp_path):
+    """A failed environment activation must not run the user command."""
+    marker = tmp_path / "user-command-ran"
+    result = subprocess.run(
+        ["/bin/bash", "-c", f"false; touch {marker}"],
+        check=False,
+        env=_snakemake_environment(),
+    )
+
+    assert result.returncode != 0
+    assert not marker.exists()
 
 
 def test_native_workflow_uses_workdir_setting(monkeypatch, tmp_path):
@@ -81,3 +98,28 @@ def test_run_workflow_resolves_custom_workdir(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     # SnakemakeMonitor(workflow_path, local_exec_dir, ...) — 2nd positional arg
     assert mon_cls.call_args[0][1] == str(exec_dir)
+
+
+def test_native_agent_running_accepts_fresh_cross_mount_heartbeat(tmp_path):
+    directory = tmp_path / "NativeRunner"
+    directory.mkdir()
+    heartbeat = directory / "agent.heartbeat"
+    heartbeat.touch()
+
+    running, lock_path = runner_config.native_agent_running(str(tmp_path))
+
+    assert running is True
+    assert lock_path == str(directory / "agent.lock")
+
+
+def test_native_agent_running_rejects_stale_cross_mount_heartbeat(tmp_path):
+    directory = tmp_path / "NativeRunner"
+    directory.mkdir()
+    heartbeat = directory / "agent.heartbeat"
+    heartbeat.touch()
+    stale = time.time() - runner_config.NATIVE_AGENT_HEARTBEAT_MAX_AGE - 1
+    os.utime(heartbeat, (stale, stale))
+
+    running, _lock_path = runner_config.native_agent_running(str(tmp_path))
+
+    assert running is False

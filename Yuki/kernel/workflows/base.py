@@ -298,6 +298,10 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         snake_file.addline("container:", indent)
         snake_file.addline(f'"docker://{environment}"', indent + 1)
 
+    def _wrap_environment_commands(self, environment, commands):
+        """Return backend-specific shell commands for an environment."""
+        return commands
+
     def run(self):  # pylint: disable=too-many-branches,too-many-statements
         """Common execution flow for workflows.
 
@@ -808,7 +812,9 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                 suffix = "," if i < len(resource_lines) - 1 else ""
                 snake_file.addline(line + suffix, 2)
             snake_file.addline("shell:", 1)
-            snake_file.addline(f'"{" && ".join(snakemake_rule["commands"])}"', 2)
+            commands = self._wrap_environment_commands(
+                snakemake_rule["environment"], snakemake_rule["commands"])
+            snake_file.addline(f'"{" && ".join(commands)}"', 2)
             self.logger(f"[{i+1}/{total_jobs}] Added shell and resources at time "
                          f"{time.time() - start_time:.4f}s")
 

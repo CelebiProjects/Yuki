@@ -89,6 +89,7 @@ RUNNER_CONDA="$RUNNER_BIN/conda"
 CONDARC="$IHEP_ROOT/condarc.yml"
 CACHE_ROOT="$IHEP_ROOT/cache"
 CONFIG_ROOT="$IHEP_ROOT/config"
+HOME_ROOT="$IHEP_ROOT/home"
 PKGS_ROOT="$IHEP_ROOT/conda-pkgs"
 ENVS_ROOT="$IHEP_ROOT/conda-envs"
 INSTALLER="$IHEP_ROOT/downloads/Miniconda3-latest-Linux-x86_64.sh"
@@ -143,7 +144,7 @@ if [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_AUTH" -eq 0 ]; then
 fi
 
 run mkdir -p "$IHEP_ROOT/downloads" "$RUNNER_BIN" "$WORKFLOW_ROOT" \
-    "$CACHE_ROOT" "$CONFIG_ROOT" "$PKGS_ROOT" "$ENVS_ROOT"
+    "$CACHE_ROOT" "$CONFIG_ROOT" "$HOME_ROOT" "$PKGS_ROOT" "$ENVS_ROOT"
 
 if [ ! -x "$CONDA_REAL" ]; then
     if [ -e "$CONDA_ROOT" ]; then
@@ -172,6 +173,7 @@ channel_priority: strict
 EOF
     cat > "$RUNNER_CONDA" <<EOF
 #!/bin/sh
+export HOME='$HOME_ROOT'
 export CONDARC='$CONDARC'
 export XDG_CACHE_HOME='$CACHE_ROOT'
 export XDG_CONFIG_HOME='$CONFIG_ROOT'

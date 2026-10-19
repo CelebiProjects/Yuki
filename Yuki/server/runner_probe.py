@@ -1,6 +1,7 @@
 """Capability probing for runners (snakemake / conda / workdir)."""
 import datetime
 import os
+import platform
 import shlex
 import shutil
 import subprocess
@@ -39,6 +40,19 @@ def _probe_tool(path_setting, binary, timeout=EXEC_TIMEOUT):
     return _ok(version=result.stdout.strip(), path=path)
 
 
+def _native_platform():
+    """Return a compact host platform summary for runner diagnostics."""
+    summary = f"{platform.system()} {platform.release()} ({platform.machine()})"
+    try:
+        os_release = platform.freedesktop_os_release()
+    except OSError:
+        os_release = {}
+    distribution = os_release.get("PRETTY_NAME", "")
+    if distribution:
+        summary = f"{summary}; {distribution}"
+    return _ok(version=summary)
+
+
 def _default_workdir():
     yuki_dir = os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki"))
     return os.path.join(yuki_dir, "LocalWorkflows")
@@ -52,6 +66,7 @@ def native_agent_running(yuki_dir=None):
 def probe_native(settings, timeout=EXEC_TIMEOUT):
     """Probe snakemake/conda/workdir on the Yuki host."""
     checks = {
+        "platform": _native_platform(),
         "snakemake": _probe_tool(settings.get("snakemake_path", ""),
                                   "snakemake", timeout),
         "conda": _probe_tool(settings.get("conda_path", ""),
@@ -106,12 +121,21 @@ def probe_ssh(ssh_settings, timeout=PROBE_TIMEOUT, extra_tools=None,
         _, stdout, stderr = client.exec_command(cmd, timeout=timeout)
         return stdout.read().decode().strip(), stderr.read().decode().strip()
 
-    check_names = ("snakemake", "conda", "workdir_writable") + tuple(
+    check_names = ("platform", "snakemake", "conda", "workdir_writable") + tuple(
         name for name, _setting in (extra_tools or ()))
     if require_cluster_executor:
         check_names += ("snakemake_cluster",)
     current = check_names[0]
     try:
+        current = "platform"
+        out, err = remote(
+            "host_platform=$(uname -srm 2>/dev/null) || exit; "
+            "if test -r /etc/os-release; then "
+            ". /etc/os-release; "
+            "host_platform=\"$host_platform; ${PRETTY_NAME:-$ID $VERSION_ID}\"; "
+            "fi; printf '%s' \"$host_platform\"")
+        checks["platform"] = (_err(err or "unable to identify platform")
+                              if not out else _ok(version=out))
         for name, setting, binary in (
                 ("snakemake", "snakemake_path", "snakemake"),
                 ("conda", "conda_path", "conda")):

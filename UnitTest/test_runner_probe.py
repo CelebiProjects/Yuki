@@ -52,6 +52,8 @@ def test_probe_native_all_ok(monkeypatch, tmp_path):
     monkeypatch.setattr(runner_probe, "native_agent_running",
                         lambda: (True, "/tmp/agent.lock"))
     checks = runner_probe.probe_native({"workdir": str(tmp_path)})
+    assert checks["platform"]["ok"] is True
+    assert checks["platform"]["version"]
     assert checks["snakemake"]["ok"] is True
     assert checks["snakemake"]["version"] == "8.1.0"
     assert checks["conda"]["ok"] is True
@@ -131,7 +133,9 @@ def test_probe_ihep_requires_step_cluster_submission(monkeypatch):  # pylint: di
     mock_client = mock.MagicMock()
 
     def exec_command(command, timeout=None):  # pylint: disable=unused-argument
-        if command.endswith("snakemake --help"):
+        if command.startswith("host_platform="):
+            output = "Linux 5.14.0 x86_64; Rocky Linux 9.6"
+        elif command.endswith("snakemake --help"):
             output = "--executor --cluster-generic-submit-cmd VALUE"
         elif "--version" in command:
             output = "9.0.0"
@@ -172,6 +176,9 @@ def test_test_runner_ssh_mid_probe_failure_marks_failed(monkeypatch):
         stderr = mock.MagicMock()
         stderr.read.return_value = b""
         client.exec_command.side_effect = [
+            (None, mock.MagicMock(**{"read.return_value":
+                                    b"Linux 5.14 x86_64; AlmaLinux 9"}), stderr),
+            # platform probe succeeds
             (None, stdout, stderr),      # snakemake probe succeeds
             Exception("channel closed"),  # conda probe blows up mid-run
         ]
@@ -220,6 +227,11 @@ def test_probe_ssh_abort_error_names_exception_type(monkeypatch):  # pylint: dis
     mock_client = mock.MagicMock()
 
     def exec_side_effect(cmd, timeout=None):  # pylint: disable=unused-argument
+        if cmd.startswith("host_platform="):
+            return (mock.MagicMock(),
+                    mock.MagicMock(**{"read.return_value":
+                                      b"Linux 5.14 x86_64; AlmaLinux 9"}),
+                    mock.MagicMock(**{"read.return_value": b""}))
         if "snakemake" in cmd:
             return (mock.MagicMock(),
                     mock.MagicMock(**{"read.return_value": b"9.0"}),

@@ -177,6 +177,26 @@ def _request_native_install(settings, project_uuid, name, yaml_text):
     raise TimeoutError("timed out waiting for the native runner agent")
 
 
+def _ihep_conda_preamble(settings):
+    """Return shell setup that keeps Conda state off an AFS home directory."""
+    workdir = settings.get("remote_workdir", "/tmp/yuki-workflows")
+    state_root = posixpath.join(workdir, ".celebi-conda")
+    paths = {
+        "HOME": posixpath.join(state_root, "home"),
+        "CONDA_PKGS_DIRS": posixpath.join(state_root, "pkgs"),
+        "CONDA_ENVS_PATH": posixpath.join(state_root, "envs"),
+        "XDG_CACHE_HOME": posixpath.join(state_root, "cache"),
+        "XDG_CONFIG_HOME": posixpath.join(state_root, "config"),
+    }
+    directories = " ".join(shlex.quote(path) for path in paths.values())
+    exports = " ".join(
+        f"export {key}={shlex.quote(value)};" for key, value in paths.items())
+    return (
+        f"mkdir -p {directories}; cd {shlex.quote(workdir)}; {exports} "
+        "export CONDA_REGISTER_ENVS=false; "
+    )
+
+
 def install_project_environment(settings, project_uuid, name, yaml_text):
     """Create or update a project environment from a Conda YAML document."""
     prefix = environment_path(settings, project_uuid, name)
@@ -186,10 +206,18 @@ def install_project_environment(settings, project_uuid, name, yaml_text):
     conda = settings.get("conda_path") or "conda"
     if _backend(settings) == "native":
         return _request_native_install(settings, project_uuid, name, yaml_text)
+    conda_preamble = ""
+    if _backend(settings) == "ihep":
+        # IHEP batch and non-interactive SSH sessions cannot rely on an AFS
+        # token.  Keep every Conda-owned path on the shared runner filesystem,
+        # even when conda_path accidentally names the real binary instead of
+        # the wrapper installed by setup-ihep-runner.sh.
+        conda_preamble = _ihep_conda_preamble(settings)
     with _connection(settings) as ssh:
         ssh.put_text(yaml_text, spec_path)
         command = (
             "set -eu; "
+            f"{conda_preamble}"
             f"_celebi_lock={shlex.quote(lock_path)}; "
             "if ! mkdir \"$_celebi_lock\" 2>/dev/null; then "
             f"echo {shlex.quote('environment installation is already running')} >&2; "

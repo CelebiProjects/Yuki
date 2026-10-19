@@ -37,6 +37,7 @@ CANONICAL_MODULES = (
     "Yuki.services.runner_inventory",
     "Yuki.services.workflow_kill",
     "Yuki.services.workflow_purge",
+    "Yuki.services.celebi_server_booker",
     "Yuki.server.services.reana_booking",
     "Yuki.utils.locked_metadata",
     "Yuki.utils.resource_units",

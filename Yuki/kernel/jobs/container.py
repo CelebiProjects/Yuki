@@ -22,6 +22,12 @@ from ..storage.staging import walk_files
 
 _debug = logging.getLogger("Yuki.kernel")
 
+LB_RUN_EXECUTABLE = (
+    "/cvmfs/lhcb.cern.ch/lib/var/lib/LbEnv/stable/linux-64/bin/lb-run"
+)
+LB_RUN_CVMFS_REPOSITORY = "lhcb.cern.ch"
+LB_RUN_CVMFS_PATH = f"/cvmfs/{LB_RUN_CVMFS_REPOSITORY}"
+
 
 class ContainerJob(VJob):
     """
@@ -127,11 +133,7 @@ class ContainerJob(VJob):
 
         _debug.debug(f"    >>>> >>>> User command processing start time: {time.time() - start_time}")
 
-        raw_commands = self.yaml_file.read_variable("commands", [])
-        if not raw_commands:
-            img = self.image()
-            if img is not None:
-                raw_commands = img.yaml_file.read_variable("commands", [])
+        raw_commands, command_yaml = self._user_commands_and_yaml()
         processed_commands = []
 
         _debug.debug(raw_commands)
@@ -143,6 +145,7 @@ class ContainerJob(VJob):
             _debug.debug(f"    >>>> >>>> After input substitution time: {time.time() - start_time}")
             command = self._substitute_paths(command)
             _debug.debug(f"    >>>> >>>> After path substitution time: {time.time() - start_time}")
+            command = self._wrap_lb_run_command(command, command_yaml)
             command = "{ " + command + " ; } >> " + f"logs/celebi_user_step{i}.log 2>&1"
             processed_commands.append(command.replace("\"", "\\\""))
 
@@ -290,21 +293,102 @@ class ContainerJob(VJob):
         if self.is_input or self.compute_backend() == "htcondorcern":
             return []
 
-        raw_commands = self.yaml_file.read_variable("commands", [])
-        if not raw_commands:
-            img = self.image()
-            if img is not None:
-                raw_commands = img.yaml_file.read_variable("commands", [])
+        raw_commands, command_yaml = self._user_commands_and_yaml()
         processed_commands = []
 
         for i, command in enumerate(raw_commands):
             command = self._substitute_parameters(command)
             command = self._substitute_inputs(command)
             command = self._substitute_paths(command)
+            command = self._wrap_lb_run_command(command, command_yaml)
             command = "{{ " + command + " ; }} >> " + f"logs/celebi_user_step{i}.log 2>&1"
             processed_commands.append(command.replace("\"", "\\\""))
 
         return processed_commands
+
+    def _user_commands_and_yaml(self):
+        """Return user commands and the YAML file that declared them.
+
+        A task that supplies inline commands replaces the linked algorithm's
+        execution contract, including its optional ``lb_run`` declaration.
+        Otherwise both commands and ``lb_run`` are inherited from the linked
+        algorithm.
+        """
+        raw_commands = self.yaml_file.read_variable("commands", [])
+        if raw_commands:
+            return raw_commands, self.yaml_file
+        image = self.image()
+        if image is None:
+            return [], None
+        return image.yaml_file.read_variable("commands", []), image.yaml_file
+
+    def _lb_run_spec(self, command_yaml):
+        """Validate and resolve an ``lb_run`` declaration.
+
+        Supported schema::
+
+            lb_run:
+              project: Moore
+              version: v55r12
+              platform: x86_64_v2-el9-gcc13-opt  # optional
+        """
+        if command_yaml is None:
+            return None
+        raw = command_yaml.read_variable("lb_run", None)
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise ValueError("lb_run must be a mapping")
+        unknown = sorted(set(raw) - {"project", "version", "platform"})
+        if unknown:
+            raise ValueError(
+                "unsupported lb_run field(s): " + ", ".join(unknown))
+
+        spec = {}
+        for field in ("project", "version", "platform"):
+            value = raw.get(field, "")
+            if value is None:
+                value = ""
+            if not isinstance(value, str):
+                raise ValueError(f"lb_run.{field} must be a string")
+            value = self._substitute_parameters(value).strip()
+            if "${" in value:
+                raise ValueError(
+                    f"lb_run.{field} contains an unresolved parameter: {value}")
+            spec[field] = value
+
+        for field in ("project", "version"):
+            if not spec[field]:
+                raise ValueError(f"lb_run.{field} is required")
+            if "/" in spec[field]:
+                raise ValueError(
+                    f"lb_run.{field} must not contain '/': {spec[field]}")
+        return spec
+
+    def _wrap_lb_run_command(self, command, command_yaml):
+        """Validate CVMFS and run one command in the configured release."""
+        spec = self._lb_run_spec(command_yaml)
+        if spec is None:
+            return command
+        argv = [LB_RUN_EXECUTABLE]
+        if spec["platform"]:
+            argv.extend(("-c", spec["platform"]))
+        argv.extend((
+            f'{spec["project"]}/{spec["version"]}',
+            "bash", "--noprofile", "--norc", "-c", command,
+        ))
+        invocation = " ".join(shlex.quote(value) for value in argv)
+        repository = shlex.quote(LB_RUN_CVMFS_PATH)
+        executable = shlex.quote(LB_RUN_EXECUTABLE)
+        return (
+            f"if ! test -d {repository}; then "
+            f"echo 'Celebi lb-run error: CVMFS repository "
+            f"{LB_RUN_CVMFS_PATH} is not available' >&2; exit 127; fi; "
+            f"if ! test -x {executable}; then "
+            f"echo 'Celebi lb-run error: executable "
+            f"{LB_RUN_EXECUTABLE} is not available' >&2; exit 127; fi; "
+            f"{invocation}"
+        )
 
     def _substitute_parameters(self, command):
         """
@@ -533,7 +617,17 @@ class ContainerJob(VJob):
         Returns:
             list: List of CVMFS repository names
         """
-        return self.yaml_file.read_variable("cvmfs", [])
+        repositories = self.yaml_file.read_variable("cvmfs", [])
+        if repositories is None:
+            repositories = []
+        if not isinstance(repositories, list):
+            raise ValueError("cvmfs must be a list")
+        repositories = list(repositories)
+        _commands, command_yaml = self._user_commands_and_yaml()
+        if (self._lb_run_spec(command_yaml) is not None
+                and LB_RUN_CVMFS_REPOSITORY not in repositories):
+            repositories.append(LB_RUN_CVMFS_REPOSITORY)
+        return repositories
 
     def parameters(self):
         """

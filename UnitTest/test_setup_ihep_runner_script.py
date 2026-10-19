@@ -36,6 +36,7 @@ def test_setup_ihep_runner_is_independent_of_afs_at_runtime():
 
     assert "register_envs: false" in source
     assert "exec '$CONDA_REAL'" in source
+    assert "export HOME='$HOME_ROOT'" in source
     assert "XDG_CACHE_HOME" in source
     assert "XDG_CONFIG_HOME" in source
     assert "CONDA_PKGS_DIRS" in source

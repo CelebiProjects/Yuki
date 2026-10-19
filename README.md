@@ -13,6 +13,28 @@ in [the package layout guide](docs/package-layout.md).
 IHEP clusters are supported through the `ihep` runner backend, which stages via
 SSH and submits work through `hep_sub`; see [the IHEP runner guide](docs/ihep-runner.md).
 
+Celebi algorithms can run their user commands in centrally published LHCb
+releases through CVMFS; see [the lb-run guide](docs/lb-run.md).
+
+## Celebi bookkeeping uploads
+
+The updated Celebi client runs `celebi-cli bookkeep --commit "Publish" --tag "v1"`
+to publish code through GitLab and collected results through Yuki to `celebi_server`.
+Yuki receives only the project UUID, the server's needed impression UUIDs, and
+a short-lived upload grant. The website's analysis token stays on the client.
+
+`POST /book-celebi-server/pack` selects images and UTF-8 text from collected
+runner stageout directories (maximum 5 MiB per file), returns archive hashes,
+sizes, missing UUIDs, and a `pack_id`. `POST /book-celebi-server/upload` resolves
+those archives from the stored batch and uploads them in verified chunks.
+Interrupted uploads resume even when a retry creates a new pack batch.
+Archives exclude symlinks, ROOT/data files, and oversized files; their file
+list records skipped paths. Impressions with no eligible collected files stay
+missing so later runs can retry. Result collection from runners remains a
+separate step.
+
+Install the updated Celebi, Yuki, and celebi_server checkouts for this workflow.
+
 ## Install
 
 ```bash
@@ -118,7 +140,9 @@ Install a project's `.celebi-env/NAME.yaml` with
 `celebi-cli install-environment <native-runner> NAME`; workflow construction
 resolves the logical name to that project prefix and fails before queueing when
 it is missing. Celebi's `test-runner` also verifies that the host agent owns its
-lock, rather than reporting a stopped native runner healthy.
+lock, rather than reporting a stopped native runner healthy. For native and
+SSH runners it reports the operating-system release, kernel, and machine
+architecture as `platform`, which helps select compatible binary environments.
 
 Native execution shares Yuki's storage domain: successful stage-out is copied
 directly into Yuki Storage. Native therefore has no separate managed runner

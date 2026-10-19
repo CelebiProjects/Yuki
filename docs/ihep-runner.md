@@ -88,7 +88,10 @@ The script writes `runner-settings.txt` below the selected root. Use those
 absolute paths when registering the runner. Its Conda wrapper sets
 `register_envs: false`, so coordinator and rule jobs do not need an AFS token
 to update `~/.conda/environments.txt`. The wrapper also redirects XDG and
-Conda caches away from AFS home, so workflow execution stays entirely on CEFS.
+Conda caches plus Conda's effective home away from AFS, so workflow execution
+stays entirely on CEFS. Project-environment installation applies the same
+isolation itself for the `ihep` backend, even if `conda_path` is accidentally
+configured as the real Conda binary instead of this wrapper.
 It creates a named `script` analysis environment under `conda-envs/script`;
 the global Conda environment list must contain that environment. IHEP tasks declaring
 `environment: script` are run through this Conda environment, never through

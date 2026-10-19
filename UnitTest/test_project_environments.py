@@ -79,6 +79,31 @@ def test_install_uses_prefix_update_and_prune(monkeypatch):
     assert result["path"] == "/work/environments/project-a/analysis"
 
 
+def test_ihep_install_keeps_all_conda_state_off_afs(monkeypatch):
+    """IHEP installation must not write Conda state beneath the AFS home."""
+    ssh = mock.MagicMock()
+    ssh.__enter__.return_value = ssh
+    ssh.__exit__.return_value = False
+    ssh.exec.return_value = ("updated", "", 0)
+    monkeypatch.setattr(project_environments, "_connection", lambda _settings: ssh)
+
+    project_environments.install_project_environment(
+        {"backend_type": "ihep", "remote_workdir": "/cefs/yuki/workflows",
+         "conda_path": "/cefs/yuki/miniconda3/bin/conda"},
+        "project-a", "analysis", "dependencies:\n  - python\n")
+
+    command = ssh.exec.call_args.args[0]
+    state = "/cefs/yuki/workflows/.celebi-conda"
+    assert f"export HOME={state}/home" in command
+    assert f"export CONDA_PKGS_DIRS={state}/pkgs" in command
+    assert f"export CONDA_ENVS_PATH={state}/envs" in command
+    assert f"export XDG_CACHE_HOME={state}/cache" in command
+    assert f"export XDG_CONFIG_HOME={state}/config" in command
+    assert "export CONDA_REGISTER_ENVS=false" in command
+    assert "cd /cefs/yuki/workflows" in command
+    assert "/cefs/yuki/miniconda3/bin/conda env update" in command
+
+
 def test_native_install_uses_prefix_update_and_prune(monkeypatch, tmp_path):
     completed = mock.Mock(returncode=0, stdout="updated\n", stderr="")
     run = mock.Mock(return_value=completed)

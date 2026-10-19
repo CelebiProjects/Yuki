@@ -9,6 +9,7 @@ environment management, command execution, and input/output handling.
 # pylint: disable=cyclic-import
 import logging
 import os
+import re
 import shlex
 import time
 from CelebiChrono.utils import metadata
@@ -25,8 +26,12 @@ _debug = logging.getLogger("Yuki.kernel")
 LB_RUN_EXECUTABLE = (
     "/cvmfs/lhcb.cern.ch/lib/var/lib/LbEnv/stable/linux-64/bin/lb-run"
 )
-LB_RUN_CVMFS_REPOSITORY = "lhcb.cern.ch"
-LB_RUN_CVMFS_PATH = f"/cvmfs/{LB_RUN_CVMFS_REPOSITORY}"
+LHCB_CVMFS_REPOSITORY = "lhcb.cern.ch"
+LHCB_CVMFS_PATH = f"/cvmfs/{LHCB_CVMFS_REPOSITORY}"
+LB_CONDA_EXECUTABLE = (
+    "/cvmfs/lhcb.cern.ch/lib/var/lib/LbEnv/stable/linux-64/bin/lb-conda"
+)
+LB_CONDA_PREFIX = "lb-conda/"
 
 
 class ContainerJob(VJob):
@@ -145,6 +150,7 @@ class ContainerJob(VJob):
             _debug.debug(f"    >>>> >>>> After input substitution time: {time.time() - start_time}")
             command = self._substitute_paths(command)
             _debug.debug(f"    >>>> >>>> After path substitution time: {time.time() - start_time}")
+            command = self._wrap_lb_conda_command(command, command_yaml)
             command = self._wrap_lb_run_command(command, command_yaml)
             command = "{ " + command + " ; } >> " + f"logs/celebi_user_step{i}.log 2>&1"
             processed_commands.append(command.replace("\"", "\\\""))
@@ -172,7 +178,7 @@ class ContainerJob(VJob):
         elif self.environment() == "lhcb_ap_datalist":
             environment = self.lhcb_ap_environment()
         else:
-            environment = self.environment()
+            environment = self._execution_environment()
         compute_backend = self.compute_backend()
 
         step = {
@@ -300,6 +306,7 @@ class ContainerJob(VJob):
             command = self._substitute_parameters(command)
             command = self._substitute_inputs(command)
             command = self._substitute_paths(command)
+            command = self._wrap_lb_conda_command(command, command_yaml)
             command = self._wrap_lb_run_command(command, command_yaml)
             command = "{{ " + command + " ; }} >> " + f"logs/celebi_user_step{i}.log 2>&1"
             processed_commands.append(command.replace("\"", "\\\""))
@@ -378,15 +385,69 @@ class ContainerJob(VJob):
             "bash", "--noprofile", "--norc", "-c", command,
         ))
         invocation = " ".join(shlex.quote(value) for value in argv)
-        repository = shlex.quote(LB_RUN_CVMFS_PATH)
+        repository = shlex.quote(LHCB_CVMFS_PATH)
         executable = shlex.quote(LB_RUN_EXECUTABLE)
         return (
             f"if ! test -d {repository}; then "
             f"echo 'Celebi lb-run error: CVMFS repository "
-            f"{LB_RUN_CVMFS_PATH} is not available' >&2; exit 127; fi; "
+            f"{LHCB_CVMFS_PATH} is not available' >&2; exit 127; fi; "
             f"if ! test -x {executable}; then "
             f"echo 'Celebi lb-run error: executable "
             f"{LB_RUN_EXECUTABLE} is not available' >&2; exit 127; fi; "
+            f"{invocation}"
+        )
+
+    def _lb_conda_spec(self):
+        """Return ``package/date`` for an LbConda environment declaration.
+
+        LbConda is an LbEnv command wrapper, not a Conda environment that
+        Snakemake should resolve or create.
+        """
+        environment = self.environment()
+        if not (environment == "lb-conda" or
+                environment.startswith(LB_CONDA_PREFIX)):
+            return None
+        parts = environment.split("/")
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                "lb-conda environment must use "
+                "'lb-conda/[package]/[date]' format")
+        _prefix, package, date = parts
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", package) is None:
+            raise ValueError(f"invalid lb-conda package: {package}")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) is None:
+            raise ValueError(f"invalid lb-conda date: {date}")
+        return f"{package}/{date}"
+
+    def _execution_environment(self):
+        """Return the backend environment used to host this task."""
+        if self._lb_conda_spec() is not None:
+            return self.default_environment()
+        return self.environment()
+
+    def _wrap_lb_conda_command(self, command, command_yaml):
+        """Run one user command in a dated CVMFS LbConda environment."""
+        environment = self._lb_conda_spec()
+        if environment is None:
+            return command
+        if self._lb_run_spec(command_yaml) is not None:
+            raise ValueError(
+                "lb-conda environment cannot be combined with lb_run")
+        argv = (
+            LB_CONDA_EXECUTABLE,
+            environment,
+            "bash", "--noprofile", "--norc", "-c", command,
+        )
+        invocation = " ".join(shlex.quote(value) for value in argv)
+        repository = shlex.quote(LHCB_CVMFS_PATH)
+        executable = shlex.quote(LB_CONDA_EXECUTABLE)
+        return (
+            f"if ! test -d {repository}; then "
+            f"echo 'Celebi lb-conda error: CVMFS repository "
+            f"{LHCB_CVMFS_PATH} is not available' >&2; exit 127; fi; "
+            f"if ! test -x {executable}; then "
+            f"echo 'Celebi lb-conda error: executable "
+            f"{LB_CONDA_EXECUTABLE} is not available' >&2; exit 127; fi; "
             f"{invocation}"
         )
 
@@ -455,7 +516,7 @@ class ContainerJob(VJob):
         elif self.environment() == "lhcb_ap_datalist":
             environment = self.lhcb_ap_environment()
         else:
-            environment = self.environment()
+            environment = self._execution_environment()
         compute_backend = self.compute_backend()
 
         step = {
@@ -624,9 +685,10 @@ class ContainerJob(VJob):
             raise ValueError("cvmfs must be a list")
         repositories = list(repositories)
         _commands, command_yaml = self._user_commands_and_yaml()
-        if (self._lb_run_spec(command_yaml) is not None
-                and LB_RUN_CVMFS_REPOSITORY not in repositories):
-            repositories.append(LB_RUN_CVMFS_REPOSITORY)
+        if ((self._lb_run_spec(command_yaml) is not None
+             or self._lb_conda_spec() is not None)
+                and LHCB_CVMFS_REPOSITORY not in repositories):
+            repositories.append(LHCB_CVMFS_REPOSITORY)
         return repositories
 
     def parameters(self):

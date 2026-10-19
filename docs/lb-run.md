@@ -51,3 +51,17 @@ LHCb binary tag.
 If a task defines its own `commands`, those commands and any task-level
 `lb_run` declaration replace the linked algorithm's command contract together.
 Outputs still have to be written below `stageout/`.
+
+## LbConda environments
+
+`lb-run` is separate from LbConda. To run user commands in one of LHCb's
+dated Conda environments, set the task environment instead:
+
+```yaml
+environment: lb-conda/default/2020-05-14
+```
+
+The supported form is `lb-conda/[package]/[date]`. Yuki mounts
+`lhcb.cern.ch`, keeps its normal backend base environment, and invokes each
+user command with `lb-conda package/date`. An `lb-conda/...` environment and
+an `lb_run` declaration cannot be combined on the same task.

@@ -1,6 +1,8 @@
 """Tests for ContainerJob output discovery and command resolution."""
 from unittest import mock
 
+import pytest
+
 from CelebiChrono.utils import metadata
 from Yuki.kernel.jobs.container import ContainerJob
 
@@ -201,3 +203,62 @@ def test_lb_run_rejects_incomplete_configuration(tmp_path, monkeypatch):
         assert str(exc) == "lb_run.version is required"
     else:
         raise AssertionError("invalid lb_run declaration was accepted")
+
+
+def test_lb_conda_environment_wraps_user_commands(tmp_path, monkeypatch):
+    """A dated LbConda environment wraps commands independently of lb-run."""
+    c = _make_container_with_yaml(
+        tmp_path, {"environment": "lb-conda/default/2020-05-14"})
+    img = _algorithm_with_commands(
+        tmp_path, ['python code/analysis.py --label "signal sample"'])
+    monkeypatch.setattr(c, "image", lambda: img)
+
+    for processed in (c._process_user_commands_for_reana(),
+                      c._process_user_commands()):
+        command = processed[0]
+        assert "lb-conda" in command
+        assert "default/2020-05-14 bash --noprofile --norc -c" in command
+        assert "python code/analysis.py" in command
+        assert "lb-run" not in command
+
+
+def test_lb_conda_uses_base_backend_environment_and_lhcb_cvmfs(
+        tmp_path, monkeypatch):
+    """Backends host lb-conda in a base image and mount its CVMFS repository."""
+    c = _make_container_with_yaml(
+        tmp_path, {"environment": "lb-conda/default/2020-05-14"})
+    monkeypatch.setattr(c, "image", lambda: None)
+    monkeypatch.setattr(c, "use_kerberos", lambda _backend=None: False)
+
+    assert c._create_step_metadata()["environment"] == c.default_environment()
+    reana_metadata = c._create_reana_step_metadata()
+    assert reana_metadata["environment"] == c.default_environment()
+    assert c.cvmfs() == ["lhcb.cern.ch"]
+
+
+@pytest.mark.parametrize("environment", [
+    "lb-conda",
+    "lb-conda/default",
+    "lb-conda/default/20200514",
+    "lb-conda/default/2020-05-14/extra",
+])
+def test_lb_conda_rejects_invalid_environment_format(
+        tmp_path, monkeypatch, environment):
+    """Malformed LbConda selectors fail during workflow construction."""
+    c = _make_container_with_yaml(tmp_path, {"environment": environment})
+    monkeypatch.setattr(c, "image", lambda: None)
+
+    with pytest.raises(ValueError, match="lb-conda"):
+        c._create_step_metadata()
+
+
+def test_lb_conda_cannot_be_combined_with_lb_run(tmp_path, monkeypatch):
+    """LbConda and lb-run remain mutually independent execution modes."""
+    c = _make_container_with_yaml(
+        tmp_path, {"environment": "lb-conda/default/2020-05-14"})
+    img = _algorithm_with_commands(
+        tmp_path, ["true"], {"project": "Moore", "version": "v55r12"})
+    monkeypatch.setattr(c, "image", lambda: img)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        c._process_user_commands()

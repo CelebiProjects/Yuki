@@ -4,6 +4,7 @@ Helpers that build shell commands executed ON an ssh runner, plus the
 local Yuki-side storage paths for registration job state.
 """
 import datetime
+import hashlib
 import json
 import os
 import posixpath
@@ -72,6 +73,78 @@ else:
 '''
 
 
+XROOTD_MANIFEST_SCRIPT = r'''
+import json, os, subprocess, sys
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit
+
+root_url, checksum_policy = sys.argv[1], sys.argv[2]
+progress_path = sys.argv[3] if len(sys.argv) > 3 else ""
+parsed = urlsplit(root_url)
+if parsed.scheme not in ("root", "xroot") or not parsed.netloc:
+    raise ValueError("invalid XRootD URL")
+endpoint = f"{parsed.scheme}://{parsed.netloc}"
+root_path = parsed.path or "/"
+
+def run(*args, required=True):
+    proc = subprocess.run(args, text=True, capture_output=True, check=False)
+    if required and proc.returncode:
+        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip()
+                           or f"command failed: {args!r}")
+    return proc
+
+def remote_path(value):
+    candidate = urlsplit(value.strip())
+    return candidate.path if candidate.scheme else value.strip()
+
+listing = run("xrdfs", endpoint, "ls", "-R", "-u", root_path).stdout
+candidates = sorted({line.strip() for line in listing.splitlines() if line.strip()})
+records = []
+total = len(candidates)
+
+def inspect(candidate):
+    path = remote_path(candidate)
+    stat = run("xrdfs", endpoint, "stat", path)
+    fields = {}
+    for line in stat.stdout.splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            fields[key.strip().lower()] = value.strip()
+    if "IsDir" in fields.get("flags", ""):
+        return None
+    url = candidate if urlsplit(candidate).scheme else endpoint + path
+    record = {"url": url, "size": int(fields.get("size", "0"))}
+    if checksum_policy != "none":
+        checksum = run("xrdfs", endpoint, "query", "checksum", path,
+                       required=False)
+        if checksum.returncode == 0 and checksum.stdout.strip():
+            parts = checksum.stdout.strip().split()
+            if len(parts) >= 2:
+                record["checksum"] = {
+                    "algorithm": parts[-2], "value": parts[-1]}
+        elif checksum_policy == "required":
+            raise RuntimeError(
+                f"checksum unavailable for {url}: "
+                f"{checksum.stderr.strip() or checksum.stdout.strip()}")
+    return record
+
+workers = min(8, max(1, total))
+with ThreadPoolExecutor(max_workers=workers) as pool:
+    for index, record in enumerate(pool.map(inspect, candidates), 1):
+        if record is not None:
+            records.append(record)
+        if progress_path:
+            os.makedirs(os.path.dirname(progress_path), exist_ok=True)
+            temporary = progress_path + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as stream:
+                json.dump({"stage": "checksumming", "files_done": index,
+                           "files_total": total}, stream)
+            os.replace(temporary, progress_path)
+
+print(json.dumps(records, sort_keys=True, separators=(",", ":")))
+'''
+
+
 def _yuki_dir():
     """Yuki data root ($YUKIDIR or ~/.Yuki)."""
     return os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki"))
@@ -87,6 +160,14 @@ def remote_md5_command(remote_path, progress_path=None):
     if progress_path:
         args.append(progress_path)
     return "python3 -c " + " ".join(shlex.quote(a) for a in args)
+
+
+def xrootd_manifest_command(root_url, checksum_policy, progress_path=None):
+    """Build the command that inventories an XRootD URL on an SSH runner."""
+    args = [XROOTD_MANIFEST_SCRIPT, root_url, checksum_policy]
+    if progress_path:
+        args.append(progress_path)
+    return "python3 -c " + " ".join(shlex.quote(arg) for arg in args)
 
 
 def build_remote_fast_copy_command(src, dst, progress_path=None):
@@ -661,6 +742,91 @@ def set_impression_status(project_uuid, impression_uuid, status):
     status_file = metadata.ConfigFile(os.path.join(
         _yuki_dir(), "Storage", project_uuid, impression_uuid, "status.json"))
     status_file.write_variable("status", status)
+
+
+def register_xrootd_data_job(job_id, runner_id, root_url, project_uuid,
+                             descriptor, checksum_policy, update):
+    """Inventory XRootD files on a runner and create a frozen datalist."""
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-locals
+    from CelebiChrono.kernel.vimpression import VImpression
+    from CelebiChrono.kernel.vtask import create_xrootd_data_list_task
+    from CelebiChrono.utils import metadata
+    from Yuki.cli.yuki_create_data import build_impression_config
+
+    progress_path = progress_file_path(runner_id, job_id)
+    update({"status": "listing", "result": None, "error": None})
+    try:
+        with _ssh_connection(runner_id) as ssh:
+            output, error, code = ssh.exec(
+                xrootd_manifest_command(
+                    root_url, checksum_policy, progress_path), timeout=10800)
+        if code != 0:
+            raise RuntimeError(f"XRootD inventory failed: {error or output}")
+        try:
+            records = json.loads(output)
+        except ValueError as exc:
+            raise RuntimeError("XRootD inventory returned invalid JSON") from exc
+        if not isinstance(records, list):
+            raise RuntimeError("XRootD inventory did not return a file list")
+        records.sort(key=lambda item: item.get("url", ""))
+        if not records:
+            raise RuntimeError(f"XRootD URL contains no files: {root_url}")
+
+        canonical = json.dumps(
+            records, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        digest = hashlib.sha256(canonical).hexdigest()
+        source = {
+            "type": "xrootd", "url": root_url,
+            "runner": _runner_name(runner_id),
+        }
+        manifest = {
+            "digest": f"sha256:{digest}",
+            "checksum_policy": checksum_policy,
+            "file_count": len(records),
+            "total_size": sum(int(item.get("size", 0)) for item in records),
+            "files": records,
+        }
+        files = [item["url"] for item in records]
+
+        with tempfile.TemporaryDirectory(prefix="yuki_xrootd_") as temp_root:
+            metadata.ConfigFile(os.path.join(
+                temp_root, ".celebi", "config.json")).write_variable(
+                    "object_type", "project")
+            temp_dir = os.path.join(temp_root, "sample")
+            create_xrootd_data_list_task(
+                temp_dir, descriptor, source, files, manifest)
+            impression_uuid = VImpression.__new__(VImpression).generate_imp_uuid(
+                project_uuid, temp_dir, [])
+            impression_dir = os.path.join(
+                _yuki_dir(), "Storage", project_uuid, impression_uuid)
+            contents_dir = os.path.join(impression_dir, "contents")
+            os.makedirs(impression_dir, exist_ok=True)
+            if os.path.exists(contents_dir):
+                shutil.rmtree(contents_dir)
+            shutil.copytree(temp_dir, contents_dir)
+            impression_config = build_impression_config(
+                project_uuid, impression_uuid, temp_dir)
+
+        config_file = metadata.ConfigFile(
+            os.path.join(impression_dir, "config.json"))
+        for key, value in impression_config.items():
+            config_file.write_variable(key, value)
+        set_impression_status(project_uuid, impression_uuid, "pending")
+
+        result = {
+            "uuid": digest,
+            "impression_uuid": impression_uuid,
+            "descriptor": descriptor,
+            "file_count": len(records),
+            "files": files,
+            "source": source,
+            "manifest": manifest,
+        }
+        update({"status": "done", "result": result, "error": None})
+        return result
+    finally:
+        remove_remote_progress_file(runner_id, job_id)
 
 
 def register_remote_data_job(job_id, runner_id, remote_path, project_uuid,  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments

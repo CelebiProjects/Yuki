@@ -11,7 +11,9 @@ from ...kernel.storage import remote as remote_data_ops
 from ...kernel.runners import config as runner_config
 from ...kernel.execution.progress import progress_cache
 from ..config import config
-from ..tasks import task_cache_results, task_register_remote_data
+from ..tasks import (
+    task_cache_results, task_register_remote_data, task_register_xrootd_data,
+)
 
 bp = Blueprint('remote_data', __name__)
 
@@ -110,6 +112,83 @@ def register_remote_data_impression_status(impression_uuid):
         return jsonify({"error": "no registration job for impression"}), 404
     job_id, state = found
     return jsonify(_state_with_progress(state, job_id))
+
+
+@bp.route("/register-xrootd-data", methods=['POST'])
+def register_xrootd_data():  # pylint: disable=too-many-return-statements
+    """Start an XRootD manifest registration on an SSH runner."""
+    data = request.get_json(silent=True) or request.form
+    runner = data.get("runner", "")
+    root_url = data.get("root_url", "")
+    project_uuid = data.get("project_uuid", "")
+    checksum_policy = data.get("checksum", "auto")
+    if not (runner and root_url and project_uuid):
+        return jsonify({
+            "error": "missing required field: runner/root_url/project_uuid"
+        }), 400
+    if not root_url.startswith(("root://", "xroot://")):
+        return jsonify({"error": "root_url must use root:// or xroot://"}), 400
+    if checksum_policy not in ("auto", "required", "none"):
+        return jsonify({
+            "error": "checksum must be one of: auto, required, none"
+        }), 400
+
+    config_file = config.get_config_file()
+    runners_id = config_file.read_variable("runners_id", {})
+    if runner not in runners_id:
+        return jsonify({"error": f"Runner '{runner}' not found"}), 404
+    runner_id = runners_id[runner]
+    backend_types = config_file.read_variable("backend_types", {})
+    if not runner_config.is_ssh_backend(
+            backend_types.get(runner_id, "reana")):
+        return jsonify({
+            "error": "register-xrootd-data requires an ssh runner"
+        }), 400
+
+    descriptor = data.get("descriptor") or os.path.basename(
+        root_url.rstrip("/")) or "xrootd-data"
+    job_id = csys.generate_uuid()
+    yuki_dir = remote_data_ops._yuki_dir()  # pylint: disable=protected-access
+    remote_data_ops.write_job_state(yuki_dir, job_id, {
+        "status": "listing", "result": None, "error": None,
+        "runner_id": runner_id, "root_url": root_url,
+        "project_uuid": project_uuid, "descriptor": descriptor,
+        "checksum": checksum_policy,
+    }, jobs_dir_name="xrootd-register-jobs")
+    try:
+        task_register_xrootd_data.apply_async(args=[
+            job_id, runner_id, root_url, project_uuid, descriptor,
+            checksum_policy,
+        ])
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        remote_data_ops.write_job_state(yuki_dir, job_id, {
+            "status": "failed", "result": None,
+            "error": str(exc) or type(exc).__name__,
+            "runner_id": runner_id, "root_url": root_url,
+        }, jobs_dir_name="xrootd-register-jobs")
+        return jsonify({"job_id": job_id, "error": str(exc)}), 500
+    return jsonify({"job_id": job_id})
+
+
+@bp.route("/register-xrootd-data/<job_id>", methods=['GET'])
+def register_xrootd_data_status(job_id):
+    """Poll an XRootD registration and include live runner progress."""
+    yuki_dir = remote_data_ops._yuki_dir()  # pylint: disable=protected-access
+    state = remote_data_ops.read_job_state(
+        yuki_dir, job_id, jobs_dir_name="xrootd-register-jobs")
+    if state is None:
+        return jsonify({"error": "job not found"}), 404
+    if state.get("status") in ("listing", "checksumming"):
+        progress = remote_data_ops.read_remote_progress(
+            state.get("runner_id", ""), job_id)
+        latest = remote_data_ops.read_job_state(
+            yuki_dir, job_id, jobs_dir_name="xrootd-register-jobs") or state
+        if latest.get("status") == "done":
+            return jsonify(latest)
+        if isinstance(progress, dict):
+            latest = dict(latest, progress=progress)
+        state = latest
+    return jsonify(state)
 
 
 @bp.route("/purge-runner-cache", methods=['POST'])

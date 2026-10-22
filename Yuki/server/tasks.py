@@ -270,6 +270,29 @@ def task_register_remote_data(job_id, runner_id, remote_path, project_uuid,
         remote_data_ops.remove_remote_progress_file(runner_id, job_id)
 
 
+@celeryapp.task
+def task_register_xrootd_data(job_id, runner_id, root_url, project_uuid,
+                              descriptor, checksum_policy):
+    """Freeze an XRootD inventory into a reproducible datalist impression."""
+    yuki_dir = remote_data_ops._yuki_dir()  # pylint: disable=protected-access
+
+    def update(state):
+        current = remote_data_ops.read_job_state(
+            yuki_dir, job_id, jobs_dir_name="xrootd-register-jobs") or {}
+        current.update(state)
+        remote_data_ops.write_job_state(
+            yuki_dir, job_id, current,
+            jobs_dir_name="xrootd-register-jobs")
+
+    try:
+        remote_data_ops.register_xrootd_data_job(
+            job_id, runner_id, root_url, project_uuid, descriptor,
+            checksum_policy, update)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        update({"status": "failed", "result": None,
+                "error": str(exc) or type(exc).__name__})
+
+
 @celeryapp.task(bind=True, max_retries=None, acks_late=True,
                 reject_on_worker_lost=True)
 def task_copy_remote_data(self, job_id, impression_uuid, project_uuid, runner_id,  # pylint: disable=too-many-arguments,too-many-positional-arguments

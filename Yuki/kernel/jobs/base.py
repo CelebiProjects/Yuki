@@ -173,7 +173,9 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
 
     def set_cache_on_runner(self, use: bool):
         """Set whether the job's outputs should be cached on the runner."""
-        self.run_config_file.write_variable("cache_on_runner", use)
+        self._cache_on_runner = bool(use)
+        self.run_config_file.write_variable("cache_on_runner",
+                                            self._cache_on_runner)
 
     def cache_on_runner(self):
         """Check if the job is set to cache outputs on the runner."""

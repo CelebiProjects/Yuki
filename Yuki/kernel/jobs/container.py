@@ -625,10 +625,28 @@ class ContainerJob(VJob):
         if cache_path:
             if backend_type in ("ssh", "ihep"):
                 # The cache lives on the same runner as the workflow, so
-                # link each entry into stageout instead of copying. The
-                # cached data was made read-only when written.
-                commands.append(f"ln -s {cache_path}* "
-                                f"imp{self.short_uuid()}/stageout/")
+                # link each verified entry into stageout instead of copying.
+                # Validate again inside the setup rule so deletion after the
+                # submission preflight cannot create a literal '*' symlink.
+                cache_path = cache_path.rstrip("/")
+                cache = shlex.quote(cache_path)
+                complete = shlex.quote(os.path.join(
+                    cache_path, CACHE_COMPLETE_MARKER))
+                in_progress = shlex.quote(os.path.join(
+                    cache_path, CACHE_IN_PROGRESS_MARKER))
+                destination = shlex.quote(
+                    f"imp{self.short_uuid()}/stageout/")
+                payload_probe = (
+                    f"find {cache} -mindepth 1 -maxdepth 1 "
+                    "! -name '.yuki-cache-*' -print -quit")
+                commands.append(
+                    f"test -d {cache} && test ! -e {in_progress} && "
+                    f"(test -f {complete} || "
+                    f"test -n \"$({payload_probe})\")")
+                commands.append(
+                    f"find {cache} -mindepth 1 -maxdepth 1 "
+                    f"! -name '.yuki-cache-*' -exec ln -s {{}} "
+                    f"{destination} \\;")
             else:
                 commands.append(f"cp -r {cache_path}* "
                                 f"imp{self.short_uuid()}/stageout/")
@@ -736,17 +754,18 @@ class ContainerJob(VJob):
         datalist_repr = repr(datalist)
 
         script_content = f'''#!/usr/bin/env python3
-"""Generate dataList.txt from embedded datalist entries."""
+"""Generate compatible file-list names from embedded datalist entries."""
 
 # Embedded datalist from celebi.yaml
 DATALIST = {datalist_repr}
 
-# Write dataList.txt
-with open('stageout/dataList.txt', 'w') as f:
-    for path in DATALIST:
-        f.write(path + '\\n')
+# Keep dataList.txt for existing analyses and expose the new canonical name.
+payload = "".join(path + "\\n" for path in DATALIST)
+for filename in ("stageout/filelist.txt", "stageout/dataList.txt"):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(payload)
 
-print(f"Generated dataList.txt with {{len(DATALIST)}} entries")
+print(f"Generated filelist.txt with {{len(DATALIST)}} entries")
 '''
         # Write script to contents directory
         script_path = os.path.join(self.path, "contents", "generate_datalist.py")

@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -197,6 +198,8 @@ def test_fast_copy_command_progress_reads_total_from_progress_file():
     assert "'/prog file.json'" in cmd
 
 
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="SSH runners are supported only on Linux")
 def test_fast_copy_command_progress_runs_end_to_end(tmp_path):
     """The full copy command parses, copies, and removes the progress file."""
     src = tmp_path / "src"
@@ -221,6 +224,8 @@ def test_fast_copy_command_progress_runs_end_to_end(tmp_path):
         assert not os.access(dst / "sub" / "b.txt", os.W_OK)
 
 
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="SSH runners are supported only on Linux")
 def test_fast_copy_command_empty_src_succeeds(tmp_path):
     """An empty source dir still completes (the ro step tolerates it)."""
     src = tmp_path / "src"

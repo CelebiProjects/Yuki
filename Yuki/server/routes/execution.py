@@ -61,6 +61,7 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
         cache_dict = request.form["cache_on_runner"]
         cache_dict = json.loads(cache_dict)
         contents = request.files["impressions"].read().decode()
+        impressions = list(dict.fromkeys(contents.split()))
         start_jobs = []
         requested_jobs = []
         previous_workflows = {}
@@ -68,9 +69,9 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
         refresh_error = ""
         _debug.debug("cache_on_runner: %s", cache_dict)
         _debug.debug("machine: %s", machine)
-        _debug.debug("contents: %s", contents.split(" "))
+        _debug.debug("contents: %s", impressions)
 
-        for impression in contents.split(" "):
+        for impression in impressions:
             _debug.debug("--------------")
             _debug.debug("impression: %s", impression)
             job_path = config.get_job_path(project_uuid, impression)
@@ -198,10 +199,11 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
             _debug.debug("# <<< execute")
             return "no job to run"
 
-        contents = " ".join([job.uuid for job in start_jobs])
+        start_impressions = list(dict.fromkeys(job.uuid for job in start_jobs))
+        contents = " ".join(start_impressions)
 
         submission, accepted = SubmissionStore.create(
-            project_uuid, contents.split(" "), machine)
+            project_uuid, start_impressions, machine)
         if previous_workflows or status_refreshed:
             accepted = submission.update(
                 submission_reason=("replacement" if previous_workflows
@@ -210,7 +212,7 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
                 status_refreshed=status_refreshed,
                 refresh_error=refresh_error)
         try:
-            for impression in contents.split(" "):
+            for impression in start_impressions:
                 job_path = config.get_job_path(project_uuid, impression)
                 VJob(job_path, machine).set_submission_id(
                     submission.submission_id)
@@ -231,7 +233,7 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
         accepted = submission.update(celery_task_id=task.id)
 
         _debug.debug("Contents is: %s", contents)
-        for impression in contents.split(" "):
+        for impression in start_impressions:
             job_path = config.get_job_path(project_uuid, impression)
             _debug.debug("Project_uuid is: %s", project_uuid)
             _debug.debug("Job path is: %s", job_path)

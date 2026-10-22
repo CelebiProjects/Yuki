@@ -39,6 +39,32 @@ def test_execute_dispatches_timeout(timeout, tmp_path, monkeypatch):
         args=['proj', 'imp', 'runner'], kwargs=task_kwargs)
 
 
+def test_execute_deduplicates_impressions_before_job_loading(
+        tmp_path, monkeypatch):
+    """Repeated client IDs create and dispatch only one Yuki job."""
+    monkeypatch.setenv('YUKIDIR', str(tmp_path))
+    app = Flask(__name__)
+    app.register_blueprint(execution.bp)
+    data = {'machine': 'runner', 'project_uuid': 'proj',
+            'cache_on_runner': '{}',
+            'impressions': (io.BytesIO(b'imp imp  imp'), 'impressions')}
+    with patch.object(execution, 'VJob') as job, \
+         patch.object(execution, 'task_exec_impression') as task:
+        job.return_value.job_type.return_value = 'task'
+        job.return_value.status.return_value = SILENCE
+        job.return_value.uuid = 'imp'
+        task.apply_async.return_value.id = 'task-id'
+
+        response = app.test_client().post('/execute', data=data)
+
+    assert response.status_code == 202
+    assert job.call_count == 3  # load, submission ID, and run ID
+    task.apply_async.assert_called_once()
+    assert task.apply_async.call_args.args == ()
+    assert task.apply_async.call_args.kwargs['args'] == [
+        'proj', 'imp', 'runner']
+
+
 def test_execute_returns_existing_active_workflow(tmp_path, monkeypatch):
     """A known duplicate is resolved synchronously instead of silently skipped."""
     monkeypatch.setenv('YUKIDIR', str(tmp_path))

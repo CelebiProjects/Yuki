@@ -48,6 +48,48 @@ def test_identical_claim_returns_existing_workflow(tmp_path, monkeypatch):
         "project", "runner", "wf-1", first.token, ["job-a", "job-b"])
 
 
+def test_job_set_is_stored_once_per_workflow(tmp_path, monkeypatch):
+    """Per-job indexes stay O(N); the complete set belongs to the workflow."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    jobs = [f"job-{index:04d}" for index in range(1000)]
+
+    claim = execution_lease.claim_many(
+        "project", "runner", "wf-large", jobs)
+
+    registry_path = tmp_path / "ExecutionLeases/project/leases.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["workflows"]["wf-large"] == {
+        "token": claim.token,
+        "machine_id": "runner",
+        "job_set": jobs,
+    }
+    assert len(registry["leases"]) == 1000
+    assert all("job_set" not in entry
+               for entry in registry["leases"].values())
+
+
+def test_legacy_inline_job_set_still_deduplicates(tmp_path, monkeypatch):
+    """Active leases written by an older Yuki retain duplicate protection."""
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    lease_dir = tmp_path / "ExecutionLeases/project"
+    lease_dir.mkdir(parents=True)
+    old_entry = {
+        "workflow_id": "wf-old",
+        "token": "old-token",
+        "machine_id": "runner",
+        "job_set": ["job-a", "job-b"],
+    }
+    (lease_dir / "leases.json").write_text(json.dumps({
+        "leases": {"job-a": old_entry, "job-b": old_entry},
+    }), encoding="utf-8")
+
+    with pytest.raises(execution_lease.WorkflowAlreadyActive) as error:
+        execution_lease.claim_many(
+            "project", "runner", "wf-new", ["job-a", "job-b"])
+
+    assert error.value.workflow_id == "wf-old"
+
+
 def test_partial_overlap_claims_nothing(tmp_path, monkeypatch):
     """A conflicting batch is rejected atomically."""
     monkeypatch.setenv("YUKIDIR", str(tmp_path))

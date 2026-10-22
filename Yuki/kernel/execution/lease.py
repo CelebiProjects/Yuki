@@ -74,9 +74,11 @@ def _registry(project_uuid, machine_id, yuki_dir=None):
                 with open(registry_path, encoding="utf-8") as source:
                     registry = json.load(source)
             except (FileNotFoundError, json.JSONDecodeError, TypeError):
-                registry = {"leases": {}}
+                registry = {"leases": {}, "workflows": {}}
             if not isinstance(registry.get("leases"), dict):
                 registry["leases"] = {}
+            if not isinstance(registry.get("workflows"), dict):
+                registry["workflows"] = {}
             yield registry, registry_path
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
@@ -136,6 +138,15 @@ def active_owners(project_uuid, machine_id, jobs, yuki_dir=None):
         }
 
 
+def _job_set(registry, entry):
+    """Resolve a lease's shared job set, including the legacy inline format."""
+    workflow = registry["workflows"].get(entry.get("workflow_id"), {})
+    if (workflow.get("token") == entry.get("token")
+            and workflow.get("machine_id") == entry.get("machine_id")):
+        return tuple(workflow.get("job_set", []))
+    return tuple(entry.get("job_set", []))
+
+
 def claim_many(project_uuid, machine_id, workflow_id, jobs, yuki_dir=None):  # pylint: disable=too-many-locals
     """Atomically claim all jobs or raise without claiming any of them."""
     requested = tuple(sorted(set(jobs)))
@@ -156,9 +167,8 @@ def claim_many(project_uuid, machine_id, workflow_id, jobs, yuki_dir=None):  # p
             if (len(conflicts) == len(requested) and len(owners) == 1
                     and owner_runners == {machine_id}):
                 owner = next(iter(owners))
-                owner_sets = {tuple(entry.get("job_set", []))
-                              for entry in conflicts.values()}
-                if owner_sets == {requested}:
+                owner_entry = next(iter(conflicts.values()))
+                if _job_set(registry, owner_entry) == requested:
                     raise WorkflowAlreadyActive(owner, conflicts)
             raise WorkflowLeaseConflict(conflicts)
 
@@ -167,10 +177,14 @@ def claim_many(project_uuid, machine_id, workflow_id, jobs, yuki_dir=None):  # p
             "workflow_id": workflow_id,
             "token": token,
             "machine_id": machine_id,
-            "job_set": list(requested),
         }
         for job in requested:
             leases[job] = dict(entry)
+        registry["workflows"][workflow_id] = {
+            "token": token,
+            "machine_id": machine_id,
+            "job_set": list(requested),
+        }
         _write_registry(path, registry)
         return LeaseClaim(token, requested)
 

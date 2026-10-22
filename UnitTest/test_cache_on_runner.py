@@ -2,10 +2,12 @@
 # pylint: disable=protected-access
 import json
 import os
+import subprocess
 from unittest import mock
 
 from CelebiChrono.utils.metadata import ConfigFile
 from Yuki.kernel.jobs.container import ContainerJob
+from Yuki.kernel.workflows.base import VWorkflow
 
 
 def _job(machine_id="m1", is_input=False, cache=True):
@@ -153,6 +155,34 @@ def test_cache_commands_input_job_noop(monkeypatch, tmp_path):
     assert not job._cache_commands("m1", "ssh")
 
 
+def test_yuki_enables_cache_for_complete_ssh_execution_dag():
+    """SSH cache policy covers transitive jobs absent from client hints."""
+    workflow = mock.Mock()
+    workflow.backend_type.return_value = "ssh"
+    workflow.cache_on_runner_requests = {"root": False}
+    root = mock.Mock(uuid="root")
+    dependency = mock.Mock(uuid="dependency")
+
+    VWorkflow._apply_cache_policy(workflow, [dependency, root])
+
+    dependency.set_cache_on_runner.assert_called_once_with(True)
+    root.set_cache_on_runner.assert_called_once_with(True)
+
+
+def test_non_ssh_cache_policy_keeps_explicit_client_requests():
+    """REANA and native policy remain opt-in and submission-scoped."""
+    workflow = mock.Mock()
+    workflow.backend_type.return_value = "reana"
+    workflow.cache_on_runner_requests = {"root": True}
+    root = mock.Mock(uuid="root")
+    dependency = mock.Mock(uuid="dependency")
+
+    VWorkflow._apply_cache_policy(workflow, [dependency, root])
+
+    dependency.set_cache_on_runner.assert_not_called()
+    root.set_cache_on_runner.assert_called_once_with(True)
+
+
 def test_setup_commands_ssh_fetches_from_impressions(monkeypatch, tmp_path):
     """SSH setup commands link cached data from the remote impressions dir
     into stageout instead of copying."""
@@ -160,10 +190,44 @@ def test_setup_commands_ssh_fetches_from_impressions(monkeypatch, tmp_path):
     _ssh_settings(tmp_path)
     job = _job()
     commands = job.setup_commands("ssh")
-    assert commands == [
-        "mkdir -p impabc1234/stageout",
-        "ln -s /remote/work/impressions/proj/imp123456/* impabc1234/stageout/",
-    ]
+    assert commands[0] == "mkdir -p impabc1234/stageout"
+    assert len(commands) == 3
+    assert "test -d /remote/work/impressions/proj/imp123456" in commands[1]
+    assert ".yuki-cache-complete" in commands[1]
+    assert ".yuki-cache-in-progress" in commands[1]
+    assert "find /remote/work/impressions/proj/imp123456" in commands[2]
+    assert "! -name '.yuki-cache-*'" in commands[2]
+    assert "-exec ln -s {} impabc1234/stageout/ \\;" in commands[2]
+
+
+def test_setup_commands_ssh_validate_and_link_only_payload(monkeypatch,
+                                                           tmp_path):
+    """Setup rejects missing state and excludes Yuki cache markers."""
+    remote = tmp_path / "remote"
+    monkeypatch.setenv("YUKIDIR", str(tmp_path))
+    _ssh_settings(tmp_path, str(remote))
+    job = _job()
+    commands = job.setup_commands("ssh")
+    workflow = tmp_path / "workflow"
+    workflow.mkdir()
+
+    missing = subprocess.run(
+        ["bash", "-c", " && ".join(commands)], cwd=workflow,
+        capture_output=True, text=True, check=False)
+    assert missing.returncode != 0
+
+    cache = remote / "impressions" / "proj" / "imp123456"
+    cache.mkdir(parents=True)
+    (cache / "result.txt").write_text("result", encoding="utf-8")
+    (cache / ".yuki-cache-complete").touch()
+    linked = subprocess.run(
+        ["bash", "-c", " && ".join(commands)], cwd=workflow,
+        capture_output=True, text=True, check=False)
+
+    assert linked.returncode == 0, linked.stderr
+    stageout = workflow / "impabc1234" / "stageout"
+    assert (stageout / "result.txt").is_symlink()
+    assert not (stageout / ".yuki-cache-complete").exists()
 
 
 def test_setup_commands_native_no_cache_source(monkeypatch, tmp_path):

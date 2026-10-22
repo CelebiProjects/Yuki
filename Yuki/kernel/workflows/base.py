@@ -218,6 +218,22 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         return not isinstance(current, str) or not current \
             or current == self.uuid
 
+    def _apply_cache_policy(self, active_jobs):
+        """Resolve submission hints into the cache policy owned by Yuki.
+
+        Every task produced by an SSH workflow can become an external input
+        of a later workflow.  Cache the complete execution DAG on SSH-backed
+        runners, including transitive jobs that were not named by the client.
+        Other backends retain the explicit per-submission policy.
+        """
+        requests = getattr(self, "cache_on_runner_requests", None)
+        backend_type = self.backend_type()
+        for job in active_jobs:
+            if backend_type in ("ssh", "ihep"):
+                job.set_cache_on_runner(True)
+            elif requests is not None and job.uuid in requests:
+                job.set_cache_on_runner(bool(requests[job.uuid]))
+
     def _set_owned_job_status(self, job, status, detail=None):
         """Write status only while this workflow still owns the job."""
         if not self._owns_job(job):
@@ -328,11 +344,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
 
         # Submission-scoped settings must not mutate shared job configuration
         # until this workflow owns the complete execution set.
-        cache_requests = getattr(self, "cache_on_runner_requests", None)
-        if cache_requests is not None:
-            for job in active_jobs:
-                if job.uuid in cache_requests:
-                    job.set_cache_on_runner(bool(cache_requests[job.uuid]))
+        self._apply_cache_policy(active_jobs)
 
         # Publish the current-workflow index only after the entire job set has
         # been claimed atomically. A losing submission never overwrites it.

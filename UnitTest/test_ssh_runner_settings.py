@@ -413,6 +413,86 @@ def test_input_cache_miss_writes_through(tmp_path, monkeypatch):
     assert not copy_cmd, f"staging must not copy into imp dirs: {execs}"
 
 
+def test_input_cache_miss_restores_same_runner_producer(tmp_path, monkeypatch):
+    """A remote producer workspace fills a missing managed cache."""
+    yuki_dir = tmp_path / ".Yuki"
+    (yuki_dir / "Storage" / "proj-123").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_job = _input_job_stub(
+        yuki_dir / "Storage" / "proj-123" / "imp-abc", env="analysis")
+    fake_job.workflow_id.return_value = "upstream-wf"
+    wf = _wf_with_input(tmp_path, monkeypatch, fake_job)
+    commands = []
+    copied = False
+
+    class FakeSsh:
+        """SSH shim exposing an upstream workspace and no initial cache."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def exists(self, path):
+            return path.endswith("/upstream-wf/impabc1234/stageout")
+
+        def exec(self, command, timeout=None):  # pylint: disable=unused-argument
+            nonlocal copied
+            commands.append(command)
+            if command.startswith("test -d"):
+                return "", "", 0 if copied else 1
+            if "upstream-wf/impabc1234/stageout" in command:
+                copied = True
+            return "", "", 0
+
+        def put(self, source, destination):
+            commands.append(f"put:{source}->{destination}")
+
+    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()):
+        wf._upload_files_remote()
+
+    copy = next(command for command in commands
+                if "upstream-wf/impabc1234/stageout" in command)
+    assert "/remote/work/impressions/proj-123/imp-abc" in copy
+    assert not any(command.startswith("put:") and "stageout" in command
+                   for command in commands)
+
+
+def test_input_cache_miss_without_any_source_fails_before_launch(
+        tmp_path, monkeypatch):
+    """A missing cache cannot be deferred to a downstream user command."""
+    yuki_dir = tmp_path / ".Yuki"
+    (yuki_dir / "Storage" / "proj-123").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fake_job = _input_job_stub(
+        yuki_dir / "Storage" / "proj-123" / "imp-abc", env="analysis")
+    fake_job.workflow_id.return_value = "missing-wf"
+    wf = _wf_with_input(tmp_path, monkeypatch, fake_job)
+
+    class FakeSsh:
+        """SSH shim with neither a cache nor a producer workspace."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def exists(self, path):  # pylint: disable=unused-argument
+            return False
+
+        def exec(self, command, timeout=None):  # pylint: disable=unused-argument
+            return "", "", 1
+
+        def put(self, source, destination):  # pylint: disable=unused-argument
+            raise AssertionError("Snakefile must not be uploaded")
+
+    with mock.patch.object(SshWorkflow, "_ssh", return_value=FakeSsh()):
+        with pytest.raises(RuntimeError, match="no collected stageout"):
+            wf._upload_files_remote()
+
+
 def test_remote_hosted_staging_does_not_shadow_outer_connection(tmp_path, monkeypatch):
     """The snakefile put after the job loop must use the OPEN outer connection.
 
@@ -477,7 +557,7 @@ def test_remote_hosted_staging_does_not_shadow_outer_connection(tmp_path, monkey
         def exec(self, command, timeout=None):
             assert not self.closed, "exec on a closed connection"
             if command.startswith("test -d"):
-                return "", "", 1
+                    return "", "", 0
             return "", "", 0
 
         def put(self, src, dst):

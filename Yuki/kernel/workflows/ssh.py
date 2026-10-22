@@ -26,6 +26,7 @@ from ..storage.cache import (
     WORKFLOW_FAILED_MARKER,
 )
 from ..storage.staging import walk_files
+from ..storage.remote import build_remote_fast_copy_command
 
 logger = getLogger("YukiLogger")
 
@@ -419,6 +420,36 @@ class SshWorkflow(VWorkflow):
             raise RuntimeError(
                 f"Could not finalize runner cache {cache_dir}: {err or out}")
 
+    def _producer_stageout(self, job):
+        """Return an input's stageout in a workflow on this runner."""
+        if job.machine_id != self.machine_id:
+            return ""
+        workflow_id = job.workflow_id()
+        if not isinstance(workflow_id, str) or not workflow_id:
+            return ""
+        base = self.ssh_config.get("remote_workdir", "/tmp/yuki-workflows")
+        return (f"{base}/workflows/{self.project_uuid}/{workflow_id}/"
+                f"imp{job.short_uuid()}/stageout")
+
+    def _restore_cache_from_producer(self, ssh, job, cache_dir):
+        """Materialize a cache miss from a same-runner producer workspace."""
+        source = self._producer_stageout(job)
+        if not source or not ssh.exists(source):
+            return False
+        out, err, code = ssh.exec(
+            build_remote_fast_copy_command(source, cache_dir), timeout=10800)
+        if code != 0:
+            raise RuntimeError(
+                f"Could not cache input {job.uuid} from producer workspace: "
+                f"{err or out}")
+        if not self._cache_hit(ssh, cache_dir):
+            raise RuntimeError(
+                f"Producer workspace copy for input {job.uuid} did not "
+                "publish a complete cache")
+        self.logger(
+            f"[SSH] Restored input cache from producer workflow: {job.uuid}")
+        return True
+
     def _fence_cache_publication(self, status):
         """Make a terminal failure visible to Snakemake before recording it."""
         config_file = getattr(self, "config_file", None)
@@ -560,6 +591,11 @@ class SshWorkflow(VWorkflow):
                                 f"Data impression {impression} is hosted on "
                                 f"another runner ({host_runner}); cannot stage "
                                 "remotely")
+                        cache_dir = self._rawdata_cache_dir(impression)
+                        if not self._cache_hit(ssh, cache_dir):
+                            raise RuntimeError(
+                                f"Registered input {impression} is missing "
+                                f"from runner {self.machine_id}")
                         # The data already sits in this runner's managed
                         # impressions cache; the Snakefile setup rule copies
                         # it into imp<short>/stageout as the first step.
@@ -575,14 +611,16 @@ class SshWorkflow(VWorkflow):
                         self.logger(f"[SSH] Cache hit: {impression} is in "
                                     "the runner impressions cache")
                         continue
+                    if self._restore_cache_from_producer(
+                            ssh, job, cache_dir):
+                        continue
 
                 if job.environment() == "rawdata":
                     rawdata_path = os.path.join(job.path, "rawdata")
                     if os.path.exists(rawdata_path):
                         filelist = list(walk_files(rawdata_path))
                         total_raw = len(filelist)
-                        if total_raw:
-                            self._prepare_cache_write(ssh, cache_dir)
+                        self._prepare_cache_write(ssh, cache_dir)
                         for f_idx, (rel_path, src_path) in enumerate(filelist):
                             # Upload into the runner cache; the Snakefile
                             # setup rule links it into imp<short>/stageout.
@@ -592,8 +630,12 @@ class SshWorkflow(VWorkflow):
                                 f"[SSH] [Job {j_idx+1}/{total_jobs}] Cached rawdata "
                                 f"{f_idx+1}/{total_raw}: {rel_path}"
                             )
-                        if total_raw:
-                            self._chmod_cache_ro(ssh, cache_dir)
+                        self._chmod_cache_ro(ssh, cache_dir)
+                    else:
+                        raise RuntimeError(
+                            f"Rawdata input {impression} is not cached on "
+                            f"runner {self.machine_id} and Yuki has no "
+                            "local rawdata source")
 
                 elif job.is_input:
                     src_stageout = os.path.join(
@@ -608,8 +650,7 @@ class SshWorkflow(VWorkflow):
                     if os.path.exists(src_stageout):
                         filelist = list(walk_files(src_stageout))
                         total_input = len(filelist)
-                        if total_input:
-                            self._prepare_cache_write(ssh, cache_dir)
+                        self._prepare_cache_write(ssh, cache_dir)
                         for f_idx, (rel_path, src_path) in enumerate(filelist):
                             # Upload into the runner cache; the Snakefile
                             # setup rule links it into imp<short>/stageout.
@@ -619,8 +660,12 @@ class SshWorkflow(VWorkflow):
                                 f"[SSH] [Job {j_idx+1}/{total_jobs}] Cached input "
                                 f"{f_idx+1}/{total_input}: {rel_path}"
                             )
-                        if total_input:
-                            self._chmod_cache_ro(ssh, cache_dir)
+                        self._chmod_cache_ro(ssh, cache_dir)
+                    else:
+                        raise RuntimeError(
+                            f"Input {impression} is not cached on runner "
+                            f"{self.machine_id}, its producer workspace is "
+                            "unavailable, and Yuki has no collected stageout")
 
             ssh.put(self.snakefile_path, f"{self.remote_exec_path}/Snakefile")
             self.logger("[SSH] Uploaded: Snakefile")

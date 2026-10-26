@@ -26,6 +26,9 @@ services:
     environment:
       - FLASK_ENV=development
       - CELERY_BROKER_URL=amqp://localhost
+      # Prefer the optional bind-mounted Celebi checkout. When the placeholder
+      # is mounted, Python falls through to the package installed in the image.
+      - PYTHONPATH=/app/CelebiChrono
     working_dir: /app
     stdin_open: true
     tty: true

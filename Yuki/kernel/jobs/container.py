@@ -13,6 +13,7 @@ import re
 import shlex
 import time
 from CelebiChrono.utils import metadata
+from CelebiChrono.utils.lb_run import read_lb_run_spec
 from CelebiChrono.utils.subtasks import read_subtask_count
 from .base import VJob
 from .image import ImageJob
@@ -29,6 +30,8 @@ LB_RUN_EXECUTABLE = (
 )
 LHCB_CVMFS_REPOSITORY = "lhcb.cern.ch"
 LHCB_CVMFS_PATH = f"/cvmfs/{LHCB_CVMFS_REPOSITORY}"
+LHCB_NIGHTLY_CVMFS_REPOSITORY = "lhcbdev.cern.ch"
+LHCB_NIGHTLY_CVMFS_PATH = f"/cvmfs/{LHCB_NIGHTLY_CVMFS_REPOSITORY}"
 LB_CONDA_EXECUTABLE = (
     "/cvmfs/lhcb.cern.ch/lib/var/lib/LbEnv/stable/linux-64/bin/lb-conda"
 )
@@ -397,39 +400,11 @@ class ContainerJob(VJob):
               project: Moore
               version: v55r12
               platform: x86_64_v2-el9-gcc13-opt  # optional
+              nightly: lhcb-head/1234             # optional
         """
         if command_yaml is None:
             return None
-        raw = command_yaml.read_variable("lb_run", None)
-        if raw is None:
-            return None
-        if not isinstance(raw, dict):
-            raise ValueError("lb_run must be a mapping")
-        unknown = sorted(set(raw) - {"project", "version", "platform"})
-        if unknown:
-            raise ValueError(
-                "unsupported lb_run field(s): " + ", ".join(unknown))
-
-        spec = {}
-        for field in ("project", "version", "platform"):
-            value = raw.get(field, "")
-            if value is None:
-                value = ""
-            if not isinstance(value, str):
-                raise ValueError(f"lb_run.{field} must be a string")
-            value = self._substitute_parameters(value).strip()
-            if "${" in value:
-                raise ValueError(
-                    f"lb_run.{field} contains an unresolved parameter: {value}")
-            spec[field] = value
-
-        for field in ("project", "version"):
-            if not spec[field]:
-                raise ValueError(f"lb_run.{field} is required")
-            if "/" in spec[field]:
-                raise ValueError(
-                    f"lb_run.{field} must not contain '/': {spec[field]}")
-        return spec
+        return read_lb_run_spec(command_yaml, self._substitute_parameters)
 
     def _wrap_lb_run_command(self, command, command_yaml):
         """Validate CVMFS and run one command in the configured release."""
@@ -439,6 +414,8 @@ class ContainerJob(VJob):
         argv = [LB_RUN_EXECUTABLE]
         if spec["platform"]:
             argv.extend(("-c", spec["platform"]))
+        if spec["nightly"]:
+            argv.extend(("--nightly", spec["nightly"]))
         argv.extend((
             f'{spec["project"]}/{spec["version"]}',
             "bash", "--noprofile", "--norc", "-c", command,
@@ -446,15 +423,23 @@ class ContainerJob(VJob):
         invocation = " ".join(shlex.quote(value) for value in argv)
         repository = shlex.quote(LHCB_CVMFS_PATH)
         executable = shlex.quote(LB_RUN_EXECUTABLE)
-        return (
+        checks = (
             f"if ! test -d {repository}; then "
             f"echo 'Celebi lb-run error: CVMFS repository "
             f"{LHCB_CVMFS_PATH} is not available' >&2; exit 127; fi; "
             f"if ! test -x {executable}; then "
             f"echo 'Celebi lb-run error: executable "
             f"{LB_RUN_EXECUTABLE} is not available' >&2; exit 127; fi; "
-            f"{invocation}"
         )
+        if spec["nightly"]:
+            nightly_repository = shlex.quote(LHCB_NIGHTLY_CVMFS_PATH)
+            checks += (
+                f"if ! test -d {nightly_repository}; then "
+                f"echo 'Celebi lb-run error: CVMFS repository "
+                f"{LHCB_NIGHTLY_CVMFS_PATH} is not available' >&2; "
+                "exit 127; fi; "
+            )
+        return checks + invocation
 
     def _lb_conda_spec(self):
         """Return ``package/date`` for an LbConda environment declaration.
@@ -769,10 +754,13 @@ class ContainerJob(VJob):
             raise ValueError("cvmfs must be a list")
         repositories = list(repositories)
         _commands, command_yaml = self._user_commands_and_yaml()
-        if ((self._lb_run_spec(command_yaml) is not None
-             or self._lb_conda_spec() is not None)
+        lb_run_spec = self._lb_run_spec(command_yaml)
+        if ((lb_run_spec is not None or self._lb_conda_spec() is not None)
                 and LHCB_CVMFS_REPOSITORY not in repositories):
             repositories.append(LHCB_CVMFS_REPOSITORY)
+        if (lb_run_spec is not None and lb_run_spec["nightly"]
+                and LHCB_NIGHTLY_CVMFS_REPOSITORY not in repositories):
+            repositories.append(LHCB_NIGHTLY_CVMFS_REPOSITORY)
         return repositories
 
     def parameters(self):

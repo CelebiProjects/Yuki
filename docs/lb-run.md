@@ -10,17 +10,19 @@ parameters:
   project: Moore
   version: v55r12
   platform: x86_64_v2-el9-gcc13-opt
+  nightly: lhcb-head/1234
 lb_run:
   project: ${project}
   version: ${version}
   platform: ${platform}
+  nightly: ${nightly}
 commands:
   - python code/options.py
 ```
 
-`project` and `version` are required strings. `platform` is optional. Task
-parameters are substituted before execution, so a task can select a fixed
-release without copying the algorithm.
+`project` and `version` are required strings. `platform` and `nightly` are
+optional. Task parameters are substituted before execution, so a task can
+select a fixed release or nightly slot without copying the algorithm.
 
 Yuki wraps each user command as an invocation of:
 
@@ -29,16 +31,19 @@ Yuki wraps each user command as an invocation of:
   -c PLATFORM PROJECT/VERSION bash --noprofile --norc -c COMMAND
 ```
 
+When `nightly` is set, the invocation additionally contains
+`--nightly NIGHTLY` before `PROJECT/VERSION`.
+
 Only user commands run inside the LHCb environment. Workspace setup, input
 linking, output caching, and finalization remain under Yuki's control. An
 `lb_run` declaration automatically adds `lhcb.cern.ch` to the task's CVMFS
-requirements.
+requirements. A nightly declaration also adds `lhcbdev.cern.ch`.
 
 Immediately before invoking `lb-run`, Yuki checks that
 `/cvmfs/lhcb.cern.ch` is mounted and that the configured `lb-run` executable
-is executable. A missing repository or executable fails the user step with a
-specific `Celebi lb-run error` message instead of a generic command-not-found
-failure.
+is executable. Nightly execution additionally checks `/cvmfs/lhcbdev.cern.ch`.
+A missing repository or executable fails the user step with a specific
+`Celebi lb-run error` message instead of a generic command-not-found failure.
 
 The normal `environment` field remains required: it selects the base container
 on REANA or the mapped execution environment on native/SSH runners. That base
@@ -46,7 +51,7 @@ system must be ABI-compatible with the requested LHCb platform. REANA can mount
 the declared CVMFS repository; native, SSH, and IHEP runners must already expose
 it at `/cvmfs/lhcb.cern.ch`. Use `celebi-cli test-runner RUNNER` to inspect a
 native or SSH runner's OS and machine platform before choosing an explicit
-LHCb binary tag.
+LHCb binary tag. Hosts running nightlies must expose both LHCb repositories.
 
 If a task defines its own `commands`, those commands and any task-level
 `lb_run` declaration replace the linked algorithm's command contract together.

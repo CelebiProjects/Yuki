@@ -131,6 +131,31 @@ def test_process_user_commands_wraps_algorithm_command_with_lb_run(
         assert "python code/options.py" in command
 
 
+def test_process_user_commands_wraps_nightly_lb_run(tmp_path, monkeypatch):
+    """A nightly slot adds the flag and checks the development repository."""
+    c = _make_container_with_yaml(tmp_path, {})
+    img = _algorithm_with_commands(
+        tmp_path,
+        ["gaudirun.py code/options.py"],
+        {
+            "project": "Gauss",
+            "version": "run5_stackglue_June2026",
+            "platform": "x86_64_v3-el9-gcc15-opt",
+            "nightly": "lhcb-sim11-run5-gluing/74",
+        },
+    )
+    monkeypatch.setattr(c, "image", lambda: img)
+
+    for processed in (c._process_user_commands_for_reana(),
+                      c._process_user_commands()):
+        command = processed[0]
+        assert "--nightly lhcb-sim11-run5-gluing/74" in command
+        assert "Gauss/run5_stackglue_June2026" in command
+        assert "if ! test -d /cvmfs/lhcbdev.cern.ch; then" in command
+        assert "CVMFS repository /cvmfs/lhcbdev.cern.ch is not available" in command
+        assert "gaudirun.py code/options.py" in command
+
+
 def test_inline_commands_do_not_inherit_algorithm_lb_run(tmp_path, monkeypatch):
     """Replacing algorithm commands also replaces its lb_run declaration."""
     c = _make_container_with_yaml(tmp_path, {"commands": ["echo inline"]})
@@ -155,6 +180,7 @@ def test_lb_run_substitutes_task_parameters(tmp_path, monkeypatch):
             "project": "${project}",
             "version": "${version}",
             "platform": "${platform}",
+            "nightly": "${nightly}",
         },
     )
     monkeypatch.setattr(c, "image", lambda: img)
@@ -162,6 +188,7 @@ def test_lb_run_substitutes_task_parameters(tmp_path, monkeypatch):
         "project": "DaVinci",
         "version": "v63r3",
         "platform": "x86_64_v3-el9-gcc13-opt",
+        "nightly": "lhcb-head/1234",
     }
     c.parameters = lambda: (sorted(values), values)
 
@@ -176,6 +203,7 @@ def test_lb_run_substitutes_task_parameters(tmp_path, monkeypatch):
 
     assert "DaVinci/v63r3" in command
     assert "-c x86_64_v3-el9-gcc13-opt" in command
+    assert "--nightly lhcb-head/1234" in command
 
 
 def test_lb_run_automatically_requires_lhcb_cvmfs(tmp_path, monkeypatch):
@@ -188,6 +216,26 @@ def test_lb_run_automatically_requires_lhcb_cvmfs(tmp_path, monkeypatch):
     monkeypatch.setattr(c, "image", lambda: img)
 
     assert c.cvmfs() == ["sft.cern.ch", "lhcb.cern.ch"]
+
+
+def test_nightly_lb_run_requires_both_lhcb_cvmfs_repositories(
+        tmp_path, monkeypatch):
+    """Nightly releases need the central and development repositories."""
+    c = _make_container_with_yaml(
+        tmp_path, {"cvmfs": ["sft.cern.ch", "lhcbdev.cern.ch"]})
+    img = _algorithm_with_commands(
+        tmp_path,
+        ["true"],
+        {
+            "project": "Gauss",
+            "version": "master",
+            "nightly": "lhcb-sim11/latest",
+        },
+    )
+    monkeypatch.setattr(c, "image", lambda: img)
+
+    assert c.cvmfs() == [
+        "sft.cern.ch", "lhcbdev.cern.ch", "lhcb.cern.ch"]
 
 
 def test_lb_run_rejects_incomplete_configuration(tmp_path, monkeypatch):

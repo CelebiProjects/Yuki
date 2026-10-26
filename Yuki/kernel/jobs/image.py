@@ -185,7 +185,7 @@ class ImageJob(VJob):
             str: Environment specification from YAML configuration or default
         """
         environment = self.yaml_file.read_variable("environment", self.default_environment())
-        if environment == "script":
+        if environment in ("script", "lb-run"):
             return self.default_environment()
         return environment
 

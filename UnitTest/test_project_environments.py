@@ -36,6 +36,8 @@ def test_native_environment_path_isolated_by_project(tmp_path):
 def test_reserved_and_unsafe_names_are_rejected():
     with pytest.raises(ValueError, match="reserved"):
         project_environments.validate_environment_name("script")
+    with pytest.raises(ValueError, match="reserved"):
+        project_environments.validate_environment_name("lb-run")
     with pytest.raises(ValueError, match="invalid"):
         project_environments.validate_environment_name("../escape")
 

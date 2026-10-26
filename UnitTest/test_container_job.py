@@ -30,10 +30,12 @@ def _make_container_with_yaml(path, task_vars):
     return c
 
 
-def _algorithm_with_commands(path, commands, lb_run=None):
+def _algorithm_with_commands(path, commands, lb_run=None, environment=None):
     """Build a mock ImageJob whose yaml_file declares the given commands."""
     alg_yaml = metadata.YamlFile(str(path / "alg.yaml"))
     alg_yaml.write_variable("commands", commands)
+    alg_yaml.write_variable(
+        "environment", environment or ("lb-run" if lb_run else "script"))
     if lb_run is not None:
         alg_yaml.write_variable("lb_run", lb_run)
     img = mock.Mock()
@@ -106,7 +108,7 @@ def test_process_user_commands_empty_when_neither(tmp_path, monkeypatch):
 def test_process_user_commands_wraps_algorithm_command_with_lb_run(
         tmp_path, monkeypatch):
     """Algorithm commands run inside the declared CVMFS LHCb release."""
-    c = _make_container_with_yaml(tmp_path, {})
+    c = _make_container_with_yaml(tmp_path, {"environment": "lb-run"})
     img = _algorithm_with_commands(
         tmp_path,
         ['python code/options.py --label "signal sample"'],
@@ -133,7 +135,7 @@ def test_process_user_commands_wraps_algorithm_command_with_lb_run(
 
 def test_process_user_commands_wraps_nightly_lb_run(tmp_path, monkeypatch):
     """A nightly slot adds the flag and checks the development repository."""
-    c = _make_container_with_yaml(tmp_path, {})
+    c = _make_container_with_yaml(tmp_path, {"environment": "lb-run"})
     img = _algorithm_with_commands(
         tmp_path,
         ["gaudirun.py code/options.py"],
@@ -173,7 +175,7 @@ def test_inline_commands_do_not_inherit_algorithm_lb_run(tmp_path, monkeypatch):
 
 def test_lb_run_substitutes_task_parameters(tmp_path, monkeypatch):
     """Task parameters can select the project release and platform."""
-    c = _make_container_with_yaml(tmp_path, {})
+    c = _make_container_with_yaml(tmp_path, {"environment": "lb-run"})
     img = _algorithm_with_commands(
         tmp_path, ["true"],
         {
@@ -209,7 +211,7 @@ def test_lb_run_substitutes_task_parameters(tmp_path, monkeypatch):
 def test_lb_run_automatically_requires_lhcb_cvmfs(tmp_path, monkeypatch):
     """Declaring lb_run adds the central LHCb CVMFS repository once."""
     c = _make_container_with_yaml(
-        tmp_path, {"cvmfs": ["sft.cern.ch"]})
+        tmp_path, {"environment": "lb-run", "cvmfs": ["sft.cern.ch"]})
     img = _algorithm_with_commands(
         tmp_path, ["true"],
         {"project": "Moore", "version": "v55r12"})
@@ -222,7 +224,8 @@ def test_nightly_lb_run_requires_both_lhcb_cvmfs_repositories(
         tmp_path, monkeypatch):
     """Nightly releases need the central and development repositories."""
     c = _make_container_with_yaml(
-        tmp_path, {"cvmfs": ["sft.cern.ch", "lhcbdev.cern.ch"]})
+        tmp_path, {"environment": "lb-run",
+                   "cvmfs": ["sft.cern.ch", "lhcbdev.cern.ch"]})
     img = _algorithm_with_commands(
         tmp_path,
         ["true"],
@@ -240,7 +243,7 @@ def test_nightly_lb_run_requires_both_lhcb_cvmfs_repositories(
 
 def test_lb_run_rejects_incomplete_configuration(tmp_path, monkeypatch):
     """Malformed declarations fail during workflow construction."""
-    c = _make_container_with_yaml(tmp_path, {})
+    c = _make_container_with_yaml(tmp_path, {"environment": "lb-run"})
     img = _algorithm_with_commands(
         tmp_path, ["true"], {"project": "Moore"})
     monkeypatch.setattr(c, "image", lambda: img)
@@ -251,6 +254,62 @@ def test_lb_run_rejects_incomplete_configuration(tmp_path, monkeypatch):
         assert str(exc) == "lb_run.version is required"
     else:
         raise AssertionError("invalid lb_run declaration was accepted")
+
+
+def test_lb_run_requires_task_environment(tmp_path, monkeypatch):
+    c = _make_container_with_yaml(tmp_path, {"environment": "script"})
+    img = _algorithm_with_commands(
+        tmp_path, ["true"], {"project": "Moore", "version": "v55r12"})
+    monkeypatch.setattr(c, "image", lambda: img)
+
+    with pytest.raises(ValueError, match="task environment 'lb-run'"):
+        c._process_user_commands()
+
+
+def test_lb_run_requires_algorithm_environment(tmp_path, monkeypatch):
+    c = _make_container_with_yaml(tmp_path, {"environment": "lb-run"})
+    img = _algorithm_with_commands(
+        tmp_path, ["true"], {"project": "Moore", "version": "v55r12"},
+        environment="script")
+    monkeypatch.setattr(c, "image", lambda: img)
+
+    with pytest.raises(ValueError, match="command source environment 'lb-run'"):
+        c._process_user_commands()
+
+
+def test_inline_lb_run_task_needs_no_algorithm(tmp_path, monkeypatch):
+    c = _make_container_with_yaml(tmp_path, {
+        "environment": "lb-run",
+        "commands": ["echo inline"],
+        "lb_run": {"project": "Moore", "version": "v55r12"},
+    })
+    image = mock.Mock()
+    monkeypatch.setattr(c, "image", image)
+
+    command = c._process_user_commands()[0]
+
+    assert "lb-run" in command
+    assert "echo inline" in command
+    image.assert_not_called()
+
+
+def test_lb_run_environment_requires_declaration(tmp_path):
+    c = _make_container_with_yaml(tmp_path, {"environment": "lb-run"})
+
+    with pytest.raises(ValueError, match="requires an lb_run declaration"):
+        c._lb_run_spec(None)
+
+
+def test_lb_run_uses_base_backend_environment(tmp_path, monkeypatch):
+    c = _make_container_with_yaml(tmp_path, {
+        "environment": "lb-run",
+        "commands": ["true"],
+        "lb_run": {"project": "Moore", "version": "v55r12"},
+    })
+    monkeypatch.setattr(c, "image", lambda: None)
+    monkeypatch.setattr(c, "use_kerberos", lambda _backend=None: False)
+
+    assert c._create_step_metadata()["environment"] == c.default_environment()
 
 
 def test_lb_conda_environment_wraps_user_commands(tmp_path, monkeypatch):

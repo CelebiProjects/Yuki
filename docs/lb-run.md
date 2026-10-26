@@ -4,7 +4,7 @@ An algorithm can request that its user commands run through the `lb-run`
 installation published on CVMFS:
 
 ```yaml
-environment: <compatible-base-container>
+environment: lb-run
 memory_limit: 4Gi
 parameters:
   project: Moore
@@ -45,15 +45,19 @@ is executable. Nightly execution additionally checks `/cvmfs/lhcbdev.cern.ch`.
 A missing repository or executable fails the user step with a specific
 `Celebi lb-run error` message instead of a generic command-not-found failure.
 
-The normal `environment` field remains required: it selects the base container
-on REANA or the mapped execution environment on native/SSH runners. That base
-system must be ABI-compatible with the requested LHCb platform. REANA can mount
+`lb-run` is a reserved execution environment. Yuki maps it to the backend's
+default base container/environment and then invokes the CVMFS release wrapper.
+That base system must be ABI-compatible with the requested LHCb platform. Both
+the task and the object supplying the effective commands must declare
+`environment: lb-run`. With inherited commands this means both task and linked
+algorithm; an inline task is its own command source and needs no algorithm.
+REANA can mount
 the declared CVMFS repository; native, SSH, and IHEP runners must already expose
 it at `/cvmfs/lhcb.cern.ch`. Use `celebi-cli test-runner RUNNER` to inspect a
 native or SSH runner's OS and machine platform before choosing an explicit
 LHCb binary tag. Hosts running nightlies must expose both LHCb repositories.
 
-If a task defines its own `commands`, those commands and any task-level
+If a task defines its own `commands`, those commands and its task-level
 `lb_run` declaration replace the linked algorithm's command contract together.
 Outputs still have to be written below `stageout/`.
 

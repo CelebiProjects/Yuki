@@ -13,7 +13,7 @@ import re
 import shlex
 import time
 from CelebiChrono.utils import metadata
-from CelebiChrono.utils.lb_run import read_lb_run_spec
+from CelebiChrono.utils.lb_run import validated_lb_run_spec
 from CelebiChrono.utils.subtasks import read_subtask_count
 from .base import VJob
 from .image import ImageJob
@@ -402,9 +402,15 @@ class ContainerJob(VJob):
               platform: x86_64_v2-el9-gcc13-opt  # optional
               nightly: lhcb-head/1234             # optional
         """
-        if command_yaml is None:
-            return None
-        return read_lb_run_spec(command_yaml, self._substitute_parameters)
+        command_environment = ""
+        raw = None
+        if command_yaml is not None:
+            command_environment = command_yaml.read_variable(
+                "environment", "")
+            raw = command_yaml.read_variable("lb_run", None)
+        return validated_lb_run_spec(
+            self.environment(), command_environment, raw,
+            self._substitute_parameters)
 
     def _wrap_lb_run_command(self, command, command_yaml):
         """Validate CVMFS and run one command in the configured release."""
@@ -465,7 +471,8 @@ class ContainerJob(VJob):
 
     def _execution_environment(self):
         """Return the backend environment used to host this task."""
-        if self._lb_conda_spec() is not None:
+        if (self.environment() == "lb-run"
+                or self._lb_conda_spec() is not None):
             return self.default_environment()
         return self.environment()
 
@@ -474,7 +481,8 @@ class ContainerJob(VJob):
         environment = self._lb_conda_spec()
         if environment is None:
             return command
-        if self._lb_run_spec(command_yaml) is not None:
+        if (command_yaml is not None
+                and command_yaml.read_variable("lb_run", None) is not None):
             raise ValueError(
                 "lb-conda environment cannot be combined with lb_run")
         argv = (

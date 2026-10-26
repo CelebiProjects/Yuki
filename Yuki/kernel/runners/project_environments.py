@@ -17,7 +17,7 @@ ENVIRONMENT_JOBS_DIR = "environment-jobs"
 NATIVE_REQUESTS_DIR = os.path.join("NativeRunner", "environment-requests")
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _RESERVED_ENVIRONMENTS = frozenset(
-    ("script", "rawdata", "datalist", "lhcb_ap_datalist"))
+    ("script", "lb-run", "rawdata", "datalist", "lhcb_ap_datalist"))
 
 
 def validate_segment(value, label):

@@ -46,6 +46,10 @@ python -m build
 pip install dist/yuki-*.whl
 ```
 
+The standard installation includes Snakemake for native execution. Install
+Yuki in a Conda environment so the host also provides the ``conda`` command
+used to create project environments.
+
 ## Run the server
 
 Requires a RabbitMQ broker at `amqp://localhost` (or run everything in Docker — see below).
@@ -78,6 +82,9 @@ yuki server start    # Flask on port 3315 + Celery worker
 yuki server status
 yuki server stop     # or Ctrl-C
 ```
+
+On first server start, Yuki registers a native runner named ``local`` unless a
+runner with that name already exists. Existing runner settings are preserved.
 
 ## CLI overview
 

@@ -498,7 +498,7 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
         )
         self._update_job_status(config_file, current_status, status, full_workflow_status, logger)
 
-    def log(self, index, offset=0):
+    def log(self, index, offset=0, subtask=None):
         """Get log content for this job.
 
         Args:
@@ -509,7 +509,12 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
             Log content from the given offset, or "" if the file is missing
             or the offset is at/past the end of the file.
         """
-        log_path = os.path.join(self.path, self.machine_id, "logs", f"celebi_user_step{index}.log")
+        log_dir = os.path.join(self.path, self.machine_id, "logs")
+        if subtask is not None:
+            if type(subtask) is not int or subtask < 0:
+                raise ValueError("subtask must be a non-negative integer")
+            log_dir = os.path.join(log_dir, str(subtask))
+        log_path = os.path.join(log_dir, f"celebi_user_step{index}.log")
         if not os.path.exists(log_path):
             return ""
         with open(log_path, encoding='utf-8') as f:

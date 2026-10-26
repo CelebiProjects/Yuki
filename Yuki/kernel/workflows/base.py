@@ -665,6 +665,8 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
                     f"Restore the impression metadata in "
                     f"{os.path.join(job.path, 'config.json')} before resubmitting."
                 )
+            if object_type == "task":
+                ContainerJob(job.path, job.machine_id).subtasks()
 
         config = metadata.ConfigFile(os.path.join(_yuki_dir(), "config.json"))
         use_kerberos = config.read_variable("use_kerberos", {}).get(self.machine_id, False)
@@ -762,6 +764,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             self.logger(f"[{i+1}/{total_jobs}] Processing job: {job}")
             snakemake_rule = None
             step = None
+            count = None
             if job.object_type() == "algorithm":
                 # In this case, if the command is compile, we need to compile it
                 image = ImageJob(job.path, job.machine_id)
@@ -773,14 +776,27 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             elif job.object_type() == "task":
                 container = ContainerJob(job.path, job.machine_id)
                 container.is_input = job.is_input
-                snakemake_rule = container.snakemake_rule(self.machine_id, backend_type)
-                step = container.step(self.machine_id, backend_type)
+                count = container.subtasks() if not job.is_input else None
+                if count is not None:
+                    self._write_subtask_rule(snake_file, container, backend_type)
+                    snakemake_rule = container.subtask_completion_rule(
+                        self.machine_id, backend_type)
+                    step = container._create_reana_step_metadata()
+                    step.update(commands=[], subtasks=count)
+                    step["cvmfs"] = container.cvmfs()
+                else:
+                    snakemake_rule = container.snakemake_rule(self.machine_id, backend_type)
+                    step = container.step(self.machine_id, backend_type)
             self.logger(f"[{i+1}/{total_jobs}] Get the step at time "
                          f"{time.time() - start_time:.4f}s")
 
             snake_file.addline("\n", 0)
             snake_file.addline(f"rule step{job.short_uuid()}:", 0)
             snake_file.addline("input:", 1)
+            if count is not None:
+                snake_file.addline(
+                    f'expand("imp{job.short_uuid()}/subtasks/{{index}}.done", '
+                    f'index=range({count})),', 2)
             for input_file in snakemake_rule["inputs"]:
                 snake_file.addline(f'"{input_file}",', 2)
             # Add the dependencies
@@ -836,6 +852,34 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
 
         snake_file.write()
         self.logger(f"Snakefile written to {self.snakefile_path}")
+
+    def _write_subtask_rule(self, snake_file, container, backend_type):
+        """Emit a bounded wildcard rule without registering extra Yuki jobs."""
+        rule = container.subtask_rule()
+        short = container.short_uuid()
+        snake_file.addline(f"\nrule subtask{short}:", 0)
+        snake_file.addline("input:", 1)
+        for name in rule["inputs"]:
+            snake_file.addline(f'"{name}",', 2)
+        snake_file.addline("output:", 1)
+        snake_file.addline(f'"imp{short}/subtasks/{{index}}.done"', 2)
+        snake_file.addline("wildcard_constraints:", 1)
+        snake_file.addline('index="[0-9]+"', 2)
+        self._write_environment_directive(snake_file, rule["environment"], 1)
+        snake_file.addline("resources:", 1)
+        resources = [f'kubernetes_memory_limit="{rule["memory"]}"']
+        memory_mb = memory_to_mb(rule["memory"])
+        if memory_mb is not None:
+            resources.append(f"mem_mb={memory_mb}")
+        if container.use_kerberos(backend_type):
+            resources.append("kerberos=True")
+        if rule.get("cvmfs"):
+            resources.append(f'cvmfs="{",".join(rule["cvmfs"])}"')
+        for resource in resources:
+            snake_file.addline(resource + ",", 2)
+        snake_file.addline("shell:", 1)
+        commands = self._wrap_environment_commands(rule["environment"], rule["commands"])
+        snake_file.addline(f'"{" && ".join(commands)}"', 2)
 
     def construct_workflow_jobs(self, root_jobs):
         """

@@ -13,6 +13,7 @@ import re
 import shlex
 import time
 from CelebiChrono.utils import metadata
+from CelebiChrono.utils.subtasks import read_subtask_count
 from .base import VJob
 from .image import ImageJob
 from ..storage.cache import (
@@ -62,6 +63,64 @@ class ContainerJob(VJob):
         """
         alias_to_imp = self.config_file.read_variable("alias_to_impression", {})
         return (alias_to_imp.keys(), alias_to_imp)
+
+    def subtasks(self):
+        """Read the repeat count from the frozen task configuration."""
+        return read_subtask_count(self.yaml_file)
+
+    def subtask_rule(self):
+        """Build one wildcard rule; the task itself keeps a single impression.
+
+        Workspaces are private working directories, not a host security sandbox.
+        The literal stageout/index link exposes only this execution's output
+        through the supported output interface. Aliases retain the whole input.
+        """
+        count = self.subtasks()
+        short = self.short_uuid()
+        root = f"imp{short}"
+        index = "{wildcards.index}"
+        work = f"{root}/subtasks/{index}"
+        self._subtask_index = index
+        try:
+            commands = [
+                f"test {index} -ge 0 && test {index} -lt {count}",
+                f"mkdir -p {work}/stageout {root}/stageout/{index} {root}/logs/{index}",
+                f"cd {work}",
+                f"ln -sfn ../../../stageout/{index} stageout/index",
+                f"ln -sfn ../../logs/{index} logs",
+            ]
+            image = self.image()
+            code = f"../../../imp{image.short_uuid()}" if image else "../.."
+            commands.append(f"ln -sfn {code} code")
+            for alias, impression in self.inputs()[1].items():
+                commands.append(
+                    f"ln -sfn ../../../imp{impression[:7]} {shlex.quote(alias)}")
+            commands.extend([
+                "echo running > logs/status",
+                "subtask_status=$(pwd)/logs/status",
+                "trap 'rc=$?; if [ $rc -eq 0 ]; then echo finished > "
+                "\\\"$subtask_status\\\"; else echo failed > "
+                "\\\"$subtask_status\\\"; fi' EXIT",
+            ])
+            commands.extend(self._process_user_commands())
+            commands.extend(["cd ../../..", f"touch {root}/subtasks/{index}.done"])
+        finally:
+            del self._subtask_index
+        rule = self._create_step_metadata()
+        rule.update(commands=commands, inputs=self._get_step_inputs(), cvmfs=self.cvmfs())
+        return rule
+
+    def subtask_completion_rule(self, request_machine_id, backend_type):
+        """Publish the cache and the existing task marker after every repeat."""
+        rule = self._create_step_metadata()
+        rule["inputs"] = []  # Written as expand(..., range(N)), not N strings.
+        rule["commands"] = [
+            f"cd imp{self.short_uuid()}",
+            *self._cache_commands(request_machine_id, backend_type),
+            "cd ..",
+            f"touch {self.short_uuid()}.done",
+        ]
+        return rule
 
     def image(self):
         """
@@ -465,7 +524,10 @@ class ContainerJob(VJob):
         for parameter in parameters:
             value = values[parameter]
             placeholder = "${" + parameter + "}"
-            command = command.replace(placeholder, value)
+            command = command.replace(placeholder, str(value))
+        index = getattr(self, "_subtask_index", None)
+        if index is not None:
+            command = command.replace("${index}", str(index))
         return command
 
     def _substitute_inputs(self, command):
@@ -482,7 +544,8 @@ class ContainerJob(VJob):
         for alias in alias_list:
             impression = alias_map[alias]
             placeholder = "${" + alias + "}"
-            command = command.replace(placeholder, f"../imp{impression[:7]}")
+            target = alias if hasattr(self, "_subtask_index") else f"../imp{impression[:7]}"
+            command = command.replace(placeholder, target)
         return command
 
     def _substitute_paths(self, command):
@@ -495,6 +558,9 @@ class ContainerJob(VJob):
         Returns:
             str: Command with paths substituted
         """
+        if hasattr(self, "_subtask_index"):
+            return (command.replace("${workspace}", ".")
+                    .replace("${output}", ".").replace("${code}", "code"))
         command = command.replace("${workspace}", "..")
         command = command.replace("${output}", f"imp{self.short_uuid()}")
 

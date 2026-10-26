@@ -8,6 +8,7 @@ old runners keep working without migration.
 import fcntl
 import os
 import time
+import uuid
 
 from CelebiChrono.utils.metadata import ConfigFile
 
@@ -26,6 +27,37 @@ def open_config():
     """Open the Yuki config file ($YUKIDIR/config.json)."""
     yuki_dir = os.path.expanduser(os.environ.get("YUKIDIR", "~/.Yuki"))
     return ConfigFile(os.path.join(yuki_dir, "config.json"))
+
+
+def ensure_default_local_runner(config_file=None):
+    """Register the built-in ``local`` native runner if it is absent.
+
+    Existing runner definitions are authoritative and are never rewritten.
+    Returns the existing or newly generated runner id.
+    """
+    config_file = config_file or open_config()
+    runners = config_file.read_variable("runners", []) or []
+    runner_ids = config_file.read_variable("runners_id", {}) or {}
+    if "local" in runners:
+        return runner_ids.get("local", "")
+
+    runner_id = uuid.uuid4().hex
+    runners.append("local")
+    runner_ids["local"] = runner_id
+
+    urls = config_file.read_variable("urls", {}) or {}
+    tokens = config_file.read_variable("tokens", {}) or {}
+    backend_types = config_file.read_variable("backend_types", {}) or {}
+    urls[runner_id] = ""
+    tokens[runner_id] = ""
+    backend_types[runner_id] = "native"
+
+    config_file.write_variable("runners", runners)
+    config_file.write_variable("runners_id", runner_ids)
+    config_file.write_variable("urls", urls)
+    config_file.write_variable("tokens", tokens)
+    config_file.write_variable("backend_types", backend_types)
+    return runner_id
 
 
 def get_runner_settings(config_file, runner_id):

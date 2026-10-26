@@ -6,6 +6,7 @@ from multiprocessing import Process
 from CelebiChrono.utils.pretty import colorize
 from .server.app import app, celeryapp
 from .server.config import config
+from .kernel.runners import config as runner_config
 
 
 def start_flask_app():
@@ -25,6 +26,7 @@ def start_celery_worker():
 
 def server_start():
     """Start the Yuki server with both Flask and Celery processes."""
+    runner_config.ensure_default_local_runner(config.get_config_file())
     print(colorize("[*[*[* Starting the Data Integration Thought Entity *]*]*]", "title0"))
 
     flask_process = Process(target=start_flask_app)

@@ -744,7 +744,13 @@ def error_log(project_uuid, impression_name, index):
     job_path = config.get_job_path(project_uuid, impression_name)
     job = VJob(job_path, None)
     offset = request.args.get("offset", 0, type=int)
-    log_content = job.log(index, offset=offset)
+    options = {}
+    if "subtask" in request.args:
+        subtask = request.args.get("subtask", type=int)
+        if subtask is None or subtask < 0:
+            return jsonify({"error": "subtask must be a non-negative integer"}), 400
+        options["subtask"] = subtask
+    log_content = job.log(index, offset=offset, **options)
     if not log_content:
         return "", 204
     return log_content

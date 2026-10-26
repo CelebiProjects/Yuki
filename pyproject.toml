@@ -32,6 +32,7 @@ dependencies = [
     "pillow",
     "paramiko",
     "requests>=2.31",
+    "snakemake>=8.6,<10",
 ]
 
 [project.urls]

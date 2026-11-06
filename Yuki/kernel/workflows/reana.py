@@ -13,6 +13,7 @@ from Yuki.kernel.execution.status import ORCHESTRATING
 from .base import VWorkflow, _yuki_dir
 from ..storage import file_types  # pylint: disable=unused-import  # re-exported for tests
 from ..storage.staging import walk_files
+from ..storage.reana_download import leaf_entries, store_download
 
 # Try to import reana_client, but it might not be available
 try:
@@ -378,7 +379,7 @@ class ReanaWorkflow(VWorkflow):
                     os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
                     # self.logger(f"Files: {files}")
                     total_files = len(files)
-                    for i, file in enumerate(files):
+                    for i, file in enumerate(leaf_entries(files)):
                         name = file["name"]
                         self.logger(f'[{i+1}/{total_files}] Downloading stageout: {name}')
                         output = client.download_file(
@@ -389,9 +390,7 @@ class ReanaWorkflow(VWorkflow):
                         prefix = f"imp{impression[0:7]}/stageout/"
                         rel = name[len(prefix):] if name.startswith(prefix) else name
                         filename = os.path.join(path, "stageout", rel)
-                        os.makedirs(os.path.dirname(filename), exist_ok=True)
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
+                        store_download(output, filename, os.path.join(path, "stageout"), prefix)
                     # all done, make a finish file
                     finish_file = os.path.join(path, "stageout.downloaded")
                     with open(finish_file, "w", encoding='utf-8') as f:
@@ -408,7 +407,7 @@ class ReanaWorkflow(VWorkflow):
                     )
                     os.makedirs(os.path.join(path, "logs"), exist_ok=True)
                     total_logs = len(files)
-                    for i, file in enumerate(files):
+                    for i, file in enumerate(leaf_entries(files)):
                         name = file["name"]
                         self.logger(f'[{i+1}/{total_logs}] Downloading log: {name}')
                         output = client.download_file(
@@ -419,9 +418,7 @@ class ReanaWorkflow(VWorkflow):
                         prefix = f"imp{impression[0:7]}/logs/"
                         rel = name[len(prefix):] if name.startswith(prefix) else name
                         filename = os.path.join(path, "logs", rel)
-                        os.makedirs(os.path.dirname(filename), exist_ok=True)
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
+                        store_download(output, filename, os.path.join(path, "logs"), prefix)
                     # all done, make a finish file
                     with open(os.path.join(path, "logs.downloaded"), "w", encoding='utf-8') as f:
                         pass
@@ -451,7 +448,7 @@ class ReanaWorkflow(VWorkflow):
                 os.makedirs(os.path.join(path, "stageout"), exist_ok=True)
                 # self.logger(f"Files: {files}")
                 total_files = len(files)
-                for i, file in enumerate(files):
+                for i, file in enumerate(leaf_entries(files)):
                     name = file["name"]
                     prefix = f"imp{impression[0:7]}/stageout/"
                     rel = name[len(prefix):] if name.startswith(prefix) else name
@@ -463,17 +460,16 @@ class ReanaWorkflow(VWorkflow):
                             self.get_access_token(self.machine_id),
                         )
                         filename = os.path.join(path, "stageout", rel)
-                        os.makedirs(os.path.dirname(filename), exist_ok=True)
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
-                        report["collected"].append(rel)
+                        report["collected"].extend(store_download(
+                            output, filename, os.path.join(path, "stageout"), prefix))
                     except Exception as exc:  # pylint: disable=broad-exception-caught
                         report["failed"].append(
                             {"file": rel, "reason": str(exc)})
                 # all done, make a finish file
                 finish_file = os.path.join(path, "stageout.downloaded")
-                with open(finish_file, "w", encoding='utf-8') as f:
-                    pass
+                if not report["failed"]:
+                    with open(finish_file, "w", encoding='utf-8'):
+                        pass
             except Exception as e:
                 self.logger(f"Failed to download stageout: {e}")
                 report["failed"].append(
@@ -503,7 +499,7 @@ class ReanaWorkflow(VWorkflow):
                 )
                 os.makedirs(os.path.join(path, "logs"), exist_ok=True)
                 total_logs = len(files)
-                for i, file in enumerate(files):
+                for i, file in enumerate(leaf_entries(files)):
                     name = file["name"]
                     prefix = f"imp{impression[0:7]}/logs/"
                     rel = name[len(prefix):] if name.startswith(prefix) else name
@@ -515,16 +511,15 @@ class ReanaWorkflow(VWorkflow):
                             self.get_access_token(self.machine_id),
                         )
                         filename = os.path.join(path, "logs", rel)
-                        os.makedirs(os.path.dirname(filename), exist_ok=True)
-                        with open(filename, "wb") as f:
-                            f.write(output[0])
-                        report["collected"].append(rel)
+                        report["collected"].extend(store_download(
+                            output, filename, os.path.join(path, "logs"), prefix))
                     except Exception as exc:  # pylint: disable=broad-exception-caught
                         report["failed"].append(
                             {"file": rel, "reason": str(exc)})
                 # all done, make a finish file
-                with open(os.path.join(path, "logs.downloaded"), "w", encoding='utf-8') as f:
-                    pass
+                if not report["failed"]:
+                    with open(os.path.join(path, "logs.downloaded"), "w", encoding='utf-8'):
+                        pass
             except Exception as e:
                 self.logger(f"Failed to download logs: {e}")
                 report["failed"].append(
@@ -579,7 +574,7 @@ class ReanaWorkflow(VWorkflow):
                 f"[{type(e).__name__}]: {e!r}")
             raise
         result = []
-        for f in files:
+        for f in leaf_entries(files):
             name = f["name"]
             rel = name[len(prefix):] if name.startswith(prefix) else os.path.basename(name)
             if rel:
@@ -607,7 +602,7 @@ class ReanaWorkflow(VWorkflow):
                 {"file": f"<{kind}>", "reason": f"failed to list files: {e}"})
             return report
         os.makedirs(os.path.join(path, kind), exist_ok=True)
-        for f in files:
+        for f in leaf_entries(files):
             name = f["name"]
             rel = name[len(prefix):] if name.startswith(prefix) else os.path.basename(name)
             if not rel:
@@ -624,10 +619,8 @@ class ReanaWorkflow(VWorkflow):
             try:
                 output = client.download_file(
                     self.get_name(), name, self.get_access_token(self.machine_id))
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "wb") as fh:
-                    fh.write(output[0])
-                report["collected"].append(rel)
+                report["collected"].extend(store_download(
+                    output, dest, os.path.join(path, kind), prefix))
                 self.logger(f"Downloaded selected {kind}: {rel}")
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 report["failed"].append({"file": rel, "reason": str(exc)})

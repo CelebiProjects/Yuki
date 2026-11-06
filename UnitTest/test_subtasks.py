@@ -105,6 +105,28 @@ def test_single_repeat_keeps_numbered_output(tmp_path, monkeypatch):
     assert (Path(workflow.path) / "impaaaaaaa/stageout/0/a.root").read_text() == "0\n"
 
 
+@pytest.mark.parametrize("returncode", [0, 7])
+def test_subtask_preserves_reana_outer_exit_trap(tmp_path, monkeypatch, returncode):
+    """A real generated shell must run both status and Kerberos cleanup traps."""
+    job = make_job(tmp_path, "a", {"subtasks": 1, "commands": [
+        "true" if returncode == 0 else f"exit {returncode}",
+    ]})
+    workflow = workflow_for(tmp_path, monkeypatch, [job])
+    root = Path(workflow.path)
+    cleanup = root / "kerberos-cleanups"
+    snakefile = Path(workflow.snakefile_path)
+    prefix = f"trap 'echo cleanup >> {cleanup}' EXIT; "
+    snakefile.write_text(f"shell.prefix({prefix!r})\n" + snakefile.read_text())
+
+    result = run_snake(workflow)
+
+    assert (result.returncode == 0) == (returncode == 0), result.stderr
+    assert (root / "impaaaaaaa/logs/0/status").read_text().strip() == (
+        "finished" if returncode == 0 else "failed")
+    # setup + subtask + aggregate + finalize on success; setup + subtask on failure.
+    assert len(cleanup.read_text().splitlines()) == (4 if returncode == 0 else 2)
+
+
 @pytest.mark.parametrize("count", [None, True, 0, -1, "3", 2.5])
 def test_invalid_subtasks_fail_during_construction(tmp_path, monkeypatch, count):
     job = make_job(tmp_path, "a", {"subtasks": count})

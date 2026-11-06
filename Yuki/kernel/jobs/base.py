@@ -6,6 +6,7 @@ that can include VVolume, ImageJob, ContainerJob and other related entities.
 """
 # pylint: disable=cyclic-import
 import os
+import re
 import time
 from abc import ABC
 
@@ -329,6 +330,37 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
                 print("No log file found.")
         return None
 
+    def _subtask_progress_detail(self, workflow_path):
+        """Summarize REANA wildcard jobs without confusing compute with cache success."""
+        count = self.yaml_file.read_variable("subtasks", None)
+        if type(count) is not int or count <= 0:
+            return ""
+        logs = read_locked_variable(os.path.join(workflow_path, "log.json"), "logs", {})
+        by_index = {}
+        aggregate = None
+        for step in sorted(logs.values(), key=lambda item: item.get("started_at") or ""):
+            if step.get("job_name") == f"step{self.short_uuid()}":
+                aggregate = step.get("status", "unknown")
+            if step.get("job_name") != f"subtask{self.short_uuid()}":
+                continue
+            match = re.search(r"\btest (\d+) -ge 0", step.get("cmd", ""))
+            if match and 0 <= int(match[1]) < count:
+                by_index[int(match[1])] = step.get("status", "unknown")
+        if not by_index:
+            return ""
+        finished = sum(status == "finished" for status in by_index.values())
+        running = sum(status == "running" for status in by_index.values())
+        failed_indices = sorted(index for index, status in by_index.items()
+                                if status == "failed")
+        detail = (f"REANA subtasks: {finished}/{count} finished, {running} running, "
+                  f"{len(failed_indices)} failed")
+        if failed_indices:
+            shown = ", ".join(str(index) for index in failed_indices[:20])
+            detail += f" (indices: {shown})"
+        if finished == count:
+            detail += f"; aggregate/cache step: {aggregate or 'waiting'}"
+        return detail
+
     def _write_step_logs(self, matched_step):  # pylint: disable=too-many-locals
         """Write step logs to the job's log directory."""
         if matched_step and matched_step.get("status") in ("finished", "failed"):
@@ -497,6 +529,10 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
             f"workflow_status={full_workflow_status}"
         )
         self._update_job_status(config_file, current_status, status, full_workflow_status, logger)
+        if not is_terminal_status(translate_to_musical(self.status())):
+            progress = self._subtask_progress_detail(workflow_path)
+            if progress:
+                config_file.write_variable("detailed_status", progress)
 
     def log(self, index, offset=0, subtask=None):
         """Get log content for this job.

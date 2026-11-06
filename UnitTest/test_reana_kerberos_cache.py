@@ -137,6 +137,10 @@ class _FakeContainer:
     def __init__(self, path, machine_id):
         del path, machine_id
 
+    def subtasks(self):
+        """These fixtures represent ordinary, non-repeated tasks."""
+        return None
+
     def setup_commands(self, backend_type, workflow_machine_id=None):
         """Fake: copy the cached input into place in the setup rule."""
         del backend_type, workflow_machine_id

@@ -887,7 +887,9 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
             snake_file.addline(resource + ",", 2)
         snake_file.addline("shell:", 1)
         commands = self._wrap_environment_commands(rule["environment"], rule["commands"])
-        snake_file.addline(f'"{" && ".join(commands)}"', 2)
+        # REANA installs its own EXIT trap to stop the Kerberos renew sidecar.
+        # Keep the subtask status trap in a child shell so both handlers run.
+        snake_file.addline(f'"( {" && ".join(commands)} )"', 2)
 
     def construct_workflow_jobs(self, root_jobs):
         """

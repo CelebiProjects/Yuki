@@ -1,4 +1,6 @@
 """Tests for ContainerJob output discovery and command resolution."""
+import json
+import stat
 from unittest import mock
 
 import pytest
@@ -46,6 +48,12 @@ def _algorithm_with_commands(path, commands, lb_run=None, environment=None):
     return img
 
 
+def _add_apd_token(path, token="lbapi:user:secret"):
+    """Write the deposited local setting used by Yuki at workflow build time."""
+    local = metadata.ConfigFile(str(path / "config.local.json"))
+    local.write_variable("apd_token", token)
+
+
 def test_outputs_returns_relative_paths_for_nested_stageout(tmp_path):
     """Outputs under a nested stageout directory come back relative."""
     c = _make_container(tmp_path)
@@ -55,6 +63,73 @@ def test_outputs_returns_relative_paths_for_nested_stageout(tmp_path):
     (stageout / "plots" / "fit.png").write_bytes(b"img2")
     names = set(c.outputs())
     assert names == {"mass.png", "plots/fit.png"}
+
+
+def test_apd_token_file_is_private_json_and_staged_for_ordinary_task(tmp_path):
+    """Ordinary tasks stage a token without embedding it in their commands."""
+    c = _make_container_with_yaml(
+        tmp_path, {"environment": "lb-conda/pidcalib/2026-10-15"})
+    c.config_file = metadata.ConfigFile(str(tmp_path / "config.json"))
+    c.config_file.write_variable("tree", [])
+    _add_apd_token(tmp_path)
+
+    files = c.files()
+    key_path = tmp_path / "contents/lbapi_key.json"
+
+    assert f"{c.short_uuid()}/lbapi_key.json" in files
+    assert json.loads(key_path.read_text(encoding="utf-8")) == "lbapi:user:secret"
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+    export = c._apd_token_export_command("lbapi_key.json")
+    assert export == "export APD_USER_TOKEN_FILE=$(pwd)/lbapi_key.json"
+    assert "lbapi:user:secret" not in export
+
+
+def test_apd_token_file_removes_stale_secret_when_local_token_is_absent(tmp_path):
+    """A secret from an earlier build is not silently reused."""
+    c = _make_container_with_yaml(tmp_path, {"environment": "script"})
+    key_path = tmp_path / "contents/lbapi_key.json"
+    key_path.write_text('"old-token"', encoding="utf-8")
+
+    assert c._create_apd_token_file() is None
+    assert not key_path.exists()
+    assert c._apd_token_export_command("lbapi_key.json") == ""
+
+
+def test_apd_export_precedes_user_command_in_reana_step(tmp_path, monkeypatch):
+    """The exported file path is inherited by an ordinary REANA user command."""
+    c = _make_container_with_yaml(tmp_path, {"environment": "script"})
+    _add_apd_token(tmp_path)
+    monkeypatch.setattr(c, "_create_directory_commands", lambda: ["cd impression"])
+    monkeypatch.setattr(c, "_create_symlink_commands", lambda: [])
+    monkeypatch.setattr(c, "_process_user_commands_for_reana", lambda: ["run-user"])
+    monkeypatch.setattr(c, "_cache_commands", lambda *_args: [])
+    monkeypatch.setattr(c, "_create_reana_step_metadata", lambda: {})
+
+    commands = c.step("runner-1")["commands"]
+
+    export_index = commands.index(
+        "export APD_USER_TOKEN_FILE=$(pwd)/lbapi_key.json")
+    assert export_index < commands.index("run-user")
+
+
+def test_apd_export_precedes_subtask_user_command(tmp_path, monkeypatch):
+    """Each repeated task resolves the shared token from its nested workspace."""
+    c = _make_container_with_yaml(
+        tmp_path, {"environment": "script", "subtasks": 2})
+    c.config_file = metadata.ConfigFile(str(tmp_path / "config.json"))
+    c.config_file.write_variable("alias_to_impression", {})
+    _add_apd_token(tmp_path)
+    monkeypatch.setattr(c, "image", lambda: None)
+    monkeypatch.setattr(c, "_process_user_commands", lambda: ["run-user"])
+    monkeypatch.setattr(c, "_get_step_inputs", lambda: [])
+    monkeypatch.setattr(c, "cvmfs", lambda: [])
+    monkeypatch.setattr(c, "_create_step_metadata", lambda *_args: {})
+
+    commands = c.subtask_rule()["commands"]
+
+    export_index = commands.index(
+        "export APD_USER_TOKEN_FILE=$(pwd)/../../lbapi_key.json")
+    assert export_index < commands.index("run-user")
 
 
 def test_outputs_returns_relative_paths_for_nested_rawdata(tmp_path):

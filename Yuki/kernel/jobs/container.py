@@ -7,6 +7,7 @@ that extends VJob functionality with container-specific operations like
 environment management, command execution, and input/output handling.
 """
 # pylint: disable=cyclic-import
+import json
 import logging
 import os
 import re
@@ -106,6 +107,9 @@ class ContainerJob(VJob):
                 "\\\"$subtask_status\\\"; else echo failed > "
                 "\\\"$subtask_status\\\"; fi' EXIT",
             ])
+            apd_export = self._apd_token_export_command("../../lbapi_key.json")
+            if apd_export:
+                commands.append(apd_export)
             commands.extend(self._process_user_commands())
             commands.extend(["cd ../../..", f"touch {root}/subtasks/{index}.done"])
         finally:
@@ -159,6 +163,9 @@ class ContainerJob(VJob):
         commands.extend(self._create_directory_commands())
         # print(f"    >>>> Step creation time after directory commands: {time.time() - start_time}")
         commands.extend(self._create_symlink_commands())
+        apd_export = self._apd_token_export_command("lbapi_key.json")
+        if apd_export:
+            commands.append(apd_export)
         # print(f"    >>>> Step creation time after symlink commands: {time.time() - start_time}")
         commands.extend(self._process_user_commands_for_reana())
         # print(f"    >>>> Step creation time after user commands: {time.time() - start_time}")
@@ -172,7 +179,6 @@ class ContainerJob(VJob):
         # Run LHCb AP datalist generator if this is an LHCb AP datalist task (and not an input)
         if self.environment() == "lhcb_ap_datalist" and not self.is_input:
             short = self.short_uuid()
-            commands.append("export APD_USER_TOKEN_FILE=$(pwd)/lbapi_key.json")
             commands.append("apd-login")
             commands.append(f"python3 ../imp{short}/generate_lhcb_ap_datalist.py")
 
@@ -288,6 +294,9 @@ class ContainerJob(VJob):
         commands = []
         commands.extend(self._create_directory_commands())
         commands.extend(self._create_symlink_commands())
+        apd_export = self._apd_token_export_command("lbapi_key.json")
+        if apd_export:
+            commands.append(apd_export)
         commands.extend(self._process_user_commands())
 
         # Run datalist generator if this is a datalist task (and not an input)
@@ -296,7 +305,6 @@ class ContainerJob(VJob):
         # Run LHCb AP datalist generator if this is an LHCb AP datalist task (and not an input)
         if self.environment() == "lhcb_ap_datalist" and not self.is_input:
             short = self.short_uuid()
-            commands.append("export APD_USER_TOKEN_FILE=$(pwd)/lbapi_key.json")
             commands.append("apd-login")
             commands.append(f"python3 ../imp{short}/generate_lhcb_ap_datalist.py")
 
@@ -847,9 +855,7 @@ print(f"Generated filelist.txt with {{len(DATALIST)}} entries")
         """
         Create the generate_lhcb_ap_datalist.py script that queries LHCb AP tool.
 
-        Reads the ap_config from celebi.yaml, reads the apd_token from the
-        deposited config.local.json, creates lbapi_key.json in contents, and
-        generates a Python script that:
+        Reads the ap_config from celebi.yaml and generates a Python script that:
         1. Sets up AP authentication via lbapi_key.json
         2. Queries datasets using apd.get_analysis_data()
         3. Filters using the returned datasets() callable
@@ -866,18 +872,6 @@ print(f"Generated filelist.txt with {{len(DATALIST)}} entries")
         gda_args = repr(gda.get("args", []))
         gda_kwargs = repr(gda.get("kwargs", {}))
         ds_kwargs = repr(ds.get("kwargs", {}))
-
-        # Read the APD token from the deposited config.local.json and write
-        # lbapi_key.json inside the job contents.
-        token = ""
-        local_config_path = os.path.join(self.path, "config.local.json")
-        if os.path.exists(local_config_path):
-            local_config = metadata.ConfigFile(local_config_path)
-            token = local_config.read_variable("apd_token", "")
-        key_path = os.path.join(self.path, "contents", "lbapi_key.json")
-        if token:
-            with open(key_path, "w", encoding="utf-8") as f:
-                f.write(f'"{token}"')
 
         script_content = f'''#!/usr/bin/env python3
 """Generate dataList.txt by querying the LHCb Analysis Productions tool."""
@@ -906,6 +900,34 @@ print(f"Generated dataList.txt with {{len(clean_paths)}} entries")
         os.chmod(script_path, 0o755)
         return script_path
 
+    def _apd_token(self):
+        """Read an APD token from deposited, non-versioned task settings."""
+        local_config_path = os.path.join(self.path, "config.local.json")
+        if not os.path.exists(local_config_path):
+            return ""
+        local_config = metadata.ConfigFile(local_config_path)
+        token = local_config.read_variable("apd_token", "")
+        return token.strip() if isinstance(token, str) else ""
+
+    def _create_apd_token_file(self):
+        """Create the APD JSON token file staged only in the execution workspace."""
+        key_path = os.path.join(self.path, "contents", "lbapi_key.json")
+        token = self._apd_token()
+        if not token:
+            if os.path.exists(key_path):
+                os.unlink(key_path)
+            return None
+        with open(key_path, "w", encoding="utf-8") as token_file:
+            json.dump(token, token_file)
+        os.chmod(key_path, 0o600)
+        return key_path
+
+    def _apd_token_export_command(self, token_path):
+        """Export the staged token path without putting its value in commands/logs."""
+        if not self._apd_token():
+            return ""
+        return f"export APD_USER_TOKEN_FILE=$(pwd)/{token_path}"
+
     def files(self):
         """
         Get list of files in this job, including datalist generators if applicable.
@@ -914,16 +936,16 @@ print(f"Generated dataList.txt with {{len(clean_paths)}} entries")
             list: List of file paths
         """
         file_list = super().files()
+        if self._create_apd_token_file():
+            file_list.append(f"{self.short_uuid()}/lbapi_key.json")
         if self.environment() == "datalist":
             # Create the generator script
             self._create_datalist_generator()
             # Add it to the file list (format: short_uuid/filename)
             file_list.append(f"{self.short_uuid()}/generate_datalist.py")
         if self.environment() == "lhcb_ap_datalist":
-            # Create the AP datalist generator script (also writes lbapi_key.json)
+            # Create the AP datalist generator script.
             self._create_lhcb_ap_datalist_generator()
             # Add them to the file list (format: short_uuid/filename)
             file_list.append(f"{self.short_uuid()}/generate_lhcb_ap_datalist.py")
-            if os.path.exists(os.path.join(self.path, "contents", "lbapi_key.json")):
-                file_list.append(f"{self.short_uuid()}/lbapi_key.json")
         return file_list

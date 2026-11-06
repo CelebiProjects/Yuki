@@ -36,6 +36,7 @@ LB_CONDA_EXECUTABLE = (
     "/cvmfs/lhcb.cern.ch/lib/var/lib/LbEnv/stable/linux-64/bin/lb-conda"
 )
 LB_CONDA_PREFIX = "lb-conda/"
+LB_CONDA_REANA_ENVIRONMENT = "celebichrono/root-xrootd:6.32.02"
 
 
 class ContainerJob(VJob):
@@ -71,7 +72,7 @@ class ContainerJob(VJob):
         """Read the repeat count from the frozen task configuration."""
         return read_subtask_count(self.yaml_file)
 
-    def subtask_rule(self):
+    def subtask_rule(self, backend_type="reana"):
         """Build one wildcard rule; the task itself keeps a single impression.
 
         Workspaces are private working directories, not a host security sandbox.
@@ -109,13 +110,13 @@ class ContainerJob(VJob):
             commands.extend(["cd ../../..", f"touch {root}/subtasks/{index}.done"])
         finally:
             del self._subtask_index
-        rule = self._create_step_metadata()
+        rule = self._create_step_metadata(backend_type)
         rule.update(commands=commands, inputs=self._get_step_inputs(), cvmfs=self.cvmfs())
         return rule
 
     def subtask_completion_rule(self, request_machine_id, backend_type):
         """Publish the cache and the existing task marker after every repeat."""
-        rule = self._create_step_metadata()
+        rule = self._create_step_metadata(backend_type)
         rule["inputs"] = []  # Written as expand(..., range(N)), not N strings.
         rule["commands"] = [
             f"cd imp{self.short_uuid()}",
@@ -303,7 +304,7 @@ class ContainerJob(VJob):
         commands.append("cd ..")
         commands.append(f"touch {self.short_uuid()}.done")
 
-        step = self._create_step_metadata()
+        step = self._create_step_metadata(backend_type)
         step["commands"] = commands
         step["inputs"] = self._get_step_inputs()
         cvmfs_repos = self.cvmfs()
@@ -469,10 +470,13 @@ class ContainerJob(VJob):
             raise ValueError(f"invalid lb-conda date: {date}")
         return f"{package}/{date}"
 
-    def _execution_environment(self):
+    def _execution_environment(self, backend_type="reana"):
         """Return the backend environment used to host this task."""
-        if (self.environment() == "lb-run"
-                or self._lb_conda_spec() is not None):
+        if self._lb_conda_spec() is not None:
+            if backend_type == "reana":
+                return LB_CONDA_REANA_ENVIRONMENT
+            return self.default_environment()
+        if self.environment() == "lb-run":
             return self.default_environment()
         return self.environment()
 
@@ -563,7 +567,7 @@ class ContainerJob(VJob):
 
         return command
 
-    def _create_step_metadata(self):
+    def _create_step_metadata(self, backend_type="reana"):
         """
         Create step metadata including environment, memory, and compute backend.
 
@@ -575,7 +579,7 @@ class ContainerJob(VJob):
         elif self.environment() == "lhcb_ap_datalist":
             environment = self.lhcb_ap_environment()
         else:
-            environment = self._execution_environment()
+            environment = self._execution_environment(backend_type)
         compute_backend = self.compute_backend()
 
         step = {
@@ -701,7 +705,7 @@ class ContainerJob(VJob):
                 commands.append(
                     f"test -d {cache} && test ! -e {in_progress} && "
                     f"(test -f {complete} || "
-                    f"test -n \"$({payload_probe})\")")
+                    f"{payload_probe} | grep -q .)")
                 commands.append(
                     f"find {cache} -mindepth 1 -maxdepth 1 "
                     f"! -name '.yuki-cache-*' -exec ln -s {{}} "
@@ -763,10 +767,12 @@ class ContainerJob(VJob):
         repositories = list(repositories)
         _commands, command_yaml = self._user_commands_and_yaml()
         lb_run_spec = self._lb_run_spec(command_yaml)
-        if ((lb_run_spec is not None or self._lb_conda_spec() is not None)
+        lb_conda_spec = self._lb_conda_spec()
+        if ((lb_run_spec is not None or lb_conda_spec is not None)
                 and LHCB_CVMFS_REPOSITORY not in repositories):
             repositories.append(LHCB_CVMFS_REPOSITORY)
-        if (lb_run_spec is not None and lb_run_spec["nightly"]
+        if ((lb_conda_spec is not None
+                or (lb_run_spec is not None and lb_run_spec["nightly"]))
                 and LHCB_NIGHTLY_CVMFS_REPOSITORY not in repositories):
             repositories.append(LHCB_NIGHTLY_CVMFS_REPOSITORY)
         return repositories

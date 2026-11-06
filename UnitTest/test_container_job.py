@@ -4,7 +4,10 @@ from unittest import mock
 import pytest
 
 from CelebiChrono.utils import metadata
-from Yuki.kernel.jobs.container import ContainerJob
+from Yuki.kernel.jobs.container import (
+    LB_CONDA_REANA_ENVIRONMENT,
+    ContainerJob,
+)
 
 
 def _make_container(path, machine_id="runner-1"):
@@ -329,18 +332,29 @@ def test_lb_conda_environment_wraps_user_commands(tmp_path, monkeypatch):
         assert "lb-run" not in command
 
 
-def test_lb_conda_uses_base_backend_environment_and_lhcb_cvmfs(
+def test_lb_conda_uses_reana_environment_and_both_lhcb_cvmfs_repositories(
         tmp_path, monkeypatch):
-    """Backends host lb-conda in a base image and mount its CVMFS repository."""
+    """REANA hosts LbConda in its compatible image with both repositories."""
     c = _make_container_with_yaml(
         tmp_path, {"environment": "lb-conda/default/2020-05-14"})
     monkeypatch.setattr(c, "image", lambda: None)
     monkeypatch.setattr(c, "use_kerberos", lambda _backend=None: False)
 
-    assert c._create_step_metadata()["environment"] == c.default_environment()
+    assert c._create_step_metadata()["environment"] == LB_CONDA_REANA_ENVIRONMENT
     reana_metadata = c._create_reana_step_metadata()
-    assert reana_metadata["environment"] == c.default_environment()
-    assert c.cvmfs() == ["lhcb.cern.ch"]
+    assert reana_metadata["environment"] == LB_CONDA_REANA_ENVIRONMENT
+    assert c.cvmfs() == ["lhcb.cern.ch", "lhcbdev.cern.ch"]
+
+
+def test_lb_conda_non_reana_backend_keeps_existing_base_environment(
+        tmp_path, monkeypatch):
+    """The REANA-specific LbConda image does not change other backends."""
+    c = _make_container_with_yaml(
+        tmp_path, {"environment": "lb-conda/default/2020-05-14"})
+    monkeypatch.setattr(c, "image", lambda: None)
+
+    assert (c._create_step_metadata("ssh")["environment"]
+            == c.default_environment())
 
 
 @pytest.mark.parametrize("environment", [

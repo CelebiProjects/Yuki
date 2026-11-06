@@ -9,6 +9,7 @@ from ..kernel.storage import remote as remote_data_ops
 from ..kernel.runners import config as runner_config
 from ..kernel.runners import project_environments
 from ..services import result_transfer
+from ..services import ssh_impression_transfer
 from ..kernel.jobs.base import VJob
 from ..kernel.workflows.base import VWorkflow, _yuki_dir
 from ..kernel.execution.lease import (
@@ -337,3 +338,30 @@ def task_cache_results(job_id, runner_id, project_uuid, impression):
     except Exception as e:  # pylint: disable=broad-exception-caught
         update({"status": "failed", "result": None,
                 "error": str(e) or type(e).__name__})
+
+
+@celeryapp.task
+def task_share_ssh_impressions(job_id, runner_id, project_uuid, operation,
+                               impressions, force):
+    """Move scoped impressions to or from an SSH runner's shared store."""
+    yuki_dir = remote_data_ops._yuki_dir()  # pylint: disable=protected-access
+
+    def update(values):
+        current = remote_data_ops.read_job_state(
+            yuki_dir, job_id,
+            jobs_dir_name=ssh_impression_transfer.JOBS_DIR_NAME) or {}
+        current.update(values)
+        remote_data_ops.write_job_state(
+            yuki_dir, job_id, current,
+            jobs_dir_name=ssh_impression_transfer.JOBS_DIR_NAME)
+
+    update({"status": "starting"})
+    try:
+        result = ssh_impression_transfer.run_share_job(
+            job_id, runner_id, project_uuid, operation, impressions,
+            force=force, yuki_dir=yuki_dir)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        update({"status": "failed", "result": None,
+                "error": str(exc) or type(exc).__name__})
+        return
+    update({"status": "done", "result": result, "error": None})

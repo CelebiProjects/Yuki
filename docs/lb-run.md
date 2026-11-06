@@ -70,7 +70,10 @@ dated Conda environments, set the task environment instead:
 environment: lb-conda/default/2020-05-14
 ```
 
-The supported form is `lb-conda/[package]/[date]`. Yuki mounts
-`lhcb.cern.ch`, keeps its normal backend base environment, and invokes each
-user command with `lb-conda package/date`. An `lb-conda/...` environment and
-an `lb_run` declaration cannot be combined on the same task.
+The supported form is `lb-conda/[package]/[date]`. On REANA, Yuki uses
+`celebichrono/root-xrootd:6.32.02` as the base environment and automatically
+mounts both `lhcb.cern.ch` and `lhcbdev.cern.ch`. It then invokes each user
+command with `lb-conda package/date`; tasks do not need to declare those CVMFS
+repositories themselves. Other backends retain their existing base-environment
+selection. An `lb-conda/...` environment and an `lb_run` declaration cannot be
+combined on the same task.

@@ -19,7 +19,7 @@ releases through CVMFS; see [the lb-run guide](docs/lb-run.md).
 ## Celebi bookkeeping uploads
 
 The updated Celebi client runs `celebi-cli bookkeep --commit "Publish" --tag "v1"`
-to publish code through GitLab and collected results through Yuki to `celebi_server`.
+to publish code through GitLab or GitHub and collected results through Yuki to `celebi_server`.
 Yuki receives only the project UUID, the server's needed impression UUIDs, and
 a short-lived upload grant. The website's analysis token stays on the client.
 
@@ -96,6 +96,15 @@ yuki native-runner start            # execute queued native workflows on the hos
 yuki impression-export <uuids...> --project-uuid <uuid> -o out.tar.gz
 yuki impression-import <tar_file> --project-uuid <uuid>
 yuki env-map add|list|remove       # manage environment mappings
+```
+
+Celebi can also share the current task, all tasks in the current directory, or
+all tasks in the project when run from its root, through a managed store on a
+registered SSH runner:
+
+```bash
+celebi-cli share-ssh-impressions --export RUNNER
+celebi-cli share-ssh-impressions --import RUNNER
 ```
 
 ## Run with Docker

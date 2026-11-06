@@ -732,7 +732,12 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         snake_file.addline('kubernetes_memory_limit="1Gi"', 2)
         snake_file.addline("shell:", 1)
         if setup_commands:
-            snake_file.addline(f'"{" && ".join(setup_commands)} && touch setup.done"', 2)
+            setup_command = " && ".join(setup_commands) + " && touch setup.done"
+            # Snakemake formats braces in shell directives.  ``find -exec``
+            # uses a literal ``{}``, so escape that token while JSON encoding
+            # quotes and backslashes for a valid Snakefile string literal.
+            setup_command = setup_command.replace("{}", "{{}}")
+            snake_file.addline(json.dumps(setup_command), 2)
         else:
             snake_file.addline('"touch setup.done"', 2)
         self.dependencies["setup"] = []
@@ -754,7 +759,10 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
         snake_file.addline('kubernetes_memory_limit="1Gi"', 2)
         snake_file.addline("shell:", 1)
         if finalize_commands:
-            snake_file.addline(f'"{" && ".join(finalize_commands)} && touch finalize.done"', 2)
+            finalize_command = (" && ".join(finalize_commands)
+                                + " && touch finalize.done")
+            finalize_command = finalize_command.replace("{}", "{{}}")
+            snake_file.addline(json.dumps(finalize_command), 2)
         else:
             snake_file.addline('"touch finalize.done"', 2)
 
@@ -855,7 +863,7 @@ class VWorkflow(ABC):  # pylint: disable=too-many-instance-attributes
 
     def _write_subtask_rule(self, snake_file, container, backend_type):
         """Emit a bounded wildcard rule without registering extra Yuki jobs."""
-        rule = container.subtask_rule()
+        rule = container.subtask_rule(backend_type)
         short = container.short_uuid()
         snake_file.addline(f"\nrule subtask{short}:", 0)
         snake_file.addline("input:", 1)

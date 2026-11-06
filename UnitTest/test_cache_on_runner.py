@@ -195,6 +195,7 @@ def test_setup_commands_ssh_fetches_from_impressions(monkeypatch, tmp_path):
     assert "test -d /remote/work/impressions/proj/imp123456" in commands[1]
     assert ".yuki-cache-complete" in commands[1]
     assert ".yuki-cache-in-progress" in commands[1]
+    assert '"' not in commands[1]
     assert "find /remote/work/impressions/proj/imp123456" in commands[2]
     assert "! -name '.yuki-cache-*'" in commands[2]
     assert "-exec ln -s {} impabc1234/stageout/ \\;" in commands[2]

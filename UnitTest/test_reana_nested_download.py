@@ -87,7 +87,8 @@ def test_subtask_progress_distinguishes_compute_from_aggregate(tmp_path):
 def test_terminal_subtask_failure_keeps_failed_index(tmp_path):
     from UnitTest.test_subtasks import make_job
     job = make_job(tmp_path, "a", {"subtasks": 2})
-    job.set_status("running")
+    # The first live poll may arrive after a short backend job already failed.
+    job.set_status("built")
     (tmp_path / "results.json").write_text(json.dumps({"results": {"status": "failed"}}))
     logs = {"failed": {"job_name": "subtaskaaaaaaa", "cmd": "test 1 -ge 0",
                        "status": "failed", "started_at": "2026-11-06T15:00:00"}}
@@ -95,3 +96,4 @@ def test_terminal_subtask_failure_keeps_failed_index(tmp_path):
     job.update_status_from_workflow(str(tmp_path))
     assert job.status() == "failed"
     assert "indices: 1" in job.detailed_status()
+    assert "construction" not in job.detailed_status().lower()

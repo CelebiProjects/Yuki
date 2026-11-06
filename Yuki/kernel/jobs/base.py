@@ -522,6 +522,18 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
                 print("status from matched step:", status)
             self._write_step_logs(matched_step)
 
+        # A short repeated task can fail between client polls, before the
+        # aggregate step exists. Backend subtask execution is runtime evidence;
+        # an old local "built" snapshot must not turn it into a construction error.
+        if (translate_to_musical(current_status) in
+                (SILENCE, PRELUDE, COMPOSING, ORCHESTRATING, TUNING)
+                and translate_to_musical(status) == FAILED):
+            logs = read_locked_variable(os.path.join(workflow_path, "log.json"), "logs", {})
+            if any(step.get("job_name") == f"subtask{self.short_uuid()}"
+                   and step.get("status") in ("running", "finished", "failed")
+                   for step in logs.values()):
+                current_status = IN_MOVEMENT
+
         # Update job status
         print(
             f"[update_status_from_workflow] job={self.short_uuid()} "

@@ -529,10 +529,13 @@ class VJob(ABC):  # pylint: disable=too-many-instance-attributes,too-many-public
             f"workflow_status={full_workflow_status}"
         )
         self._update_job_status(config_file, current_status, status, full_workflow_status, logger)
-        if not is_terminal_status(translate_to_musical(self.status())):
+        updated_status = translate_to_musical(self.status())
+        if not is_terminal_status(updated_status) or updated_status == FAILED:
             progress = self._subtask_progress_detail(workflow_path)
             if progress:
-                config_file.write_variable("detailed_status", progress)
+                detail = (f"{self.detailed_status()}; {progress}"
+                          if updated_status == FAILED else progress)
+                config_file.write_variable("detailed_status", detail)
 
     def log(self, index, offset=0, subtask=None):
         """Get log content for this job.

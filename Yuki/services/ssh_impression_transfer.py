@@ -21,6 +21,7 @@ from Yuki.kernel.workflows.ssh import _SshConnection
 
 UUID_RE = re.compile(r"^[0-9a-f]{32}$")
 JOBS_DIR_NAME = "share-ssh-impression-jobs"
+EXCLUDED_CREDENTIAL_FILES = frozenset({"config.local.json", "lbapi_key.json"})
 
 
 def _connection(runner_id):
@@ -63,6 +64,8 @@ def _local_files(root):
         dirs[:] = sorted(name for name in dirs if not os.path.islink(
             os.path.join(directory, name)))
         for name in sorted(files):
+            if name in EXCLUDED_CREDENTIAL_FILES:
+                continue
             path = os.path.join(directory, name)
             if os.path.islink(path):
                 continue

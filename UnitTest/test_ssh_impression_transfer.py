@@ -129,6 +129,67 @@ def test_export_reports_missing_yuki_impressions(monkeypatch, tmp_path):
     assert result["missing"] == [missing]
 
 
+def test_export_excludes_local_apd_credentials(monkeypatch, tmp_path):
+    """Shared impressions never contain deposited or staged APD credentials."""
+    yuki_dir = tmp_path / "yuki"
+    remote = tmp_path / "runner"
+    yuki_dir.mkdir()
+    remote.mkdir()
+    _install_fake_runner(monkeypatch, remote)
+    project = "project"
+    impression = "a" * 32
+    _impression(yuki_dir, project, impression)
+    source = yuki_dir / "Storage" / project / impression
+    (source / "config.local.json").write_text(
+        '{"apd_token":"secret"}', encoding="utf-8")
+    (source / "contents").mkdir()
+    (source / "contents" / "lbapi_key.json").write_text(
+        '"secret"', encoding="utf-8")
+    (source / "contents" / "payload.json").write_text(
+        '{"safe":true}', encoding="utf-8")
+
+    result = sharing.run_share_job(
+        "job", "runner-id", project, "export", [impression],
+        yuki_dir=str(yuki_dir))
+
+    assert result["impressions"] == [impression]
+    shared = remote / "shared-impressions" / project / impression
+    assert not (shared / "config.local.json").exists()
+    assert not (shared / "contents" / "lbapi_key.json").exists()
+    assert (shared / "contents" / "payload.json").is_file()
+
+
+def test_import_ignores_credentials_from_legacy_shared_copy(monkeypatch, tmp_path):
+    """Old shared stores cannot reintroduce credential files during import."""
+    yuki_dir = tmp_path / "yuki"
+    remote = tmp_path / "runner"
+    yuki_dir.mkdir()
+    remote.mkdir()
+    _install_fake_runner(monkeypatch, remote)
+    project = "project"
+    impression = "a" * 32
+    shared = remote / "shared-impressions" / project / impression
+    (shared / "contents").mkdir(parents=True)
+    (shared / "config.json").write_text("{}", encoding="utf-8")
+    (shared / "config.local.json").write_text(
+        '{"apd_token":"secret"}', encoding="utf-8")
+    (shared / "contents" / "lbapi_key.json").write_text(
+        '"secret"', encoding="utf-8")
+    (shared / "contents" / "payload.json").write_text(
+        '{"safe":true}', encoding="utf-8")
+    (shared / CACHE_COMPLETE_MARKER).touch()
+
+    result = sharing.run_share_job(
+        "job", "runner-id", project, "import", [impression],
+        yuki_dir=str(yuki_dir))
+
+    assert result["impressions"] == [impression]
+    imported = yuki_dir / "Storage" / project / impression
+    assert not (imported / "config.local.json").exists()
+    assert not (imported / "contents" / "lbapi_key.json").exists()
+    assert (imported / "contents" / "payload.json").is_file()
+
+
 def test_existing_shared_copy_is_protected_without_force(monkeypatch, tmp_path):
     """An existing complete shared copy is skipped unless replacement is explicit."""
     yuki_dir = tmp_path / "yuki"

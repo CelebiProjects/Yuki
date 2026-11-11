@@ -21,9 +21,18 @@ Every downstream Task waits for the upstream aggregate completion marker.
 
 Logs and execution status files live under `imp<short>/logs/<index>/`.
 `celebi-cli log 0 --subtask 7` selects a command log from one execution.
+Live and terminal status details report the number of completed, running, and
+failed executions and retain failed indices after the workflow terminates. A
+short execution that starts and fails between status polls is classified as a
+runtime failure rather than a workflow-construction failure.
 The Task cache and `.done` marker are published only after every instance
 has succeeded. Snakemake can resume individual incomplete executions in the
 same workspace; fresh workflows do not reuse individual old instance results.
+
+REANA may return nested file listings or archive downloads for repeated outputs.
+Yuki expands those entries while collecting stageout and logs, preserves their
+numeric directory layout, and writes a downloaded marker only after every
+selected file has been stored successfully.
 
 Separate working directories prevent accidental relative-path output collisions,
 but do not add a filesystem security sandbox. Native/SSH commands retain the

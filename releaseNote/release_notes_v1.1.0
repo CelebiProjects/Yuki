@@ -1,0 +1,33 @@
+## v1.1.0
+
+Changes since v1.0.0b4:
+
++ Add repeated Task execution with bounded Snakemake wildcard rules while retaining one
+  impression and one Yuki job.
+  - Preserve numeric `stageout/<index>/` layouts in caches, collection, downstream
+    aliases, and per-execution logs.
+  - Report live subtask progress, retain failed indices in terminal status, and classify
+    short executions that fail between polls as runtime failures.
+  - Expand nested REANA listings and archive downloads so repeated stageout and logs are
+    collected without flattening their directory layout.
++ Register a default local runner on first server start without replacing existing
+  runner configuration.
++ Add LHCb release execution through `lb-run`, including nightly slots and the required
+  `lhcbdev.cern.ch` CVMFS repository.
+  - Treat `lb-run` as a reserved execution environment and validate Task/algorithm
+    compatibility before launch.
+  - Support dated `lb-conda/PACKAGE/DATE` environments on REANA and reject combining
+    `lb-conda` with an `lb_run` declaration.
++ Add export and import of complete immutable impressions through an SSH runner's managed
+  store, including transfer routes and background task support. Exclude deposited
+  `config.local.json` and staged `lbapi_key.json` credentials in both directions.
++ Harden SSH cached-input Snakefile generation by JSON-encoding shell directives and
+  escaping literal braces used by `find -exec`.
++ Inject deposited APD credentials into ordinary and repeated execution Tasks as a
+  mode-`0600` `lbapi_key.json` file without exposing the token in commands or logs.
+  Preserve the protected local configuration when an impression is deposited again.
++ Preserve REANA cleanup traps while recording subtask status, and collect nested REANA
+  results only after every selected file is stored successfully.
++ Fix the development Compose setup so a bind-mounted Celebi checkout is loaded when
+  `CELEBI_DIR` is supplied.
++ Set the Yuki package version to `1.1.0`.

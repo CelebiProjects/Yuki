@@ -107,6 +107,15 @@ celebi-cli share-ssh-impressions --export RUNNER
 celebi-cli share-ssh-impressions --import RUNNER
 ```
 
+## APD execution tokens
+
+Celebi can deposit a git-excluded APD token with an impression. Yuki stages the
+token as a mode-`0600` `lbapi_key.json` file only in the execution workspace and
+sets `APD_USER_TOKEN_FILE` without placing the token value in generated commands
+or logs. This works for ordinary execution Tasks, including `lb-conda` Tasks, as
+well as `lhcb_ap_datalist`. A later deposit refreshes the local secret while
+preserving the immutable shared impression configuration.
+
 ## Run with Docker
 
 The container is all-in-one: RabbitMQ (the Celery broker) starts inside it,

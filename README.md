@@ -16,6 +16,12 @@ SSH and submits work through `hep_sub`; see [the IHEP runner guide](docs/ihep-ru
 Celebi algorithms can run their user commands in centrally published LHCb
 releases through CVMFS; see [the lb-run guide](docs/lb-run.md).
 
+## 1.1.2b1 beta
+
+See the [upgrade notes](docs/release-1.1.2b1.md) and
+[EOS usage and cleanup guide](docs/eos-usage.md). This version adds REANA-based
+EOS accounting/cleanup and direct native-runner output previews.
+
 ## Celebi bookkeeping uploads
 
 The updated Celebi client runs `celebi-cli bookkeep --commit "Publish" --tag "v1"`

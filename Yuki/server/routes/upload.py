@@ -14,6 +14,7 @@ from ..config import config
 from ..resumable_upload_handler import get_upload_manager
 from ...kernel.storage.impressions import ImpressionStorage
 from ...kernel.workflows.ssh import SshWorkflow
+from ...kernel.workflows.native import NativeWorkflow
 
 bp = Blueprint('upload', __name__)
 logger = getLogger("YukiLogger")
@@ -121,9 +122,17 @@ def export(project_uuid, impression, filename):
 
 @bp.route("/remote-export/<project_uuid>/<impression>/<path:filename>", methods=['GET'])
 def remote_export(project_uuid, impression, filename):
-    """Stream a file directly from an SSH runner without copying it to Yuki storage."""
+    """Serve native or SSH runner output without copying it to Yuki storage."""
     storage = ImpressionStorage(project_uuid, impression)
     for name, job, workflow in storage._get_runner_contexts():  # pylint: disable=protected-access
+        if isinstance(workflow, NativeWorkflow):
+            stageout = os.path.join(
+                workflow.local_exec_path, f"imp{impression[0:7]}", "stageout")
+            if os.path.isfile(os.path.join(stageout, filename)):
+                # Flask supplies MIME detection and conditional/range responses;
+                # the shared helper also rejects symlinks escaping stageout.
+                return _safe_send_from_directory(stageout, filename)
+            continue
         # IHEP uses the same SSH/SFTP transport and subclasses SshWorkflow.
         # Checking the exact class name made remote files from IHEP runners
         # appear in /file-status but return NOTFOUND from this route.

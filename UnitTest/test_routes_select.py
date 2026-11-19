@@ -3,6 +3,7 @@ import io
 from unittest import mock
 
 from Yuki.kernel.workflows.ihep import IhepWorkflow
+from Yuki.kernel.workflows.native import NativeWorkflow
 from Yuki.server.routes import workflow as wf_routes
 from Yuki.server.routes import execution as ex_routes
 from Yuki.server.routes import upload as up_routes
@@ -154,6 +155,56 @@ def test_remote_export_streams_from_ihep_workflow():
     assert response.data == b"root-data"
     ssh.isfile.assert_called_once_with(
         "/remote/workflow/imp1234567/stageout/output.root")
+
+
+def test_remote_export_serves_native_outputs_without_collection(tmp_path):
+    """Native previews read the execution tree, including repeated-task paths."""
+    workflow = object.__new__(NativeWorkflow)
+    workflow.local_exec_path = str(tmp_path / "execution")
+    stageout = tmp_path / "execution" / "imp1234567" / "stageout"
+    (stageout / "2" / "plots").mkdir(parents=True)
+    content = b"\x89PNG\r\n\x1a\npreview"
+    (stageout / "2" / "plots" / "fit.png").write_bytes(content)
+    missing = object.__new__(NativeWorkflow)
+    missing.local_exec_path = str(tmp_path / "missing-runner")
+    with mock.patch.object(up_routes, "ImpressionStorage") as storage_cls:
+        storage_cls.return_value._get_runner_contexts.return_value = [
+            ("missing", mock.Mock(), missing), ("native", mock.Mock(), workflow)]
+        client = _app(up_routes.bp).test_client()
+        url = "/remote-export/proj/123456789/2/plots/fit.png"
+        response = client.get(url)
+        assert response.status_code == 200
+        assert response.mimetype == "image/png"
+        assert response.data == content
+        response = client.get(url, headers={"Range": "bytes=2-5"})
+        assert response.status_code == 206
+        assert response.data == content[2:6]
+        assert response.headers["Content-Range"] == f"bytes 2-5/{len(content)}"
+        response = client.head(url)
+        assert response.status_code == 200
+        assert response.data == b""
+        assert response.content_length == len(content)
+        assert client.get(url, headers={"Range": "bytes=999-"}).status_code == 416
+        assert client.get("/remote-export/proj/123456789/missing.png").data == b"NOTFOUND"
+        assert client.get("/remote-export/proj/765432189/2/plots/fit.png").data == b"NOTFOUND"
+    assert not (tmp_path / "Storage").exists()
+
+
+def test_remote_export_native_blocks_escape_from_stageout(tmp_path):
+    """Neither traversal nor a symlink may expose files outside stageout."""
+    workflow = object.__new__(NativeWorkflow)
+    workflow.local_exec_path = str(tmp_path)
+    stageout = tmp_path / "imp1234567" / "stageout"
+    stageout.mkdir(parents=True)
+    (stageout.parent / "private.txt").write_text("private")
+    (stageout / "link.txt").symlink_to(stageout.parent / "private.txt")
+    with mock.patch.object(up_routes, "ImpressionStorage") as storage_cls:
+        storage_cls.return_value._get_runner_contexts.return_value = [
+            ("native", mock.Mock(), workflow)]
+        client = _app(up_routes.bp).test_client()
+        for filename in ("..%2Fprivate.txt", "link.txt"):
+            response = client.get(f"/remote-export/proj/123456789/{filename}")
+            assert response.data == b"NOTFOUND"
 
 
 def test_refresh_filelists_route_returns_report():

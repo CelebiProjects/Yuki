@@ -1,0 +1,11 @@
+## v1.1.1b1
+
+Changes since v1.1.0:
+
++ Fix `/remote-export` for native runners so output files can be previewed directly
+  from the execution stageout directory without collecting them into Yuki storage.
+  - Support nested paths, including repeated-task `stageout/<index>/` outputs.
+  - Preserve MIME detection, HEAD requests, and HTTP byte-range responses.
+  - Reject path traversal and symlinks that escape the stageout directory.
+  - Retain existing SSH/IHEP streaming behavior.
++ Set the Yuki package version to `1.1.1b1` for prerelease validation.

@@ -12,7 +12,7 @@ from .tasks import celeryapp
 from ..utils.logging_config import apply_channel_levels
 from .routes import (
     upload, execution, status, runner, workflow,
-    transfer, impression, booking, remote_data, liveness, server_booking,
+    transfer, impression, booking, remote_data, liveness, server_booking, eos_usage,
 )
 
 
@@ -56,6 +56,7 @@ def create_app():
     flask_app.register_blueprint(server_booking.bp)
     flask_app.register_blueprint(remote_data.bp)
     flask_app.register_blueprint(liveness.bp)
+    flask_app.register_blueprint(eos_usage.bp)
 
     # Main index route
     @flask_app.route('/', methods=['GET', 'POST'])

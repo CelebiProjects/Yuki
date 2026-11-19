@@ -1,0 +1,21 @@
+## v1.1.2b1
+
+Changes since v1.1.0 (beta; includes the v1.1.1b1 preview fix):
+
++ Add persistent EOS usage and cleanup APIs backed by small REANA jobs, without
+  requiring an EOS mount on the Yuki host. Isolate REANA SDK configuration in
+  subprocesses and retain scan/plan IDs for recovery from uncertain submissions.
++ Classify measured caches as live, non-live or unknown using synchronized live
+  sets and active workflow mirrors; report incomplete and unattributed entries.
++ Bind cleanup execution to a preview manifest and its SHA256. Revalidate scope,
+  live classification, runner identity and filesystem metadata; block active
+  project workflows and verify deletion in a separate REANA job.
+  Report residuals as partial completion; never blindly resubmit deletions.
++ Fix `/remote-export` for native runner stageout files without prior collection.
+  Preserve nested/repeated-task output paths, MIME detection, HEAD and HTTP byte
+  ranges. Reject traversal and escaping symlinks; retain SSH/IHEP streaming.
++ Set Yuki to `1.1.2b1`. Upgrade Celebi and Yuki together for EOS commands and reload
+  the Yuki HTTP service to register the new routes.
+
+See docs/eos-usage.md and docs/release-1.1.2b1.md. This source beta does not itself
+publish packages or remove any EOS data.

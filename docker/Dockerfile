@@ -4,13 +4,17 @@
 #   docker build --target prod -t yuki:<version> .   (prod is the default/final stage)
 
 ########## base ##########
-FROM python:3.10-slim AS base
+# Snakemake >=8 requires Python >=3.11.
+FROM python:3.11-slim AS base
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential \
         rabbitmq-server \
         ca-certificates \
+        krb5-user \
+        xrootd-client \
+        xrootd-plugins \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root runtime user; storage dir created here so named volumes
@@ -36,7 +40,8 @@ COPY . /app/Yuki
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install celebichrono && \
-    pip install -e . && \
+    python docker/install-dependencies.py && \
+    pip install --no-deps -e . && \
     chown -R yuki:yuki /app/Yuki
 
 USER yuki
@@ -51,8 +56,9 @@ COPY . /app/Yuki-src
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install celebichrono && \
+    python docker/install-dependencies.py && \
     python -m build && \
-    pip install dist/*.whl && \
+    pip install --no-deps dist/*.whl && \
     cd /app && rm -rf /app/Yuki-src
 
 USER yuki

@@ -1,0 +1,23 @@
+## v1.1.3b1 — 2026-11-25
+
+Changes since v1.1.2b1 (beta):
+
++ Import Kerberos keytabs into a private Secrets directory and bind them to REANA
+  account secrets or SSH runner storage, enabling Kerberos after successful upload.
+  Credentials are not stored in workflow/impression trees or returned by the API.
++ Manage private SSH workflow ticket caches, periodic refresh and exit cleanup.
++ Download selected EOS stageout files into Yuki or directly onto SSH runners
+  using XRootD. Bound REANA credentials can authenticate Yuki download jobs.
+  Partial SSH imports remain ineligible for automatic complete-cache reuse.
++ Accept and persist per-submission core budgets for native, SSH and IHEP
+  executors, rejecting the option for REANA and preserving workflow deduplication.
++ Execute SSH APD tasks with CVMFS lb-conda, including optional pinned releases,
+  without requiring a runner-local APD Conda environment.
++ Configure the HTTP bind host/port and atomically publish the bound port for
+  local Celebi endpoint discovery.
++ Separate REANA and native Snakemake dependencies in the Python 3.11 Docker
+  image; include Kerberos/XRootD clients and an EOS development Compose overlay.
+
+Upgrade CelebiChrono and Yuki together and restart the HTTP service and workers.
+See docs/release-1.1.3b1.md for configuration and limitations. This source release
+neither publishes packages nor deploys services.

@@ -95,6 +95,10 @@ def get_ssh_settings(config_file, runner_id):
         "cores": s.get("cores", "all"),
         "conda_path": s.get("conda_path", ""),
         "snakemake_path": s.get("snakemake_path", ""),
+        "use_kerberos": config_file.read_variable("use_kerberos", {}).get(runner_id, False),
+        "kerberos_keytab": s.get("kerberos_keytab", "~/.keytab"),
+        "kerberos_principal": s.get("kerberos_principal", ""),
+        "kerberos_renew_interval": s.get("kerberos_renew_interval", 1800),
     }
 
 

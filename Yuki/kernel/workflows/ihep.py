@@ -120,7 +120,8 @@ done
     def _build_remote_wrapper(self):
         """Build the batch coordinator that submits every rule via hep_sub."""
         snakemake_bin = self.ssh_config.get("snakemake_path") or "snakemake"
-        cores = self.ssh_config.get("cores", "all")
+        cores = self.config_file.read_variable(
+            "cores", self.ssh_config.get("cores", "all"))
         conda_path = self.ssh_config.get("conda_path") or ""
         try:
             max_jobs = int(self.ssh_config.get("hep_max_jobs", 100))

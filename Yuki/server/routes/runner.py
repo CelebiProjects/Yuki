@@ -3,6 +3,7 @@ Runner management routes.
 """
 import os
 import json
+import subprocess
 from logging import getLogger
 from flask import Blueprint, request, jsonify
 from CelebiChrono.utils import csys
@@ -262,9 +263,10 @@ def registerrunner():
 
 _SETTING_FIELDS = ("workdir", "conda_path", "snakemake_path",
                    "ssh_host", "ssh_user", "ssh_key_path", "remote_workdir",
-                   "hep_sub_path", "hep_q_path", "hep_rm_path", "hep_group")
+                   "hep_sub_path", "hep_q_path", "hep_rm_path", "hep_group",
+                   "kerberos_keytab", "kerberos_principal")
 _SETTING_INT_FIELDS = ("cores", "mem_mb", "ssh_port", "hep_max_jobs",
-                       "hep_step_memory_mb")
+                       "hep_step_memory_mb", "kerberos_renew_interval")
 
 
 def _collect_settings(data):
@@ -415,6 +417,31 @@ def update_runner(runner):  # pylint: disable=too-many-locals
     cvmfs_repos = config_file.read_variable("cvmfs", {})
 
     old_backend_type = backend_types.get(runner_id, "reana")
+
+    if "secret" in data:
+        # Binding uses the existing endpoint; do not mix credential distribution
+        # with changes to the destination or access token.
+        if set(data) != {"secret"}:
+            return jsonify(error="Bind --secret separately from other runner changes"), 400
+        from ...services import secrets
+        if old_backend_type not in ("reana", "ssh"):
+            return jsonify(error="Secret distribution supports REANA and SSH runners"), 400
+        try:
+            if old_backend_type == "reana":
+                secrets.bind_reana(config.config_path, runner_id, data["secret"])
+                secret_settings = {"secret": data["secret"]}
+            else:
+                secret_settings = secrets.bind_ssh(
+                    config_file, data["secret"], runner_config.get_ssh_settings(config_file, runner_id))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            return jsonify(error="Runner secret upload failed or timed out; check runner secrets "
+                                 "before retrying. Local binding was not changed."), 502
+        runner_config.merge_runner_settings(config_file, runner_id, secret_settings)
+        use_kerberos[runner_id] = True
+        config_file.write_variable("use_kerberos", use_kerberos)
+        return jsonify(message=f"Secret '{data['secret']}' bound to runner '{runner}'")
 
     if "url" in data:
         urls[runner_id] = data["url"]

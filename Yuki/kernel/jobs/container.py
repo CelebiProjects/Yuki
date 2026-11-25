@@ -14,6 +14,7 @@ import re
 import shlex
 import time
 from CelebiChrono.utils import metadata
+from CelebiChrono.utils.apd import apd_lb_conda_environment
 from CelebiChrono.utils.lb_run import validated_lb_run_spec
 from CelebiChrono.utils.subtasks import read_subtask_count
 from .base import VJob
@@ -305,8 +306,16 @@ class ContainerJob(VJob):
         # Run LHCb AP datalist generator if this is an LHCb AP datalist task (and not an input)
         if self.environment() == "lhcb_ap_datalist" and not self.is_input:
             short = self.short_uuid()
-            commands.append("apd-login")
-            commands.append(f"python3 ../imp{short}/generate_lhcb_ap_datalist.py")
+            apd_command = f"apd-login && python3 ../imp{short}/generate_lhcb_ap_datalist.py"
+            if backend_type == "ssh":
+                environment = apd_lb_conda_environment(
+                    self.yaml_file.read_variable("ap_config", {}))
+                apd_command = self._wrap_lb_conda_command(
+                    apd_command, self.yaml_file, environment=environment)
+                commands.append(apd_command.replace('"', '\\"'))
+            else:
+                commands.extend(["apd-login",
+                                 f"python3 ../imp{short}/generate_lhcb_ap_datalist.py"])
 
         commands.extend(self._cache_commands(request_machine_id, backend_type))
         commands.append("cd ..")
@@ -316,6 +325,11 @@ class ContainerJob(VJob):
         step["commands"] = commands
         step["inputs"] = self._get_step_inputs()
         cvmfs_repos = self.cvmfs()
+        if (backend_type == "ssh" and self.environment() == "lhcb_ap_datalist"
+                and not self.is_input):
+            for repository in (LHCB_CVMFS_REPOSITORY, LHCB_NIGHTLY_CVMFS_REPOSITORY):
+                if repository not in cvmfs_repos:
+                    cvmfs_repos.append(repository)
         if cvmfs_repos:
             step["cvmfs"] = cvmfs_repos
 
@@ -488,9 +502,10 @@ class ContainerJob(VJob):
             return self.default_environment()
         return self.environment()
 
-    def _wrap_lb_conda_command(self, command, command_yaml):
+    def _wrap_lb_conda_command(self, command, command_yaml, environment=None):
         """Run one user command in a dated CVMFS LbConda environment."""
-        environment = self._lb_conda_spec()
+        if environment is None:
+            environment = self._lb_conda_spec()
         if environment is None:
             return command
         if (command_yaml is not None
@@ -585,7 +600,8 @@ class ContainerJob(VJob):
         if self.is_input or self.environment() == "datalist":
             environment = self.default_environment()
         elif self.environment() == "lhcb_ap_datalist":
-            environment = self.lhcb_ap_environment()
+            environment = (self.default_environment() if backend_type == "ssh"
+                           else self.lhcb_ap_environment())
         else:
             environment = self._execution_environment(backend_type)
         compute_backend = self.compute_backend()

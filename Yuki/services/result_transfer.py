@@ -3,10 +3,13 @@ import datetime
 import fnmatch
 import json
 import os
+from pathlib import Path
+from subprocess import TimeoutExpired
 from typing import List, Optional, Tuple
 
 from Yuki.kernel.runners import config as runner_config
 from Yuki.kernel.workflows.ssh import _SshConnection
+from Yuki.services import eos_download
 
 
 def _resolve_yuki_dir():
@@ -362,6 +365,59 @@ def _report_counts(report: dict) -> dict:
     }
 
 
+def _download_eos(url, root, pattern, force, progress, report, write_status, env, ssh=None):
+    files = list(eos_download.list_files(url, pattern, env, ssh))
+    if not files:
+        raise ValueError("No matching stageout files in EOS cache")
+    if ssh is not None:
+        eos_download.prepare_ssh_cache(root, ssh, files, force)
+    progress["bytes_total"] = sum(entry["size"] for entry in files)
+    for entry in files:
+        rel = entry["name"]
+        progress["current_file"] = rel
+        write_status("running")
+        try:
+            outcome = eos_download.copy_file(url, root, entry, force, env, ssh)
+            report[outcome].append(rel)
+            progress["bytes_done"] += entry["size"]
+        except (OSError, RuntimeError, ValueError, TimeoutExpired) as exc:
+            report["failed"].append({"file": rel, "reason": str(exc)})
+
+
+def _transfer_eos(source, destination, project, impression, yuki_dir, pattern,
+                  force, progress, report, write_status):
+    config = runner_config.open_config()
+    name = source.removeprefix("eos:")
+    runner_id = config.read_variable("runners_id", {}).get(name)
+    if not runner_id or config.read_variable("backend_types", {}).get(runner_id, "reana") != "reana":
+        raise ValueError("EOS source must be a registered REANA runner")
+    url = eos_download.cache_url(config, runner_id, project, impression)
+    if not Path(yuki_dir, "Storage", project, impression).is_dir():
+        raise ValueError("Impression is not registered in Yuki")
+    path, dst_runner = _resolve_path(destination, project, impression, yuki_dir)
+    if destination == "yuki":
+        root = os.path.join(path, runner_id, "stageout")
+        secret_name = runner_config.get_runner_settings(config, runner_id).get("secret")
+        with eos_download.worker_environment(secret_name, yuki_dir) as env:
+            _download_eos(url, root, pattern, force, progress, report, write_status, env)
+        existing = _list_yuki_stageout(path)
+    else:
+        if not runner_config.is_ssh_backend(_backend_type(_runner_name(destination))):
+            raise ValueError("EOS transfer destination must be Yuki or an SSH runner")
+        with _ssh_connection(dst_runner) as ssh:
+            _download_eos(url, path, pattern, force, progress, report, write_status, None, ssh)
+            existing = [entry for entry in _list_remote_files(ssh, path)
+                        if not eos_download.is_cache_marker(entry["name"])]
+    if report["transferred"] or report["skipped"]:
+        from Yuki.kernel.storage.impressions import ImpressionStorage
+        ImpressionStorage(project, impression).update_distribution(
+            overrides={destination: _aggregate("transferred", existing)})
+    if report["failed"]:
+        first = report["failed"][0]
+        raise RuntimeError(f"{len(report['failed'])} file(s) failed; "
+                           f"{first['file']}: {first['reason']}")
+
+
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
 def run_transfer(job_id: str, project_uuid: str, impression: str,
                  source: str, destination: str,
@@ -389,6 +445,11 @@ def run_transfer(job_id: str, project_uuid: str, impression: str,
     report = {"transferred": [], "skipped": [], "failed": []}
 
     try:
+        if source.startswith("eos:"):
+            _transfer_eos(source, destination, project_uuid, impression, yuki_dir,
+                          pattern, force, progress, report, write_status)
+            write_status("done", _report_counts(report))
+            return report
         src_path, src_runner = _resolve_path(
             source, project_uuid, impression, yuki_dir)
         dst_path, dst_runner = _resolve_path(

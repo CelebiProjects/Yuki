@@ -264,3 +264,11 @@ def test_kill_removes_recorded_child_jobs(tmp_path):
         "hep_rm 43",
         "hep_rm 44.0",
     ]
+
+
+def test_submission_cores_override_runner(tmp_path):
+    workflow = _workflow(tmp_path)
+    workflow.ssh_config['cores'] = 8
+    workflow.config_file.write_variable('cores', 24)
+    assert '--cores 24' in workflow._build_remote_wrapper()
+    assert workflow.ssh_config['cores'] == 8

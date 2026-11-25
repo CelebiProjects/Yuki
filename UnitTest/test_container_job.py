@@ -458,3 +458,56 @@ def test_lb_conda_cannot_be_combined_with_lb_run(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="cannot be combined"):
         c._process_user_commands()
+
+
+@pytest.mark.parametrize("release", [None, "default/2026-09-17"])
+def test_ssh_apd_uses_lb_conda_without_image_environment(tmp_path, monkeypatch, release):
+    """The APD flavor remains unchanged while SSH uses its CVMFS runtime."""
+    ap_config = {} if release is None else {"lb_conda": release}
+    c = _make_container_with_yaml(
+        tmp_path, {"environment": "lhcb_ap_datalist", "ap_config": ap_config})
+    _add_apd_token(tmp_path)
+    monkeypatch.setattr(c, "image", lambda: None)
+    monkeypatch.setattr(c, "_create_directory_commands", lambda: ["cd impression"])
+    monkeypatch.setattr(c, "_create_symlink_commands", lambda: [])
+    monkeypatch.setattr(c, "_cache_commands", lambda *_args: [])
+    monkeypatch.setattr(c, "_get_step_inputs", lambda: [])
+    rule = c.snakemake_rule("runner-1", "ssh")
+    command = next(cmd for cmd in rule["commands"] if "generate_lhcb_ap_datalist.py" in cmd)
+    assert (release or "default") + " bash --noprofile --norc -c" in command
+    assert "apd-login && python3" in command
+    assert "lb-conda" in command
+    assert "lbapi:user:secret" not in command
+    assert rule["commands"].index(c._apd_token_export_command("lbapi_key.json")) < rule["commands"].index(command)
+    assert rule["environment"] == c.default_environment()
+    from Yuki.kernel.workflows.ssh import environment_needs_conda
+    assert not environment_needs_conda(rule["environment"])
+    assert set(rule["cvmfs"]) == {"lhcb.cern.ch", "lhcbdev.cern.ch"}
+
+
+@pytest.mark.parametrize("backend", ["reana", "native", "ihep"])
+def test_other_backends_keep_apd_container(tmp_path, monkeypatch, backend):
+    c = _make_container_with_yaml(tmp_path, {"environment": "lhcb_ap_datalist"})
+    monkeypatch.setattr(c, "image", lambda: None)
+    monkeypatch.setattr(c, "_create_directory_commands", lambda: [])
+    monkeypatch.setattr(c, "_create_symlink_commands", lambda: [])
+    monkeypatch.setattr(c, "_cache_commands", lambda *_args: [])
+    monkeypatch.setattr(c, "_get_step_inputs", lambda: [])
+    rule = c.snakemake_rule("runner-1", backend)
+    assert rule["environment"] == c.lhcb_ap_environment()
+    assert "apd-login" in rule["commands"]
+    assert not any("lb-conda" in cmd for cmd in rule["commands"])
+    monkeypatch.setattr(c, "use_kerberos", lambda *_args: False)
+    assert c.step("runner-1")["environment"] == c.lhcb_ap_environment()
+
+
+def test_cached_apd_input_does_not_query_again(tmp_path, monkeypatch):
+    c = _make_container_with_yaml(tmp_path, {"environment": "lhcb_ap_datalist"})
+    c.is_input = True
+    monkeypatch.setattr(c, "image", lambda: None)
+    monkeypatch.setattr(c, "_create_directory_commands", lambda: [])
+    monkeypatch.setattr(c, "_create_symlink_commands", lambda: [])
+    monkeypatch.setattr(c, "_cache_commands", lambda *_args: [])
+    monkeypatch.setattr(c, "_get_step_inputs", lambda: [])
+    rule = c.snakemake_rule("runner-1", "ssh")
+    assert not any("apd-login" in cmd or "generate_lhcb" in cmd for cmd in rule["commands"])

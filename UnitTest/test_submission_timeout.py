@@ -371,3 +371,64 @@ def test_start_extends_marker_confirmation_timeout():
         connect.return_value.__enter__.return_value = ssh
         workflow._start_remote_snakemake()
     confirm.assert_called_once_with(ssh, timeout=3000)
+
+
+@pytest.mark.parametrize('cores', [None, '16'])
+def test_execute_dispatches_cores(cores, tmp_path, monkeypatch):
+    monkeypatch.setenv('YUKIDIR', str(tmp_path))
+    app = Flask(__name__)
+    app.register_blueprint(execution.bp)
+    data = {'machine': 'runner', 'project_uuid': 'proj', 'cache_on_runner': '{}',
+            'impressions': (io.BytesIO(b'imp'), 'impressions')}
+    if cores is not None:
+        data['cores'] = cores
+    with patch.object(execution, 'VJob') as job, \
+         patch.object(execution.config, 'get_config_file') as cfg, \
+         patch.object(execution, 'task_exec_impression') as task:
+        cfg.return_value.read_variable.return_value = {'runner': 'ssh'}
+        job.return_value.job_type.return_value = 'task'
+        job.return_value.status.return_value = SILENCE
+        job.return_value.uuid = 'imp'
+        task.apply_async.return_value.id = 'task-id'
+        response = app.test_client().post('/execute', data=data)
+    assert response.status_code == 202
+    kwargs = task.apply_async.call_args.kwargs['kwargs']
+    if cores is None:
+        assert 'cores' not in kwargs
+    else:
+        assert kwargs['cores'] == 16
+
+
+@pytest.mark.parametrize('cores', ['0', '-1', '', 'all', '1.2', 'abc'])
+def test_invalid_cores_rejected_before_job_changes(cores):
+    app = Flask(__name__)
+    app.register_blueprint(execution.bp)
+    with patch.object(execution, 'VJob') as job:
+        response = app.test_client().post('/execute', data={'cores': cores})
+    assert response.status_code == 400
+    job.assert_not_called()
+
+
+def test_cores_rejected_for_unsupported_backend():
+    app = Flask(__name__)
+    app.register_blueprint(execution.bp)
+    with patch.object(execution.config, 'get_config_file') as cfg, \
+         patch.object(execution, 'VJob') as job:
+        cfg.return_value.read_variable.return_value = {'runner': 'reana'}
+        response = app.test_client().post('/execute', data={'cores': '16', 'machine': 'runner'})
+    assert response.status_code == 400
+    assert 'not supported' in response.get_json()['error']
+    job.assert_not_called()
+
+
+def test_worker_persists_cores_before_run():
+    with patch.object(tasks, 'metadata') as meta, \
+         patch.object(tasks, 'VJob'), patch.object(tasks, 'VWorkflow') as factory, \
+         patch.object(tasks, '_validate_remote_data_binding', return_value=[]):
+        meta.ConfigFile.return_value.read_variable.return_value = {'runner': 'ssh'}
+        workflow = factory.create.return_value
+        workflow.run.side_effect = lambda: (
+            workflow.config_file.write_variable.assert_called_once_with('cores', 24)
+        )
+        tasks.task_exec_impression('proj', 'imp', 'runner', cores=24)
+    workflow.run.assert_called_once()

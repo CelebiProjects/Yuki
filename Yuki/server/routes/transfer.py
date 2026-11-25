@@ -11,7 +11,7 @@ from logging import getLogger
 from CelebiChrono.utils import csys
 from flask import Blueprint, request, send_file, jsonify
 
-from ...services import result_transfer
+from ...services import eos_download, result_transfer
 from ...kernel.runners import config as runner_config
 from ..config import config
 from ..tasks import task_transfer_results
@@ -125,8 +125,8 @@ def start_transfer():  # pylint: disable=too-many-locals,too-many-return-stateme
         if loc == "yuki":
             names[role] = None
             continue
-        if loc.startswith("runner:"):
-            name = loc[len("runner:"):]
+        if loc.startswith("runner:") or (role == "source" and loc.startswith("eos:")):
+            name = loc.split(":", 1)[1]
             if not name:
                 return jsonify({"error": f"invalid location: {loc}"}), 400
             if name not in runners_id:
@@ -139,6 +139,14 @@ def start_transfer():  # pylint: disable=too-many-locals,too-many-return-stateme
         if name is None:
             continue
         backend = backend_types.get(runners_id[name], "reana")
+        if role == "source" and source.startswith("eos:"):
+            if backend != "reana":
+                return jsonify({"error": "EOS source must be a REANA runner"}), 400
+            try:
+                eos_download.cache_url(config_file, runners_id[name], project_uuid, impression)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            continue
         if runner_config.is_ssh_backend(backend):
             continue
         if backend == "native":

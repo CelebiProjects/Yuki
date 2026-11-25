@@ -672,8 +672,11 @@ class SshWorkflow(VWorkflow):
 
     def _build_remote_wrapper(self):
         """Build the supervised Snakemake wrapper uploaded to the runner."""
+        from ..runners.kerberos import workflow_kerberos
+        krb_setup, krb_start, krb_cleanup = workflow_kerberos(self.ssh_config)
         snakemake_bin = self.ssh_config.get("snakemake_path") or "snakemake"
-        cores = self.ssh_config.get("cores", "all")
+        cores = self.config_file.read_variable(
+            "cores", self.ssh_config.get("cores", "all"))
         conda_path = self.ssh_config.get("conda_path") or ""
         if conda_path:
             # conda_path is the conda binary (as the runner probe expects);
@@ -703,14 +706,17 @@ atomic_write() {{
     mv -f "$temporary" "$destination"
 }}
 
+{krb_setup}
 record_exit() {{
     local rc=$?
     trap - EXIT
-    atomic_write "$rc" yuki.exit
+{krb_cleanup}    atomic_write "$rc" yuki.exit
     exit "$rc"
 }}
 trap record_exit EXIT
-
+trap 'exit 143' TERM
+trap 'exit 130' INT
+{krb_start}
 nohup {snakemake_command} > snakemake.log 2>&1 &
 snakemake_pid=$!
 atomic_write "$snakemake_pid" yuki.pid

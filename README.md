@@ -16,10 +16,36 @@ SSH and submits work through `hep_sub`; see [the IHEP runner guide](docs/ihep-ru
 Celebi algorithms can run their user commands in centrally published LHCb
 releases through CVMFS; see [the lb-run guide](docs/lb-run.md).
 
-## 1.1.2b1 beta
+## 1.1.3b1 beta
 
-See the [upgrade notes](docs/release-1.1.2b1.md) and
-[EOS usage and cleanup guide](docs/eos-usage.md). This version adds REANA-based
+### Local keytab import
+
+```sh
+celebi-cli add-secret cern-keytab --file ~/.cern.keytab --type kerberos --principal USER@CERN.CH
+celebi-cli update-runner cern --secret cern-keytab
+```
+
+Update both source checkouts and reload Yuki to enable these commands. Credentials
+are stored beside the server configuration under `Secrets/` (0700 directory,
+0600 files), outside projects and impressions. Storage is not encrypted at rest.
+The import endpoint never returns key contents and rejects duplicate names.
+Use deployment authentication/access restrictions for trusted clients; this feature
+does not add user authentication. The CLI requires HTTPS or localhost HTTP via a
+local connection/SSH tunnel and does not follow redirects for secret operations.
+
+Binding distributes the credential to REANA's account-wide secrets API
+(`yuki-NAME.keytab`, `CERN_USER`, `CERN_KEYTAB`) or an SSH runner's private directory,
+and enables Kerberos only after successful upload. Bind separately from connection
+setting changes. REANA requires a CERN user principal and existing remote secrets
+are not overwritten. After a timeout, inspect the remote state before retrying.
+REANA bindings also supply credentials for EOS downloads performed by the Yuki
+worker. IHEP batch and native workflow injection are not yet supported.
+REANA API reference: [add_secrets](https://reana-client.readthedocs.io/en/latest/#reana_client.api.client.add_secrets).
+
+### Beta release notes
+
+See the [upgrade notes](docs/release-1.1.3b1.md) and
+[EOS usage and cleanup guide](docs/eos-usage.md). The previous beta added REANA-based
 EOS accounting/cleanup and direct native-runner output previews.
 
 ## Celebi bookkeeping uploads
@@ -127,6 +153,42 @@ preserving the immutable shared impression configuration.
 The container is all-in-one: RabbitMQ (the Celery broker) starts inside it,
 then `yuki server start` runs on port 3315 as a non-root user.
 
+The image uses Python 3.11. REANA's Python dependencies include Snakemake 7;
+the native Snakemake 8/9 CLI lives in a separate environment at
+`/opt/yuki-native` and is exposed as `/usr/local/bin/snakemake`. This avoids
+mixing their incompatible dependencies. Yuki itself is installed with
+`--no-deps` after the Docker dependency installer provisions both environments.
+
+The image includes Kerberos tools (`kinit`, `klist`) and XRootD clients
+(`xrdcp`, `xrdfs`) with the Kerberos authentication plugin. To access EOS,
+provide a keytab as a runtime secret readable by the `yuki` user and obtain
+a ticket with `kinit -kt /path/to/cern.keytab USER@CERN.CH`. Set
+`KRB5CCNAME=FILE:/path/to/writable/ticket-cache` for both authentication and
+download processes. Credentials are not included in the image.
+Use the EOS XRootD namespace (for example,
+`root://eoshome-m.cern.ch//eos/user/m/USER/`), which may differ from a REANA
+filesystem mount alias such as `/eos/home-m/USER/`.
+
+To enable EOS result collection, an administrator adds an
+`eos_xrootd_url` map to Yuki's `config.json` keyed by REANA runner ID
+(the value in `runners_id`). Each value is the XRootD URL for that
+runner's cache root, before the project and impression UUIDs. Add
+`docker-compose.eos.yml` after `docker-compose.yml` when starting the
+development container and set `YUKI_EOS_KEYTAB_FILE` and
+`YUKI_EOS_PRINCIPAL`. The worker acquires a fresh ticket for each download
+job. Without these settings it uses the worker's existing credentials.
+Limit HTTP access to trusted clients before enabling credential-backed
+collection. Clients with access to Yuki can request files from the
+configured cache roots for impressions registered in that instance.
+
+From a Celebi task, `celebi-cli collect outputs --from eos:cern` downloads
+stageout into Yuki. Replace `outputs` with a filename or glob to select
+files. `celebi-cli transfer eos:cern runner:farm --pattern '*.root'` runs
+the download on the destination SSH runner, which needs Python 3,
+`xrdfs`, `xrdcp`, and credentials accessible to its SSH session.
+SSH imports remain incomplete for automatic workflow reuse until there
+is a way to verify that the EOS cache contains the full stageout.
+
 ### Development (hot-reload)
 
 ```bash
@@ -229,3 +291,25 @@ Omitting the option preserves the existing server defaults.
 The detached SSH session still gets a quick 2-second check before Yuki
 switches to remote startup-marker verification. This is not a workflow
 runtime limit. Both the Celebi client and Yuki server/worker need the update.
+
+### APD tasks on SSH runners
+
+`environment: lhcb_ap_datalist` automatically runs its APD login and list
+query through CVMFS `lb-conda default` on SSH. It no longer requires a
+`celebichrono_lhcb-apd_0.9.0` Conda environment on the runner.
+Optionally pin `ap_config.lb_conda: default/2026-09-17`; existing queries
+without this field continue to work. The runner must provide LHCb CVMFS
+and the standard LbEnv `lb-conda` executable. APD token-file injection and
+`stageout/dataList.txt` are preserved; cached inputs do not query again.
+REANA and other backend environment selection are unchanged.
+
+
+### Per-submission cores
+
+`celebi-cli submit --runner pkufarm212 --cores 16` overrides the Snakemake
+core budget for the new workflow only. `POST /execute` accepts an optional
+positive-integer `cores` form field; the worker persists it in the workflow's
+`config.json`. Native, SSH and IHEP executors prefer this value over their runner
+configuration. Without it, the existing runner default applies. REANA rejects
+this option. Existing active/completed workflows retain normal deduplication;
+this option neither resizes running workflows nor forces recomputation.

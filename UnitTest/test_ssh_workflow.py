@@ -716,6 +716,12 @@ class TestSshWorkflow(unittest.TestCase):
             self.assertEqual(exit_file.read().strip(), "0")
         self.assertFalse(any(".tmp." in name for name in os.listdir(self.tmpdir)))
 
+    def test_submission_cores_override_runner(self):
+        self.workflow.ssh_config['cores'] = 8
+        self.workflow.config_file.write_variable('cores', 24)
+        self.assertIn('--cores 24 ', self.workflow._build_remote_wrapper())
+        self.assertEqual(self.workflow.ssh_config['cores'], 8)
+
     def test_generated_wrapper_quotes_configured_command(self):
         """Runner command paths and core values are shell-quoted."""
         self.workflow.ssh_config.update({

@@ -24,7 +24,8 @@ _debug = logging.getLogger("Yuki.kernel")
 
 def create_celery_app():
     """Create and configure Celery application."""
-    app = Celery('yuki-server', broker='amqp://localhost')
+    broker = os.environ.get("CELERY_BROKER_URL") or "amqp://localhost"
+    app = Celery('yuki-server', broker=broker)
     app.conf.update(
         result_backend='rpc://',
         task_serializer='json',
@@ -71,7 +72,7 @@ def task_install_environment(job_id, runner_id, project_uuid, name, yaml_text):
 @celeryapp.task
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None,
-                         cache_on_runner=None, submission_id=None):
+                         cache_on_runner=None, submission_id=None, cores=None):
     """Execute impressions as a background task."""
     submission = (SubmissionStore(project_uuid, submission_id)
                   if submission_id else None)
@@ -80,7 +81,7 @@ def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None,
     try:
         return _exec_impression(
             project_uuid, impressions, machine_uuid, timeout,
-            cache_on_runner, submission)
+            cache_on_runner, submission, cores=cores)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         if submission:
             submission.update(
@@ -91,11 +92,16 @@ def task_exec_impression(project_uuid, impressions, machine_uuid, timeout=None,
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _exec_impression(project_uuid, impressions, machine_uuid, timeout,
-                     cache_on_runner, submission):
+                     cache_on_runner, submission, cores=None):
     """Build and schedule a workflow, recording every submission outcome."""
     config = metadata.ConfigFile(os.path.join(os.environ["HOME"], ".Yuki/config.json"))
     backend_types = config.read_variable("backend_types", {})
     backend_type = backend_types.get(machine_uuid, "reana")
+    if cores is not None:
+        if type(cores) is not int or cores < 1:
+            raise ValueError("cores must be a positive integer")
+        if backend_type not in ("native", "dry", "ssh", "ihep"):
+            raise ValueError(f"cores is not supported by backend {backend_type}")
     _debug.debug(f"[task_exec_impression] machine_uuid={machine_uuid} "
                  f"backend_type={backend_type} impressions={impressions}")
     jobs = [
@@ -116,6 +122,9 @@ def _exec_impression(project_uuid, impressions, machine_uuid, timeout,
     if timeout is not None:
         workflow.config_file.write_variable("submission_timeout", timeout)
     _debug.debug("workflow %s", workflow)
+
+    if cores is not None:
+        workflow.config_file.write_variable("cores", cores)
 
     marks = _validate_remote_data_binding(workflow, project_uuid, machine_uuid)
     if marks:

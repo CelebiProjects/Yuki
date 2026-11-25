@@ -230,3 +230,17 @@ def test_host_agent_executes_environment_request(monkeypatch, tmp_path):
         "yaml": "dependencies:\n  - python\n",
         "settings": {"workdir": str(tmp_path / "native")},
         "status": "finished", "result": result, "error": None}
+
+
+def test_native_submission_cores(monkeypatch, tmp_path):
+    root, path = _prepared(tmp_path)
+    monkeypatch.setenv('YUKIDIR', str(root))
+    config_path = path / 'config.json'
+    config = json.loads(config_path.read_text())
+    config['cores'] = 24
+    config_path.write_text(json.dumps(config))
+    with mock.patch('Yuki.kernel.storage.staging.FileStager'), \
+         mock.patch('Yuki.kernel.execution.monitor.SnakemakeMonitor') as monitor:
+        monitor.return_value.execute_snakemake.return_value = 0
+        assert execute_workflow('workflow') == 0
+    assert monitor.return_value.execute_snakemake.call_args.args[0] == 24

@@ -54,7 +54,20 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
                     raise ValueError
             except ValueError:
                 return jsonify({"error": "timeout must be a positive integer in seconds"}), 400
+        cores = request.form.get("cores")
+        if cores is not None:
+            try:
+                cores = int(cores)
+                if cores < 1:
+                    raise ValueError
+            except ValueError:
+                return jsonify({"error": "cores must be a positive integer"}), 400
         machine = request.form["machine"]
+        if cores is not None:
+            backend = config.get_config_file().read_variable(
+                "backend_types", {}).get(machine, "reana")
+            if backend not in ("native", "dry", "ssh", "ihep"):
+                return jsonify({"error": f"cores is not supported by backend {backend}"}), 400
         project_uuid = request.form['project_uuid']
         with_unknown = str(request.form.get("with_unknown", "")).lower() \
             in ("1", "true", "yes")
@@ -222,6 +235,8 @@ def execute():  # pylint: disable=too-many-locals,too-many-branches,too-many-sta
             task_kwargs = {"cache_on_runner": cache_dict}
             if timeout is not None:
                 task_kwargs["timeout"] = timeout
+            if cores is not None:
+                task_kwargs["cores"] = cores
             task_kwargs["submission_id"] = submission.submission_id
             task = task_exec_impression.apply_async(
                 args=[project_uuid, contents, machine], kwargs=task_kwargs)

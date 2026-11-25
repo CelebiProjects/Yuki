@@ -40,7 +40,8 @@ def execute_workflow(workflow_uuid, cores=None, logger=None):  # pylint: disable
         raise RuntimeError(
             f"Workflow {workflow_uuid} no longer owns its execution jobs")
     settings = runner_config.get_runner_settings(runner_config.open_config(), machine_id)
-    cores = cores or settings.get("cores", "all")
+    if cores is None:
+        cores = workflow_cfg.read_variable("cores", settings.get("cores", "all"))
     local_exec_dir = runner_config.native_workflow_path(
         settings, project_uuid, workflow_uuid, yuki_dir=yuki_dir)
     if not os.path.isfile(os.path.join(local_exec_dir, "Snakefile")):

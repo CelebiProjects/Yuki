@@ -1,21 +1,44 @@
 """
 Main entry point and daemon management for Yuki server.
 """
+import os
 import subprocess
 from multiprocessing import Process
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+
 from CelebiChrono.utils.pretty import colorize
+from werkzeug.serving import make_server
 from .server.app import app, celeryapp
 from .server.config import config
 from .kernel.runners import config as runner_config
 
+HTTP_PORT_FILE_ENV = "YUKI_HTTP_PORT_FILE"
+
 
 def start_flask_app():
     """Start the Flask application."""
-    app.run(
-        host='0.0.0.0',
-        port=3315,
-        debug=False,
-    )
+    host = os.environ.get("YUKI_HTTP_HOST", "0.0.0.0")
+    port = int(os.environ.get("YUKI_HTTP_PORT", "3315"))
+    port_file = os.environ.get(HTTP_PORT_FILE_ENV)
+    if not port_file:
+        app.run(host=host, port=port, debug=False)
+        return
+
+    # Publish the port from the bound socket. No probe/rebind race is needed.
+    target = Path(port_file)
+    with make_server(host, port, app, threaded=True) as server:
+        temporary = None
+        try:
+            with NamedTemporaryFile(mode="w", dir=target.parent, delete=False,
+                                    encoding="ascii") as stream:
+                temporary = Path(stream.name)
+                stream.write(f"{server.server_port}\n")
+            temporary.replace(target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        server.serve_forever()
 
 
 def start_celery_worker():

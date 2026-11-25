@@ -12,7 +12,7 @@ from .tasks import celeryapp
 from ..utils.logging_config import apply_channel_levels
 from .routes import (
     upload, execution, status, runner, workflow,
-    transfer, impression, booking, remote_data, liveness, server_booking, eos_usage,
+    transfer, impression, booking, remote_data, liveness, server_booking, eos_usage, secrets,
 )
 
 
@@ -38,7 +38,7 @@ def create_app():
     # Flask configuration
     flask_app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1 GB
     flask_app.config['SECRET_KEY'] = 'top-secret!'
-    flask_app.config['CELERY_broker_url'] = 'amqp://localhost'
+    flask_app.config['CELERY_broker_url'] = celeryapp.conf.broker_url
     flask_app.config['result_backend'] = 'rpc://'
 
     # Update celery configuration
@@ -57,6 +57,7 @@ def create_app():
     flask_app.register_blueprint(remote_data.bp)
     flask_app.register_blueprint(liveness.bp)
     flask_app.register_blueprint(eos_usage.bp)
+    flask_app.register_blueprint(secrets.bp)
 
     # Main index route
     @flask_app.route('/', methods=['GET', 'POST'])

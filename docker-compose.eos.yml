@@ -1,0 +1,12 @@
+services:
+  yuki:
+    environment:
+      YUKI_EOS_KEYTAB: /run/secrets/yuki-eos.keytab
+      YUKI_EOS_PRINCIPAL: ${YUKI_EOS_PRINCIPAL:?Set the CERN Kerberos principal}
+    volumes:
+      - type: bind
+        source: ${YUKI_EOS_KEYTAB_FILE:?Set the absolute path to the CERN keytab}
+        target: /run/secrets/yuki-eos.keytab
+        read_only: true
+        bind:
+          create_host_path: false

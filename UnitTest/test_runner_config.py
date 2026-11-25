@@ -48,7 +48,9 @@ def test_ssh_settings_old_runner_no_migration():
     s = runner_config.get_ssh_settings(cfg, "r1")
     assert s == {"host": "h", "user": "u", "key_path": "/k", "port": 2222,
                  "remote_workdir": "/remote", "cores": "all",
-                 "conda_path": "", "snakemake_path": ""}
+                 "conda_path": "", "snakemake_path": "", "use_kerberos": False,
+                 "kerberos_keytab": "~/.keytab", "kerberos_principal": "",
+                 "kerberos_renew_interval": 1800}
 
 
 def test_runner_health_roundtrip():

@@ -80,3 +80,38 @@ lexicographic order of random UUIDs. This timestamp is retained across updates.
 Legacy records fall back to file modification time, preserved as their creation
 timestamp on the next write. A superseded copy may finish its own job record,
 but cannot change the impression state owned by a newer registration.
+
+## Kerberos credentials for SSH workflows
+
+You can now import a local keytab into Yuki and distribute it to the SSH runner:
+
+```sh
+celebi-cli add-secret cern-keytab --file ~/.cern.keytab --type kerberos --principal USER@CERN.CH
+celebi-cli update-runner farm --secret cern-keytab
+```
+
+Yuki stores the credential in its private `Secrets/` directory beside the server
+configuration, then copies it over SFTP to a private `~/.yuki-secret.*` directory
+on the runner (directory 0700, keytab 0600). Binding enables Kerberos and supplies
+the path/principal for the lifecycle below. No credential enters workflow storage.
+The runner copy persists; rebinding does not delete older copies.
+The manual path-based configuration below is still supported.
+
+Enable runner-managed credentials with Celebi:
+
+```sh
+celebi-cli update-runner farm --use-kerberos \
+  --kerberos-keytab '~/.keytab' --kerberos-principal analyst@CERN.CH \
+  --kerberos-renew-interval 1800
+```
+
+The keytab must already exist on the remote runner; Yuki never uploads it.
+The runner needs `kinit`, `timeout`, and `mktemp`. Each SSH workflow initializes
+its own private ticket cache under `/tmp` before launching Snakemake. Jobs inherit
+`KRB5CCNAME`, including lb-conda commands. Yuki reacquires tickets every 1800
+seconds by default, retries failed refreshes twice at 60-second intervals, and
+stops the workflow if all three refresh attempts fail. Initial authentication
+failure prevents job execution. Normal exit and TERM/INT remove the cache and
+stop renewal. SIGKILL or host failure can leave an orphaned temporary cache.
+Use `--no-use-kerberos` to disable this behavior. Algorithms need no auth wrapper.
+This lifecycle applies to the SSH execution backend, not remote batch workers.
